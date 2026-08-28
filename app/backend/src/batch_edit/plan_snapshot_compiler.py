@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from typing import Any, TypeVar
@@ -35,21 +37,88 @@ from src.execution.browser_agent_protocol import (
 
 
 PLAN_SNAPSHOT_SCHEMA = "dxm_batch_draft_save_plan.v1"
+SNAPSHOT_INSTANCE_SCHEMA = "dxm_batch_draft_save_plan_instance.v1"
+PLAN_PATH_EXECUTION_NOT_RELEASED = "PLAN_PATH_EXECUTION_NOT_RELEASED"
+RELEASED_PLAN_EXECUTION_PATHS = frozenset({"A"})
 _ContractError = TypeVar("_ContractError", bound=Exception)
+
+MANDATORY_CAPABILITIES = frozenset(
+    {"video", "translation", "wholesale", "semiManaged", "rollbackPreparation"}
+)
+
+CAPABILITY_NAMES = {
+    "video": "视频生成",
+    "translation": "一键翻译",
+    "wholesale": "批发配置",
+    "semiManaged": "半托管编辑",
+    "rollbackPreparation": "回滚准备",
+}
+
+DEFAULT_MAX_AGE_HOURS = 24
+DRIFT_POLICY_ABORT = "ABORT"
+DRIFT_POLICY_WARN = "WARN"
+
+_SCHEMA_VERSION = "dxm_plan_snapshot_compiler.v2"
+
+
+def is_plan_execution_path_released(path: Any) -> bool:
+    """Return whether an immutable plan path may enter the real-write runner."""
+
+    return str(path or "").strip().upper() in RELEASED_PLAN_EXECUTION_PATHS
+
+
+class WorkflowMandatoryCapabilityChecker:
+    """Adapt a workflow runtime's explicit capability proof to the compiler."""
+
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
+
+    def is_available(self, capability: str) -> dict[str, Any]:
+        probe = getattr(self._provider, "mandatory_capability_status", None)
+        if not callable(probe):
+            return {
+                "ok": False,
+                "reason_code": "MANDATORY_CAPABILITY_PROVIDER_MISSING",
+            }
+        result = probe(capability)
+        if not isinstance(result, Mapping) or result.get("ok") is not True:
+            return {
+                "ok": False,
+                "reason_code": str(
+                    result.get("reason_code")
+                    if isinstance(result, Mapping)
+                    else "MANDATORY_CAPABILITY_PROOF_INVALID"
+                ),
+            }
+        return {"ok": True}
 
 
 class PlanSnapshotCompiler:
-    """Compile one immutable, fail-closed Path A snapshot from trusted inputs."""
+    """Compile one immutable, fail-closed Path A snapshot from trusted inputs.
+
+    R1 deepening:
+    - Each item is frozen independently with its own hashes:
+      sourceCategory, targetCategory, catalogNodeIdentitySha256,
+      catalogSha256, schemaSha256, capabilitiesSha256
+    - mandatory_capabilities block with 5 always-on capabilities
+    - fail-closed if any mandatory capability unavailable
+    - max_age_hours, schema_drift_policy=ABORT, catalog_drift_policy=ABORT
+    - execution_constraints dict with drift policies
+    """
 
     def __init__(
         self,
         error_type: type[_ContractError],
         *,
         local_plan_store: LocalPlanTemplateStore,
+        capability_checker: Any = None,
+        max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
     ) -> None:
         self._error_type = error_type
         self._local_plan_store = local_plan_store
         self._values = PlanValueContract(error_type)
+        self._capability_checker = capability_checker
+        self._max_age_hours = max_age_hours
 
     def compile(self, request: dict[str, Any]) -> dict[str, Any]:
         exact = self._values.exact_object(
@@ -68,9 +137,11 @@ class PlanSnapshotCompiler:
                     "expected_target_schema_hash",
                     "target_category_name",
                     "target_category_match",
+                    "idempotency_key",
                 }
             ),
         )
+        idempotency_key = exact.get("idempotency_key") or ""
         target_category = self._normalize_target_category(exact)
         plan_id = exact["local_plan_template_id"]
         if isinstance(plan_id, bool) or not isinstance(plan_id, int) or plan_id <= 0:
@@ -121,15 +192,43 @@ class PlanSnapshotCompiler:
             )
 
         plan, template_refs = self._local_plan_store.load_snapshot_inputs(plan_id)
+        if plan.get("path") not in ("A", "B"):
+            self._reject(
+                "PLAN_PATH_INVALID",
+                "plan path must be 'A' or 'B'",
+            )
         if requested_shop_id != plan["shop_id"]:
             self._reject(
                 "PLAN_SCOPE_CONFLICT",
                 "requested shop does not match the local plan",
             )
+        if plan.get("scope_contract") == "single_target_category.v2":
+            if target_category is None:
+                self._reject(
+                    "PLAN_TARGET_CATEGORY_REQUIRED",
+                    "the selected plan requires its configured target category",
+                )
+            if target_category["category_id"] != plan["category_ids"][0]:
+                self._reject(
+                    "PLAN_TARGET_CATEGORY_CONFLICT",
+                    "task target category does not match the selected plan",
+                )
+
+        capability_result = self._check_mandatory_capabilities()
+        if not capability_result["ok"]:
+            self._reject(
+                capability_result["reason_code"],
+                capability_result["message"],
+            )
+
+        mandatory_capabilities = self._build_mandatory_capabilities_block()
 
         items: list[dict[str, Any]] = []
         product_ids: list[str] = []
         seen_products: set[str] = set()
+        plan_content_frozen = self._freeze_plan_content(plan, target_category, idempotency_key)
+        plan_content_sha256 = plan_content_frozen["plan_content_sha256"]
+
         for index, raw_item in enumerate(raw_items):
             item = self._build_item_snapshot(
                 raw_item,
@@ -139,6 +238,7 @@ class PlanSnapshotCompiler:
                 requested_shop_id=requested_shop_id,
                 requested_shop_name=session_shop_name,
                 target_category=target_category,
+                plan_content_sha256=plan_content_sha256,
             )
             if item["product_id"] in seen_products:
                 self._reject(
@@ -151,8 +251,9 @@ class PlanSnapshotCompiler:
 
         snapshot = {
             "schema": PLAN_SNAPSHOT_SCHEMA,
+            "compiler_version": _SCHEMA_VERSION,
             "mode": "batch_draft_save",
-            "path": "A",
+            "path": plan.get("path", "A"),
             "shop_scope": requested_shop_id,
             "session_context": {
                 "session_ref": session_ref,
@@ -170,28 +271,227 @@ class PlanSnapshotCompiler:
                 "id": plan["id"],
                 "version": plan["version"],
             },
+            **(
+                {"scope_contract": plan["scope_contract"]}
+                if plan.get("scope_contract") is not None
+                else {}
+            ),
             "dxm_template_refs": template_refs.frozen_summary(),
             "fixed_values": self._values.clone(plan["fixed_values"]),
             "fill_rules": self._values.clone(plan["fill_rules"]),
+            "source_policies": self._values.clone(plan.get("source_policies", {})),
             "item_snapshots": items,
+            "mandatory_capabilities": mandatory_capabilities,
+            "execution_constraints": {
+                "max_age_hours": self._max_age_hours,
+                "schema_drift_policy": DRIFT_POLICY_ABORT,
+                "catalog_drift_policy": DRIFT_POLICY_ABORT,
+                "plan_drift_policy": DRIFT_POLICY_ABORT,
+            },
             "evidence_policy": "three_proofs",
             "failure_policy": {"unknown": "stop_batch"},
             "publish_allowed": False,
         }
-        return {**snapshot, "snapshot_hash": canonical_sha256(snapshot)}
+        if plan.get("editor_actions"):
+            snapshot["editor_actions"] = self._values.clone(plan["editor_actions"])
+        snapshot_hash = canonical_sha256(snapshot)
+        snapshot["plan_content_sha256"] = plan_content_sha256
+        snapshot["snapshot_hash"] = snapshot_hash
+        return snapshot
+
+    def compile_instance(
+        self,
+        snapshot: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Create an instance from a frozen snapshot with idempotency.
+
+        Same plan_content_sha256 + different idempotency_key ->
+        different snapshot_instance_sha256.
+        """
+        plan_content_sha = snapshot.get("plan_content_sha256")
+        if not plan_content_sha:
+            self._reject(
+                "SNAPSHOT_INSTANCE_INVALID",
+                "plan_content_sha256 is required for instance creation",
+            )
+        instance_body = {
+            "schema": SNAPSHOT_INSTANCE_SCHEMA,
+            "plan_content_sha256": plan_content_sha,
+            "idempotency_key": str(idempotency_key),
+            "snapshot_hash": snapshot.get("snapshot_hash"),
+        }
+        instance_sha = self._canonical_json_hash(instance_body)
+        return {
+            "schema": SNAPSHOT_INSTANCE_SCHEMA,
+            "plan_content_sha256": plan_content_sha,
+            "idempotency_key": str(idempotency_key),
+            "snapshot_instance_sha256": instance_sha,
+            "snapshot_hash": snapshot.get("snapshot_hash"),
+        }
+
+    def _freeze_plan_content(
+        self,
+        plan: Mapping[str, Any],
+        target_category: dict[str, Any] | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Build deterministic plan content for hashing."""
+        content = {
+            "id": plan["id"],
+            "version": plan["version"],
+            "shop_id": plan["shop_id"],
+            "category_ids": sorted(plan["category_ids"]),
+            "scope_contract": plan.get("scope_contract"),
+            "fixed_values": self._values.clone(plan["fixed_values"]),
+            "fill_rules": self._values.clone(plan["fill_rules"]),
+            "source_policies": self._values.clone(plan.get("source_policies", {})),
+            "idempotency_key": str(idempotency_key),
+        }
+        if target_category is not None:
+            content["target_category"] = {
+                "category_id": target_category["category_id"],
+                "schema_hash": target_category["schema_hash"],
+            }
+        return {
+            "plan_content_sha256": self._canonical_json_hash(content),
+            "content": content,
+        }
+
+    def _canonical_json_hash(self, value: Any) -> str:
+        """Compute deterministic SHA-256 from a value using canonical JSON."""
+        serialized = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest().upper()
+
+    def _check_mandatory_capabilities(self) -> dict[str, Any]:
+        """Fail-closed check: if ANY mandatory capability is unavailable OR
+        the capability_checker is not configured, reject freeze.
+
+        A None checker (production default) MUST NOT silently pass: if no
+        live capability verification is wired in, the safe default is to
+        reject until the operator explicitly opts into a permissive mode.
+        """
+        if self._capability_checker is None:
+            return {
+                "ok": False,
+                "reason_code": "MANDATORY_CAPABILITY_CHECKER_MISSING",
+                "message": "未注入必选能力校验器，无法证明五项能力可用；拒绝冻结执行任务",
+            }
+        for cap in MANDATORY_CAPABILITIES:
+            try:
+                result = self._capability_checker.is_available(cap)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "reason_code": f"MANDATORY_CAPABILITY_CHECKER_ERROR_{cap.upper()}",
+                    "message": f"必选能力 {CAPABILITY_NAMES.get(cap, cap)} 校验异常：{exc}",
+                }
+            # An explicit {"ok": False} or {"available": False} both fail the
+            # check; an absent/missing "ok" key defaults to True (legacy shape)
+            # ONLY when the checker explicitly returned available=True. A bare
+            # response of {} or {"available": False} is treated as unavailable.
+            available = result.get("ok")
+            if available is None:
+                available = bool(result.get("available", False))
+            if not available:
+                return {
+                    "ok": False,
+                    "reason_code": f"MANDATORY_CAPABILITY_UNAVAILABLE_{cap.upper()}",
+                    "message": f"必选能力 {CAPABILITY_NAMES.get(cap, cap)} 当前不可用，无法冻结执行任务",
+                }
+        return {"ok": True}
+
+    def _build_mandatory_capabilities_block(self) -> dict[str, Any]:
+        """Build the mandatory_capabilities block with all 5 capabilities enabled."""
+        return {
+            capability: {
+                "enabled": True,
+                "description": CAPABILITY_NAMES[capability],
+                "required": True,
+            }
+            for capability in MANDATORY_CAPABILITIES
+        }
 
     def assert_hash(self, snapshot: Mapping[str, Any]) -> None:
         reported = snapshot.get("snapshot_hash")
         body = {
             key: self._values.clone(value)
             for key, value in snapshot.items()
-            if key not in {"id", "task_id", "created_at", "snapshot_hash"}
+            if key
+            not in {
+                "id",
+                "task_id",
+                "created_at",
+                "snapshot_hash",
+                "plan_content_sha256",
+                "snapshot_instance_sha256",
+            }
         }
         if not isinstance(reported, str) or reported != canonical_sha256(body):
             self._reject(
                 "PLAN_SNAPSHOT_HASH_INVALID",
                 "plan snapshot hash cannot be reproduced",
             )
+
+    def _normalize_target_category(
+        self,
+        request: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        target_category_id = request.get("target_category_id")
+        if target_category_id in (None, ""):
+            return None
+        category_id = self._values.positive_id_text(
+            target_category_id,
+            "target_category_id",
+        )
+        raw_schema = request.get("target_category_schema")
+        if not isinstance(raw_schema, dict):
+            self._reject(
+                "PLAN_TARGET_CATEGORY_INVALID",
+                "target_category_schema must be an object",
+            )
+        normalized_schema = normalize_category_schema(raw_schema)
+        schema_hash = canonical_sha256(normalized_schema)
+        expected_hash = self._values.sha256_text(
+            request.get("expected_target_schema_hash"),
+            "expected_target_schema_hash",
+        )
+        if expected_hash != schema_hash:
+            self._reject(
+                "PLAN_TARGET_SCHEMA_DRIFT",
+                "target category schema changed before the plan snapshot was frozen",
+            )
+        normalized_name = self._values.optional_text(
+            request.get("target_category_name"),
+            "target_category_name",
+            max_length=120,
+        )
+        normalized_match = self._values.optional_text(
+            request.get("target_category_match"),
+            "target_category_match",
+            max_length=200,
+        )
+        return {
+            "category_id": category_id,
+            "schema": normalized_schema,
+            "schema_hash": schema_hash,
+            **(
+                {"category_name": normalized_name}
+                if normalized_name is not None
+                else {}
+            ),
+            **(
+                {"category_match": normalized_match}
+                if normalized_match is not None
+                else {}
+            ),
+        }
 
     def _normalize_target_category(
         self,
@@ -257,6 +557,7 @@ class PlanSnapshotCompiler:
         requested_shop_id: str,
         requested_shop_name: str,
         target_category: dict[str, Any] | None,
+        plan_content_sha256: str | None = None,
     ) -> dict[str, Any]:
         item = self._values.exact_object(
             raw_item,
@@ -288,7 +589,10 @@ class PlanSnapshotCompiler:
                 "PLAN_SCOPE_CONFLICT",
                 "item shop does not match the confirmed plan scope",
             )
-        if category_id not in set(plan["category_ids"]):
+        if (
+            plan.get("scope_contract") != "single_target_category.v2"
+            and category_id not in set(plan["category_ids"])
+        ):
             self._reject(
                 "PLAN_CATEGORY_SCOPE_CONFLICT",
                 f"商品类目 {category_id} 不在本地方案覆盖范围内"
@@ -337,13 +641,26 @@ class PlanSnapshotCompiler:
             phase="current_values",
         )
 
+        resolution_category_id = category_id
+        resolution_schema = normalized_schema
+        resolution_schema_hash = schema_hash
+        if plan.get("scope_contract") == "single_target_category.v2":
+            if target_category is None:
+                self._reject(
+                    "PLAN_TARGET_CATEGORY_REQUIRED",
+                    "the selected plan requires its configured target category",
+                )
+            resolution_category_id = str(target_category["category_id"])
+            resolution_schema = target_category["schema"]
+            resolution_schema_hash = str(target_category["schema_hash"])
+
         mapping = self._normalize_field_mapping(
-            plan["field_mappings"][category_id],
-            category_id=category_id,
-            schema=normalized_schema,
+            plan["field_mappings"][resolution_category_id],
+            category_id=resolution_category_id,
+            schema=resolution_schema,
         )
-        properties = normalized_schema["properties"]
-        potential_required_keys = potential_required_fields(normalized_schema)
+        properties = resolution_schema["properties"]
+        potential_required_keys = potential_required_fields(resolution_schema)
         mapped_fields = {
             entry["field_key"]
             for entry in mapping["entries"]
@@ -359,14 +676,15 @@ class PlanSnapshotCompiler:
                 "required fields are not configured in field mappings: "
                 + ", ".join(missing_required_mappings),
             )
-        fill_rules = plan["fill_rules"][category_id]
+        fill_rules = plan["fill_rules"][resolution_category_id]
+        source_policies = plan.get("source_policies", {}).get(resolution_category_id, {})
         fixed_field_values = (
             plan["fixed_values"]
             .get("field_values", {})
-            .get(category_id, {})
+            .get(resolution_category_id, {})
         )
         template_values = template_refs.values_for_category(
-            category_id,
+            resolution_category_id,
             allowed_fields=properties,
         )
         resolved_fields: list[dict[str, Any]] = []
@@ -393,10 +711,23 @@ class PlanSnapshotCompiler:
                     value = self._values.clone(rule["value"])
                     source = LOCAL_PLAN_MODEL
                     source_ref = f"{plan['id']}@{plan['version']}"
-                elif field_key in template_values:
+                elif (
+                    source_policies.get(field_key) == "current"
+                    and field_key in current_values
+                    and self._values.is_resolved_value(current_values[field_key])
+                ):
+                    value = self._values.clone(current_values[field_key])
+                    source = "current"
+                    source_ref = f"{product_id}@scope"
+                elif (
+                    source_policies.get(field_key) != "current"
+                    and field_key in template_values
+                ):
                     value, source_ref = template_values[field_key]
                     source = DXM_TEMPLATE_REF_MODEL
                 elif (
+                    source_policies.get(field_key) != "template"
+                    and
                     field_key in current_values
                     and self._values.is_resolved_value(current_values[field_key])
                 ):
@@ -439,12 +770,12 @@ class PlanSnapshotCompiler:
             for field in resolved_fields
         }
         resolved_price_validation = assert_price_policy(
-            normalized_schema,
+            resolution_schema,
             resolved_values,
             phase="resolved_values",
         )
         active_required = active_required_fields(
-            normalized_schema,
+            resolution_schema,
             resolved_values,
         )
         missing_required = [
@@ -465,7 +796,7 @@ class PlanSnapshotCompiler:
                 "constraints": schema_constraints(properties[field_key]),
             }
             for field_key, required_when in required_field_rules(
-                normalized_schema
+                resolution_schema
             )
         ]
         resolution_body = {
@@ -485,6 +816,8 @@ class PlanSnapshotCompiler:
                 current_values=current_values,
                 product_id=product_id,
             )
+            if plan.get("scope_contract") == "single_target_category.v2":
+                target_category_snapshot["plan_owned"] = True
         return {
             "product_id": product_id,
             "shop_id": shop_id,
@@ -493,8 +826,8 @@ class PlanSnapshotCompiler:
             "target_identity_sha256": canonical_sha256(target_identity),
             "categoryId": category_id,
             "category_schema": {
-                "normalized_schema": normalized_schema,
-                "schema_hash": schema_hash,
+                "normalized_schema": resolution_schema,
+                "schema_hash": resolution_schema_hash,
             },
             "field_mapping": mapping,
             "current_value_snapshot": self._values.clone(current_values),
@@ -506,6 +839,69 @@ class PlanSnapshotCompiler:
             **(
                 {"target_category": target_category_snapshot}
                 if target_category_snapshot is not None
+                else {}
+            ),
+        }
+        item_result = self._build_item_identity_hashes(
+            product_id=product_id,
+            shop_id=shop_id,
+            category_id=category_id,
+            target_identity=target_identity,
+            normalized_schema=normalized_schema,
+            target_category=target_category,
+            plan_content_sha256=plan_content_sha256,
+        )
+        item_snapshot.update(item_result)
+        return item_snapshot
+
+    def _build_item_identity_hashes(
+        self,
+        *,
+        product_id: str,
+        shop_id: str,
+        category_id: str,
+        target_identity: dict[str, Any],
+        normalized_schema: dict[str, Any],
+        target_category: dict[str, Any] | None,
+        plan_content_sha256: str | None,
+    ) -> dict[str, Any]:
+        """Build per-item independent identity hashes for drift detection."""
+        source_category_hash = self._canonical_json_hash({
+            "category_id": category_id,
+            "schema_hash": canonical_sha256(normalized_schema),
+        })
+
+        target_category_hash = None
+        if target_category is not None:
+            target_category_hash = self._canonical_json_hash({
+                "category_id": target_category["category_id"],
+                "schema_hash": target_category["schema_hash"],
+            })
+
+        catalog_node_hash = None
+        if "catalog_node_identity" in target_identity:
+            catalog_node_hash = canonical_sha256(
+                target_identity["catalog_node_identity"]
+            )
+
+        catalog_hash = canonical_sha256(target_identity)
+
+        schema_hash = canonical_sha256(normalized_schema)
+
+        capabilities_hash = self._canonical_json_hash(
+            dict(self._build_mandatory_capabilities_block())
+        )
+
+        return {
+            "source_category_sha256": source_category_hash,
+            "target_category_sha256": target_category_hash,
+            "catalog_node_identity_sha256": catalog_node_hash,
+            "catalog_sha256": catalog_hash,
+            "schema_sha256": schema_hash,
+            "capabilities_sha256": capabilities_hash,
+            **(
+                {"plan_content_sha256": plan_content_sha256}
+                if plan_content_sha256
                 else {}
             ),
         }

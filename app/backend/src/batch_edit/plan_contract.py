@@ -44,6 +44,17 @@ _snapshot_compiler = PlanSnapshotCompiler(
 
 
 class E2PlanService:
+    def __init__(self, *, capability_checker: Any = None) -> None:
+        self._snapshot_compiler = (
+            _snapshot_compiler
+            if capability_checker is None
+            else PlanSnapshotCompiler(
+                PlanContractError,
+                local_plan_store=_local_plan_store,
+                capability_checker=capability_checker,
+            )
+        )
+
     def sync_dxm_template_refs(
         self,
         records: list[dict[str, Any]],
@@ -55,6 +66,20 @@ class E2PlanService:
             records,
             shop_id=shop_id,
             category_ids=category_ids,
+        )
+
+    def sync_dxm_template_refs_for_shop(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        shop_id: str,
+    ) -> list[dict[str, Any]]:
+        """Replace the complete management-center index for one shop."""
+
+        return _reference_store.sync(
+            records,
+            shop_id=shop_id,
+            category_ids=None,
         )
 
     def list_dxm_template_refs(self) -> list[dict[str, Any]]:
@@ -81,7 +106,7 @@ class E2PlanService:
         return _local_plan_store.archive(plan_id)
 
     def build_plan_snapshot(self, request: dict[str, Any]) -> dict[str, Any]:
-        return _snapshot_compiler.compile(request)
+        return self._snapshot_compiler.compile(request)
 
     def freeze_plan_snapshot(
         self,
@@ -130,7 +155,7 @@ class E2PlanService:
         if not row:
             _reject("PLAN_SNAPSHOT_NOT_FOUND", "plan snapshot does not exist", status_code=404)
         snapshot = _public_plan_snapshot(row)
-        _snapshot_compiler.assert_hash(snapshot)
+        self._snapshot_compiler.assert_hash(snapshot)
         return snapshot
 
     def create_task_from_snapshot(self, snapshot_id: int, repository: Any) -> dict[str, Any]:

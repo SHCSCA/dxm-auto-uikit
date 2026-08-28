@@ -52,7 +52,10 @@ class DxmDraftReader:
     ) -> dict[str, Any]:
         normalized_shop_id = self._normalize_shop_filter(shop_id)
         self._require_positive_int(page_no, "page_no", maximum=100_000)
-        self._require_positive_int(page_size, "page_size", maximum=100)
+        # The console exposes 20/50/100/200 rows per page.  Keep the backend
+        # ceiling exactly aligned so an operator selecting 200 does not get a
+        # misleading generic reader failure.
+        self._require_positive_int(page_size, "page_size", maximum=200)
 
         shop_envelope = self._read_shop_envelope()
         shops = self._normalize_shops(shop_envelope["payload"])

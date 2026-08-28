@@ -367,26 +367,41 @@ export function TemplateCenterPage({
         )}
       </div>
 
+      <div className="module-card span-3">
+        <div className="tab-group" role="tablist" aria-label="模板中心功能">
+          <button
+            role="tab"
+            aria-selected={templateCenterMode === 'sections'}
+            className={templateCenterMode === 'sections' ? 'tab-active' : ''}
+            onClick={() => setTemplateCenterMode('sections')}
+          >普货模板库 · 分区</button>
+          <button
+            role="tab"
+            aria-selected={templateCenterMode === 'batch_bundle'}
+            className={templateCenterMode === 'batch_bundle' ? 'tab-active' : ''}
+            onClick={() => setTemplateCenterMode('batch_bundle')}
+          >普货模板库 · 整批</button>
+        </div>
+        {templateCenterMode === 'batch_bundle' ? (
+          <BatchTemplateComposer
+            workspace={workspace}
+            selectedTask={selectedTask}
+            preferredBatchStoreName={batchScopeStoreName}
+            onBundleCreated={onConfigSaved}
+            onEditSection={(section) => {
+              setActiveSectionId(section)
+              setTemplateCenterMode('sections')
+            }}
+            onShowDraftEdit={onShowDraftEdit}
+            onShowDxmAccess={onShowDxmAccess}
+          />
+        ) : (
+          <>
       <LocalPlanWorkspace
         plans={localPlans}
         dxmTemplateRefs={dxmTemplateRefs}
         onChanged={onConfigSaved}
       />
-      {false && templateCenterMode === 'batch_bundle' ? (
-        <BatchTemplateComposer
-          workspace={workspace}
-          selectedTask={selectedTask}
-          preferredBatchStoreName={batchScopeStoreName}
-          onBundleCreated={onConfigSaved}
-          onEditSection={(section) => {
-            setActiveSectionId(section)
-            setTemplateCenterMode('sections')
-          }}
-          onShowDraftEdit={onShowDraftEdit}
-          onShowDxmAccess={onShowDxmAccess}
-        />
-      ) : (
-        <>
       <div className="module-card span-1 template-section-panel">
         <div className="module-head">
           <h2>编辑页分区</h2>
@@ -535,6 +550,7 @@ export function TemplateCenterPage({
       </div>
         </>
       )}
+      </div>
     </section>
   )
 }

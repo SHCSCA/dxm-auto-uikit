@@ -11,6 +11,9 @@ SNAPSHOT_TSX = FRONTEND_SRC / "components" / "workbench" / "BatchSavePlaceholder
 BATCH_APPROVAL_TS = FRONTEND_SRC / "batchApproval.ts"
 SCHEMA_VALUE_EDITOR_TS = FRONTEND_SRC / "schemaValueEditor.ts"
 DRAFT_SELECTION_TSX = FRONTEND_SRC / "components" / "workbench" / "DraftSelectionPage.tsx"
+CATEGORY_CASCADE_TSX = FRONTEND_SRC / "components" / "workbench" / "CategoryCascadePicker.tsx"
+APP_SHELL_TSX = FRONTEND_SRC / "components" / "AppShell.tsx"
+API_TS = FRONTEND_SRC / "api.ts"
 
 
 def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
@@ -22,14 +25,16 @@ def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
     assert "model: 'local_plan_template'" in types
     assert "model: 'dxm_template_ref'" in types
     assert "'e2_plan'" in template_center
-    assert ">铺货方案（本地）</button>" in template_center
+    assert '<span className="eyebrow">普货方案</span>' in template_center
     assert "<LocalPlanWorkspace" in template_center
-    assert "local_plan_template · 可编辑 / 可版本化" in workspace
-    assert "dxm_template_ref · 只读" in workspace
-    assert "不提供修改接口" in workspace
+    assert "店小秘只读同步" in workspace
+    assert "选择后立即带入模板值；保存方案不会修改店小秘中的原模板。" in workspace
+    assert "representative_product_ids" not in workspace
+    assert "当前商品：" not in workspace
+    assert "single_target_category.v2" in workspace
     assert "/api/local-plan-templates" in workspace
     assert "deleteJson<LocalPlanTemplate>" in workspace
-    assert "归档所选版本" in workspace
+    assert "删除方案" in workspace
     assert "postJson<DxmTemplateRefSyncResult>('/api/dxm-template-refs/sync'" in workspace
     assert "category_schemas" in types
     assert "result.category_schemas" in workspace
@@ -37,21 +42,28 @@ def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
     assert "reviewed:${fieldKey}" not in workspace
     assert "definition.ui_binding" in workspace
     schema_editor = SCHEMA_VALUE_EDITOR_TS.read_text(encoding="utf-8")
-    assert "item.names?.zh" in schema_editor
+    assert "names.zh" in schema_editor
     assert "resolveSchemaChoiceOptions" in workspace
     assert "price_policy?:" in types
-    assert "价格关系已冻结" in workspace
-    assert "商品价与 SKU 售价须在最低/最高价范围内" not in workspace
-    assert "SKU 售价须在最低/最高价范围内" in workspace
-    assert "SKU 货值不得高于 SKU 售价" in workspace
+    assert "sku_prices_within_range: true" in types
+    assert "sku_cargo_not_above_sale: true" in types
     assert "title 来源策略" not in workspace
-    assert "'inherit' | 'fill' | 'fixed'" in workspace
+    assert "'auto' | 'current' | 'template' | 'fill' | 'fixed'" in workspace
+    assert "沿用每件商品原值" in workspace
+    assert "最终值来源" not in workspace
+    assert "留空时沿用每件商品的原标题" in workspace
+    assert "同步${label}选项" in workspace
+    assert "representative_product_ids" not in workspace
+    assert "主编辑页 + 半托管" in workspace
+    assert "PLAN_PATH_EXECUTION_NOT_RELEASED" in (
+        REPO_ROOT / "app" / "backend" / "src" / "batch_edit" / "plan_snapshot_compiler.py"
+    ).read_text(encoding="utf-8")
     assert "fixedFieldValues" in workspace
     assert "field_values: fixedFieldValues" in workspace
-    assert "固定值（最高优先）" in workspace
-    assert "补差规则（覆盖继承值）" in workspace
-    assert "普货模板库" in template_center
-    assert "铺货方案（本地）" in template_center
+    assert "使用新版编辑器" in workspace
+    assert "根据 PC 端描述一键生成" in workspace
+    assert "普货方案" in template_center
+    assert "新建、查看、改版本、归档" in template_center
     assert "<textarea" not in workspace
     assert "补差规则 JSON" not in workspace
     assert "中文字段映射 JSON" not in workspace
@@ -60,6 +72,29 @@ def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
     assert "localStorage" not in workspace
     assert "loadOrFallback<LocalPlanTemplate[]>('/api/local-plan-templates'" in app
     assert "loadOrFallback<DxmTemplateRef[]>('/api/dxm-template-refs'" in app
+
+
+def test_local_plan_uses_explicit_three_level_category_scope_and_fail_closed_fields():
+    workspace = LOCAL_PLAN_TSX.read_text(encoding="utf-8")
+    cascade = CATEGORY_CASCADE_TSX.read_text(encoding="utf-8")
+    shell = APP_SHELL_TSX.read_text(encoding="utf-8")
+
+    assert "<CategoryCascadePicker" in workspace
+    assert "读取类目字段与模板" in workspace
+    assert "/api/dxm/category/get?category_id=" in workspace
+    assert "不能生成空的分类规则" in workspace
+    assert "一个普货方案必须且只能选择一个末级类目" in workspace
+    assert "方案类目（仅 1 个）" in workspace
+    assert "setCategoryRecords([record])" in workspace
+    assert "/api/dxm/category/children?" in cascade
+    assert "/api/dxm/category/search?" in cascade
+    assert "适用类目三级联动" in cascade
+    assert "中文类目名称待读取" in cascade
+    assert "frontendPackage.version" in shell
+    assert "NavigationGlyph" in shell
+    api = API_TS.read_text(encoding="utf-8")
+    assert "readOnlyPost = fallback.includes('/api/dxm-template-refs/sync')" in api
+    assert "店小秘类目字段与模板读取失败" in api
 
 
 def test_e2_ui_carries_per_item_category_and_freezes_before_atomic_batch_approval():
@@ -92,7 +127,7 @@ def test_e2_ui_carries_per_item_category_and_freezes_before_atomic_batch_approva
     assert "schemaTextByCategory" not in snapshot
     assert "<textarea" not in snapshot
     assert "canonicalSha256" not in snapshot
-    assert "后端重新读取当前 draft、模板与类目 Schema" in snapshot
+    assert "后端重新读取当前草稿、模板与类目字段" in snapshot
     assert "冻结前保持零写" in snapshot
     assert "发布始终不允许" in snapshot
     assert "发布允许" in snapshot

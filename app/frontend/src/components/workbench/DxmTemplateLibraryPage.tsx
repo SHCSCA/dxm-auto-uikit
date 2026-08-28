@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
-import { getJson, postJson } from '../../api'
+import { postJson, withDxmSessionBusyRetry } from '../../api'
+import { useDxmShop } from '../../dxmShopContext'
 import type {
-  DxmDraftPageResponse,
   DxmDraftShop,
-  DxmDraftShopsResponse,
   DxmTemplateRef,
   DxmTemplateRefSyncResult,
 } from '../../types'
@@ -16,7 +15,13 @@ const REF_TYPE_LABELS: Record<DxmTemplateRef['ref_type'], string> = {
   freight: '运费模板',
   service: '服务模板',
   size: '尺码表',
+  regional: '区域调价模板',
+  module_property: '产品属性模板',
+  module_template: '编辑页模块模板',
+  module_package: '包装模块模板',
 }
+
+const TEMPLATE_PAGE_SIZES = [20, 50, 100, 200] as const
 
 type DxmTemplateLibraryPageProps = {
   refs: DxmTemplateRef[]
@@ -31,27 +36,22 @@ export function DxmTemplateLibraryPage({
   onShowDxmAccess,
   onShowPlans,
 }: DxmTemplateLibraryPageProps) {
-  const [shops, setShops] = useState<DxmDraftShop[]>([])
-  const [shopId, setShopId] = useState('')
+  const {
+    shops,
+    selectedShopId: shopId,
+    setSelectedShopId,
+    loading: shopsLoading,
+    error: shopReadError,
+    refresh: refreshShops,
+  } = useDxmShop()
   const [typeFilter, setTypeFilter] = useState<'all' | DxmTemplateRef['ref_type']>('all')
   const [selectedId, setSelectedId] = useState<number | null>(refs[0]?.id ?? null)
+  const [pageNo, setPageNo] = useState(1)
+  const [pageSize, setPageSize] = useState<(typeof TEMPLATE_PAGE_SIZES)[number]>(20)
   const [syncing, setSyncing] = useState(false)
+  const [syncStage, setSyncStage] = useState<'idle' | 'reading_templates'>('idle')
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const response = await getJson<DxmDraftShopsResponse>('/api/dxm/draft-reader/shops')
-        setShops(response.shops)
-        setShopId((current) => current || response.shops[0]?.id || '')
-      } catch (error) {
-        setMessage({
-          tone: 'error',
-          text: error instanceof Error ? error.message : '店铺列表读取失败，请先连接店小秘。',
-        })
-      }
-    })()
-  }, [])
+  const [lastSync, setLastSync] = useState<DxmTemplateRefSyncResult | null>(null)
 
   const visibleRefs = useMemo(
     () => refs.filter((ref) => (
@@ -60,31 +60,40 @@ export function DxmTemplateLibraryPage({
     )),
     [refs, shopId, typeFilter],
   )
-  const selected = visibleRefs.find((ref) => ref.id === selectedId) ?? visibleRefs[0] ?? null
+  const totalPages = Math.max(1, Math.ceil(visibleRefs.length / pageSize))
+  const currentPage = Math.min(pageNo, totalPages)
+  const pagedRefs = useMemo(
+    () => visibleRefs.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [currentPage, pageSize, visibleRefs],
+  )
+  const selected = pagedRefs.find((ref) => ref.id === selectedId) ?? pagedRefs[0] ?? null
 
   async function syncFromDxm() {
     if (!shopId) {
-      setMessage({ tone: 'error', text: '请先选择店铺。' })
+      await refreshShops(true)
+      setMessage({ tone: 'error', text: '尚未选择店铺，请先在左侧选择真实店铺。' })
       return
     }
     setSyncing(true)
+    setSyncStage('reading_templates')
     setMessage(null)
     try {
-      const page = await getJson<DxmDraftPageResponse>(
-        `/api/dxm/draft-reader/products?shop_id=${encodeURIComponent(shopId)}&page_no=1&page_size=100`,
+      setSyncStage('reading_templates')
+      const result = await withDxmSessionBusyRetry(
+        () => postJson<DxmTemplateRefSyncResult>('/api/dxm-template-refs/sync-shop', {
+          shop_id: shopId,
+        }),
       )
-      const categoryIds = [...new Set(page.items.map((item) => item.category_id).filter((value): value is string => Boolean(value)))]
-      if (!categoryIds.length) {
-        throw new Error('该店采集箱草稿没有类目，无法同步模板。请先在店小秘给草稿选好类目。')
-      }
-      const result = await postJson<DxmTemplateRefSyncResult>('/api/dxm-template-refs/sync', {
-        shop_id: shopId,
-        category_ids: categoryIds,
-      })
       await onChanged()
+      setLastSync(result)
+      const elapsedSeconds = typeof result.elapsed_ms === 'number'
+        ? `${Math.max(0.1, result.elapsed_ms / 1000).toFixed(1)} 秒`
+        : null
       setMessage({
-        tone: 'ok',
-        text: `已从店小秘同步 ${result.refs.length} 条模板（店铺 ${shopName(shopId, shops)}，${categoryIds.length} 个类目）。`,
+        tone: result.refs.length ? 'ok' : 'error',
+        text: result.refs.length
+          ? `已从店小秘同步 ${result.refs.length} 条店铺模板（店铺 ${shopName(shopId, shops)}；按店铺管理中心读取${result.category_ids.length ? `，其中 ${result.category_ids.length} 个类目仅为模板返回的关联信息，不是本次同步范围` : ''}${elapsedSeconds ? `，耗时 ${elapsedSeconds}` : ''}）。`
+          : `店小秘读取已完成，但返回 0 条模板记录（当前店铺 ${shopName(shopId, shops)}；这不是采集箱为空导致的，请确认当前登录账号和店铺，仍有疑问请查看同步日志${elapsedSeconds ? `，耗时 ${elapsedSeconds}` : ''}）。`,
       })
     } catch (error) {
       setMessage({
@@ -93,6 +102,7 @@ export function DxmTemplateLibraryPage({
       })
     } finally {
       setSyncing(false)
+      setSyncStage('idle')
     }
   }
 
@@ -108,16 +118,20 @@ export function DxmTemplateLibraryPage({
           <div className="dxm-template-library__actions">
             <button className="button button--quiet" type="button" onClick={onShowDxmAccess}>检查店小秘连接</button>
             <button className="button button--secondary" type="button" onClick={onShowPlans}>去建普货方案</button>
-            <button className="button button--primary" type="button" disabled={!shopId || syncing} onClick={() => { void syncFromDxm() }}>
-              {syncing ? '正在同步…' : '同步当前店铺'}
+            <button className="button button--quiet" type="button" disabled={shopsLoading} onClick={() => { void refreshShops(true) }}>
+              {shopsLoading ? '正在读取店铺…' : '重新读取店铺'}
+            </button>
+            <button className="button button--primary" type="button" disabled={!shopId || syncing || shopsLoading} onClick={() => { void syncFromDxm() }}>
+              {syncStage === 'reading_templates' ? '正在读取店铺模板…' : '同步当前店铺'}
             </button>
           </div>
         </div>
         <div className="dxm-template-library__toolbar">
           <label>
             <span>店铺</span>
-            <select value={shopId} onChange={(event) => setShopId(event.target.value)}>
-              {!shops.length && <option value="">暂无店铺，请先登录</option>}
+            <select value={shopId} disabled={shopsLoading} onChange={(event) => { setSelectedShopId(event.target.value); setPageNo(1) }}>
+              {shopsLoading && <option value="">正在读取店铺…</option>}
+              {!shopsLoading && !shops.length && <option value="">尚未读取到店铺</option>}
               {shops.map((shop) => (
                 <option key={shop.id} value={shop.id}>{shop.name}</option>
               ))}
@@ -125,7 +139,7 @@ export function DxmTemplateLibraryPage({
           </label>
           <label>
             <span>类型</span>
-            <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as typeof typeFilter)}>
+            <select value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value as typeof typeFilter); setPageNo(1) }}>
               <option value="all">全部类型</option>
               {Object.entries(REF_TYPE_LABELS).map(([value, label]) => (
                 <option key={value} value={value}>{label}</option>
@@ -137,14 +151,46 @@ export function DxmTemplateLibraryPage({
             <span>条可见 · 共 {refs.length} 条已同步</span>
           </div>
         </div>
+        {shopsLoading && (
+          <div className="dxm-template-library__shop-status" role="status">
+            正在从已登录的真实浏览器读取店铺；如果上一条店小秘操作尚未结束，系统会自动重试。
+          </div>
+        )}
+        {shopReadError && (
+            <div className="draft-selection-alert dxm-template-library__shop-status" role="alert">
+            店铺读取未完成：{shopReadError} <button className="button button--quiet" type="button" disabled={shopsLoading} onClick={() => { void refreshShops() }}>重新读取</button>
+          </div>
+        )}
         {message && (
           <div className={message.tone === 'ok' ? 'draft-selection-notice' : 'draft-selection-alert'} role="status">
             {message.text}
           </div>
         )}
+        {lastSync && (
+          <details className="dxm-template-library__trace">
+            <summary>查看本次同步诊断（不含账号、Cookie 或模板正文）</summary>
+            <p>
+              同步编号：<code>{lastSync.sync_correlation_id ?? '本次旧接口未提供编号'}</code>
+              {' · '}当前店铺：{shopName(lastSync.shop_id, shops)}
+              {' · '}结果：{lastSync.sync_status === 'empty' ? '已读取但没有返回模板记录' : `已同步 ${lastSync.refs.length} 条`}
+            </p>
+            <ul>
+              {(lastSync.request_trace ?? []).map((trace, index) => (
+                <li key={`${trace.path}-${index}`}>
+                  {trace.label}：{trace.outcome === 'ok' ? '成功' : '失败'}
+                  {' · '}{trace.path}
+                  {' · '}HTTP {trace.status ?? '未取得'}
+                  {' · '}{trace.elapsed_ms}ms
+                  {typeof trace.item_count === 'number' ? ` · ${trace.item_count} 条` : ''}
+                  {trace.reason ? ` · ${trace.reason}` : ''}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
 
-      <article className="module-card span-2">
+      <article className="module-card span-2 dxm-template-list-card">
         <div className="dxm-template-table" role="table" aria-label="已同步模板">
           <div className="dxm-template-table__head" role="row">
             <span>模板名</span>
@@ -153,7 +199,13 @@ export function DxmTemplateLibraryPage({
             <span>类目</span>
             <span>状态</span>
           </div>
-          {visibleRefs.length ? visibleRefs.map((ref) => (
+          {syncing && (
+            <div className="dxm-template-library__sync-status" role="status">
+              <strong>正在读取店小秘模板…</strong>
+              <span>正在按当前登录账号与所选店铺读取管理中心模板；完成前不把当前列表判定为“无模板”。</span>
+            </div>
+          )}
+          {visibleRefs.length ? pagedRefs.map((ref) => (
             <button
               key={ref.id}
               type="button"
@@ -167,13 +219,49 @@ export function DxmTemplateLibraryPage({
               <span>{ref.category_id ?? '店铺级'}</span>
               <b>{ref.availability === 'available' ? '可用' : '已漂移'}</b>
             </button>
-          )) : (
+          )) : syncing ? null : (
             <div className="empty-state">
-              <strong>还没有同步到模板</strong>
-              <span>选好店铺后点「同步当前店铺」。模板本身请在店小秘后台创建。</span>
+              <strong>{refs.length ? '当前店铺没有已同步模板' : '还没有同步到模板'}</strong>
+              <span>{refs.length
+                ? `当前店铺（${shopName(shopId, shops)}）没有记录；其他店铺共已同步 ${refs.length} 条。`
+                : '选好店铺后点「同步当前店铺」。如果同步结果显示 0 条，表示读取成功但店小秘没有返回模板记录。'}</span>
             </div>
           )}
         </div>
+        <footer className="dxm-template-pagination" aria-label="模板分页">
+          <span>{templatePaginationSummary(currentPage, pageSize, visibleRefs.length)}</span>
+          <div className="dxm-template-pagination__nav">
+            <button
+              className="button button--quiet"
+              type="button"
+              disabled={currentPage <= 1}
+              onClick={() => setPageNo((current) => Math.max(1, current - 1))}
+            >
+              上一页
+            </button>
+            <span className="dxm-template-pagination__page">第 {currentPage} / {totalPages} 页</span>
+            <button
+              className="button button--quiet"
+              type="button"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPageNo((current) => Math.min(totalPages, current + 1))}
+            >
+              下一页
+            </button>
+            <label>
+              <span className="sr-only">每页模板数量</span>
+              <select
+                value={pageSize}
+                onChange={(event) => {
+                  setPageSize(Number(event.target.value) as (typeof TEMPLATE_PAGE_SIZES)[number])
+                  setPageNo(1)
+                }}
+              >
+                {TEMPLATE_PAGE_SIZES.map((size) => <option key={size} value={size}>{size} 条/页</option>)}
+              </select>
+            </label>
+          </div>
+        </footer>
       </article>
 
       <aside className="module-card">
@@ -209,4 +297,11 @@ export function DxmTemplateLibraryPage({
 
 function shopName(shopId: string, shops: DxmDraftShop[]) {
   return shops.find((shop) => shop.id === shopId)?.name ?? shopId
+}
+
+function templatePaginationSummary(pageNo: number, pageSize: number, total: number) {
+  if (!total) return '共 0 条'
+  const from = (pageNo - 1) * pageSize + 1
+  const to = Math.min(pageNo * pageSize, total)
+  return `第 ${from}–${to} 条，共 ${total} 条`
 }

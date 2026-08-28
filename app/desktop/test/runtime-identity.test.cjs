@@ -435,8 +435,8 @@ test('prebuild generator writes a fingerprinted manifest without packaging Elect
   })
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
-  const generated = parseBuildManifest(fs.readFileSync(output, 'utf8'), { expectedPackageVersion: '0.1.4' })
+  const generated = parseBuildManifest(fs.readFileSync(output, 'utf8'), { expectedPackageVersion: '0.3.0' })
   assert.equal(generated.buildId, 'test-build-id')
   assert.equal(generated.gitDirty, true)
-  assert.equal(generated.packageVersion, '0.1.4')
+  assert.equal(generated.packageVersion, '0.3.0')
 })

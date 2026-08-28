@@ -274,12 +274,14 @@ class DxmWorkflowAdapter:
         *,
         shop_id: str,
         category_ids: list[str],
+        representative_product_ids: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Return current-session E2 template/schema reads unchanged."""
 
         return self.login_flow.read_e2_plan_scope(
             shop_id=shop_id,
             category_ids=category_ids,
+            representative_product_ids=representative_product_ids,
         )
 
     def read_e2_product_details(

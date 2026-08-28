@@ -439,6 +439,21 @@ class DummyLoginFlow:
     def get_state(self):
         return self.state
 
+    def logout(self):
+        self.state = {
+            **self.state,
+            'ok': True,
+            'stage': 'logged_out',
+            'reason_code': 'DXM_LOGGED_OUT',
+            'logged_in': False,
+            'reader_ready': False,
+            'label': '已退出登录',
+            'message': '已关闭当前店小秘会话；可以重新登录或切换账号。',
+            'next_action': '填写新的店小秘账号和密码，再打开真实登录页。',
+            'requires_user_action': True,
+        }
+        return self.state
+
     def start_login(self, username: str, password: str):
         self.started_with = (username, password)
         self.state = {
@@ -673,6 +688,7 @@ def test_login_open_preserves_current_authenticated_home_before_navigation(
     page = HomePage()
     monkeypatch.setattr(flow, '_ensure_page', lambda: page)
     monkeypatch.setattr(flow, '_page_looks_logged_in', lambda candidate: candidate is page)
+    monkeypatch.setattr(flow, '_visible_account_matches_requested', lambda _username: True)
     monkeypatch.setattr(flow, '_safe_live_hud_page_title', lambda _page: '店小秘--首页')
     monkeypatch.setattr(flow, '_visible_reader_session_status', lambda: {
         'reader_ready': True,
@@ -693,6 +709,49 @@ def test_login_open_preserves_current_authenticated_home_before_navigation(
     assert state['visible_logged_in'] is True
     assert state['reader_ready'] is True
     assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+
+
+def test_login_open_closes_existing_account_before_filling_a_different_account(
+    monkeypatch,
+    tmp_path,
+):
+    flow = DxmLoginFlow(DummyLiveClient(), state_file=tmp_path / 'runtime-state.json')
+
+    class FakePage:
+        def __init__(self, url: str):
+            self.url = url
+
+        def wait_for_timeout(self, _timeout: int):
+            return None
+
+    old_page = FakePage('https://www.dianxiaomi.com/web/home')
+    new_page = FakePage('https://www.dianxiaomi.com/')
+    pages = iter([old_page, new_page])
+    filled: list[tuple[str, str]] = []
+    goto_calls: list[object] = []
+    logout_calls: list[str] = []
+
+    monkeypatch.setattr(flow, '_ensure_page', lambda: next(pages))
+    monkeypatch.setattr(flow, '_page_looks_logged_in', lambda candidate: candidate is old_page)
+    monkeypatch.setattr(flow, '_visible_account_matches_requested', lambda _username: False)
+    monkeypatch.setattr(flow, 'logout', lambda: logout_calls.append('logout') or {'reason_code': 'DXM_LOGGED_OUT'})
+    monkeypatch.setattr(flow, '_goto_sterile', lambda page, *_args, **_kwargs: goto_calls.append(page))
+    monkeypatch.setattr(flow, '_safe_live_hud_page_title', lambda _page: '店小秘官网登录页')
+    monkeypatch.setattr(flow, '_fill_first_available', lambda _page, selectors, value: filled.append((selectors[0], value)))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+    monkeypatch.setattr(flow, '_artifact_url', lambda _path: None)
+    monkeypatch.setattr(flow, '_visible_reader_session_status', lambda: {
+        'reader_ready': False,
+        'reason_code': 'LOGIN_REQUIRED',
+    })
+
+    state = flow._open_login_page_and_fill('18855640392', 'secret')
+
+    assert logout_calls == ['logout']
+    assert goto_calls == [new_page]
+    assert filled[0][1] == '18855640392'
+    assert filled[1][1] == 'secret'
+    assert state['visible_logged_in'] is False
 
 
 def test_login_start_discards_partial_playwright_runtime_after_launch_failure(
@@ -939,6 +998,30 @@ def test_failed_login_discards_a_closed_non_null_browser_session(tmp_path):
     assert flow._browser_session_thread_id is None
     assert flow._browser_session_generation is None
     assert playwright.stopped is True
+
+
+def test_logout_revokes_visible_session_and_removes_persisted_cookie(tmp_path):
+    class LiveClient:
+        def __init__(self):
+            self.cookie_file = tmp_path / 'dianxiaomi_cookies.json'
+            self.cookie_file.write_text('[]', encoding='utf-8')
+
+    flow = DxmLoginFlow(LiveClient(), state_file=tmp_path / 'login-state.json')
+    flow._account_context_hash = 'stale-account'
+    flow._account_context_browser_session_id = 'stale-session'
+    close_calls: list[str] = []
+    flow._close_browser_session = lambda: close_calls.append('closed')
+
+    state = flow.logout()
+
+    assert close_calls == ['closed']
+    assert not flow.live_client.cookie_file.exists()
+    assert state['stage'] == 'logged_out'
+    assert state['reason_code'] == 'DXM_LOGGED_OUT'
+    assert state['logged_in'] is False
+    assert state['reader_ready'] is False
+    assert flow._account_context_hash is None
+    assert flow._account_context_browser_session_id is None
 
 
 def test_live_status_uses_the_same_visible_playwright_session_as_login_and_reader(monkeypatch):
@@ -3350,6 +3433,12 @@ class DummyEnglishCustomsUpdatePage:
 def test_login_start_returns_waiting_captcha(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)
+    audit_events = []
+    monkeypatch.setattr(
+        main_module,
+        'record_best_effort',
+        lambda event: audit_events.append(event) or {'ok': True},
+    )
 
     client = TestClient(app)
     response = client.post('/api/dxm/login/start', json={'username': 'demo-user', 'password': 'demo-pass'})
@@ -3359,6 +3448,8 @@ def test_login_start_returns_waiting_captcha(monkeypatch):
     assert flow.started_with == ('demo-user', 'demo-pass')
     assert data['stage'] == 'waiting_captcha'
     assert data['requires_user_action'] is True
+    assert audit_events[-1]['phase'] == 'waiting_user'
+    assert audit_events[-1]['status'] == 'pending'
 
 
 def test_login_start_is_not_blocked_by_l2_gate(monkeypatch):
@@ -3449,6 +3540,29 @@ def test_login_state_reads_from_login_flow(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()['stage'] == 'opening_login_page'
+
+
+def test_logout_endpoint_closes_the_current_dxm_session(monkeypatch):
+    flow = DummyLoginFlow()
+    flow.state.update({
+        'ok': True,
+        'stage': 'login_success',
+        'logged_in': True,
+        'reader_ready': True,
+    })
+    monkeypatch.setattr('src.main.login_flow', flow)
+    monkeypatch.setattr('src.main._assert_batch_browser_available', lambda: None)
+
+    client = TestClient(app)
+    response = client.post('/api/dxm/logout')
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['stage'] == 'logged_out'
+    assert data['reason_code'] == 'DXM_LOGGED_OUT'
+    assert data['logged_in'] is False
+    assert data['reader_ready'] is False
+    assert '切换账号' in data['message']
 
 
 def test_navigate_endpoint_delegates_to_login_flow(monkeypatch):
@@ -6187,6 +6301,99 @@ def test_visible_editor_later_steps_require_dom_readback_instead_of_trusting_vis
         )
     with pytest.raises(AssertionError, match='must not (run page.evaluate|use an unavailable page DOM API)'):
         flow._fill_compliance_defaults_on_page(NoDomPage(), _legacy_explicit_editor_defaults())
+
+
+def test_description_workflow_clicks_only_the_bounded_new_editor_in_order(tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    defaults = {
+        '_editor_actions': {
+            'description': {
+                'editor': 'new',
+                'generate_mobile_from_pc': True,
+                'confirm_before_save': True,
+            },
+        },
+    }
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content('''
+        <html><body>
+          <section id="describeInfo">
+            <button id="open-editor">使用新版编辑器</button>
+          </section>
+          <button id="unsafe-main-save">保存</button>
+          <div class="ant-modal" style="display:none">
+            <h2>新版编辑器</h2>
+            <button id="generate">根据PC端描述一键生成</button>
+            <button id="confirm">确认</button>
+            <button id="safe-save">保存</button>
+          </div>
+          <script>
+            window.steps = [];
+            openEditor = document.querySelector('#open-editor');
+            openEditor.onclick = () => {
+              window.steps.push('open');
+              document.querySelector('.ant-modal').style.display = 'block';
+            };
+            document.querySelector('#generate').onclick = () => window.steps.push('generate');
+            document.querySelector('#confirm').onclick = () => window.steps.push('confirm');
+            document.querySelector('#safe-save').onclick = () => window.steps.push('safe-save');
+            document.querySelector('#unsafe-main-save').onclick = () => window.steps.push('unsafe-main-save');
+          </script>
+        </body></html>
+        ''')
+
+        result = flow._apply_configured_description_workflow(page, defaults)
+        steps = page.evaluate('window.steps')
+        browser.close()
+
+    assert result['ok'] is True
+    assert result['workflow'] == [
+        '使用新版编辑器',
+        '根据 PC 端描述一键生成',
+        '确认',
+        '保存',
+    ]
+    assert steps == ['open', 'generate', 'confirm', 'safe-save']
+
+
+def test_description_workflow_fails_closed_without_a_bounded_editor_window(tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    defaults = {
+        '_editor_actions': {
+            'description': {
+                'editor': 'new',
+                'generate_mobile_from_pc': True,
+                'confirm_before_save': True,
+            },
+        },
+    }
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content('''
+        <html><body>
+          <section id="describeInfo"><button>使用新版编辑器</button></section>
+          <button id="unsafe-main-save">保存</button>
+          <script>
+            window.unsafeMainSaveClicked = false;
+            document.querySelector('#unsafe-main-save').onclick = () => {
+              window.unsafeMainSaveClicked = true;
+            };
+          </script>
+        </body></html>
+        ''')
+
+        result = flow._apply_configured_description_workflow(page, defaults)
+        unsafe_clicked = page.evaluate('window.unsafeMainSaveClicked')
+        browser.close()
+
+    assert result['ok'] is False
+    assert '边界化' in result['reason']
+    assert unsafe_clicked is False
 
 
 def test_visible_semi_managed_defaults_require_dom_readback_instead_of_trusting_visible_page(monkeypatch, tmp_path):
@@ -14895,7 +15102,7 @@ def test_visible_editor_ready_state_blocks_when_devtools_times_out_without_field
         '_visible_editor_native_loading_state',
         lambda _page: {
             'loading': False,
-            'reason': '原生窗口未检测到加载动画',
+            'reason': '无法确认编辑页关键字段已加载',
             'source': 'native_snapshot',
         },
     )
@@ -15805,6 +16012,37 @@ def test_should_process_marketing_images_when_config_marks_already_generated(tmp
 
     assert flow._should_generate_marketing_images({'image': {'marketing_images_already_generated': True}}) is True
     assert flow._marketing_images_marked_already_generated({'image': {'already_generated': 'true'}}) is True
+
+
+def test_frozen_marketing_image_action_runs_before_empty_image_slot_skip(monkeypatch, tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    calls = []
+
+    class Page:
+        url = 'https://www.dianxiaomi.com/web/smt/edit?id=70001'
+
+        def title(self):
+            return '店小秘编辑页'
+
+    monkeypatch.setattr(flow, '_apply_configured_description_workflow', lambda *_args: {'ok': True})
+    monkeypatch.setattr(
+        flow,
+        '_generate_marketing_images_on_page',
+        lambda _page: calls.append('marketing') or {'ok': True, 'generated': True},
+    )
+    result = flow._fill_media_assets_on_page(Page(), {
+        '_editor_actions': {
+            'marketing_images': {
+                'generate_from_product_images': True,
+                'required_slots': ['1:1_white_background', '3:4_scene'],
+            },
+        },
+        '_frozen_execution_payload': {},
+    })
+
+    assert result['ok'] is True
+    assert calls == ['marketing']
+    assert result['fill_result']['marketing_images'] == {'ok': True, 'generated': True}
 
 
 def test_generate_marketing_images_runs_white_background_conversion(monkeypatch, tmp_path):

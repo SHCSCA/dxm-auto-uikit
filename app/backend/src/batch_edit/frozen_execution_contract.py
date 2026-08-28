@@ -53,10 +53,20 @@ def compile_frozen_execution_payload(
         )
     item = matches[0]
     category_id = _non_empty_text(item.get("categoryId"), "categoryId")
-
+    all_editor_actions = plan.get("editor_actions", {})
+    if not isinstance(all_editor_actions, Mapping):
+        _reject("FROZEN_EXECUTION_EDITOR_ACTIONS_INVALID", "editor_actions is invalid")
     target_category = item.get("target_category")
     if target_category is not None and not isinstance(target_category, Mapping):
         _reject("FROZEN_EXECUTION_TARGET_INVALID", "target_category is invalid")
+    action_category_id = (
+        _non_empty_text(target_category.get("category_id"), "target_category.category_id")
+        if isinstance(target_category, Mapping)
+        else category_id
+    )
+    editor_actions = all_editor_actions.get(action_category_id, {})
+    if not isinstance(editor_actions, Mapping):
+        _reject("FROZEN_EXECUTION_EDITOR_ACTIONS_INVALID", "category editor_actions is invalid")
 
     category_schema = item.get("category_schema")
     if not isinstance(category_schema, Mapping):
@@ -166,15 +176,25 @@ def compile_frozen_execution_payload(
                 "FROZEN_EXECUTION_VALUE_MISSING",
                 f"resolved field {field_key} has no value",
             )
-        fields.append(
-            {
-                "field_key": field_key,
-                "ui_label_zh": binding["ui_label_zh"],
-                "ui_binding": binding["ui_binding"],
-                "category_schema_path": binding["category_schema_path"],
-                "resolved_value": deepcopy(raw_field["resolved_value"]),
-            }
-        )
+        descriptor = {
+            "field_key": field_key,
+            "ui_label_zh": binding["ui_label_zh"],
+            "ui_binding": binding["ui_binding"],
+            "category_schema_path": binding["category_schema_path"],
+            "resolved_value": deepcopy(raw_field["resolved_value"]),
+        }
+        # Complex editor controls need an explicit runtime route.  Keeping the
+        # control contract beside the frozen field prevents the visible-page
+        # fallback from treating a structured object as label text.
+        ui_control = property_schema.get("ui_control")
+        if ui_control is not None:
+            if not isinstance(ui_control, str) or not ui_control.strip():
+                _reject(
+                    "FROZEN_EXECUTION_CONTROL_INVALID",
+                    f"resolved field {field_key} has an invalid ui_control",
+                )
+            descriptor["ui_control"] = ui_control.strip()
+        fields.append(descriptor)
 
     unresolved = [str(value).strip() for value in unresolved_fields]
     if len(set(unresolved)) != len(unresolved) or seen_fields.intersection(unresolved):
@@ -189,6 +209,7 @@ def compile_frozen_execution_payload(
         "fields": fields,
         "unresolved_fields": unresolved,
         "price_validation": deepcopy(dict(price_validation)),
+        **({"editor_actions": deepcopy(dict(editor_actions))} if editor_actions else {}),
         **(
             {"target_category": _normalized_target_category(target_category)}
             if target_category is not None
@@ -222,7 +243,7 @@ def frozen_execution_defaults(execution_payload: Mapping[str, Any]) -> dict[str,
             target_category.get("category_id"),
             "target_category.category_id",
         )
-        if target_category_id == current_category_id:
+        if target_category_id == current_category_id and target_category.get("plan_owned") is not True:
             _reject(
                 "FROZEN_EXECUTION_TARGET_INVALID",
                 "target_category must differ from the current category",
@@ -233,6 +254,9 @@ def frozen_execution_defaults(execution_payload: Mapping[str, Any]) -> dict[str,
         category_match = target_category.get("category_match")
         if category_match not in (None, ""):
             defaults["category_match"] = str(category_match)
+    editor_actions = execution_payload.get("editor_actions")
+    if isinstance(editor_actions, Mapping) and editor_actions:
+        defaults["_editor_actions"] = deepcopy(dict(editor_actions))
     defaults["_frozen_execution_payload"] = deepcopy(dict(execution_payload))
     defaults["_frozen_execution_payload_hash"] = _sha256_text(
         execution_payload.get("payload_hash"),
@@ -293,6 +317,8 @@ def _normalized_target_category(value: Mapping[str, Any]) -> dict[str, Any]:
     category_match = value.get("category_match")
     if category_match not in (None, ""):
         normalized["category_match"] = _non_empty_text(category_match, "target_category.category_match")
+    if value.get("plan_owned") is True:
+        normalized["plan_owned"] = True
     return normalized
 
 

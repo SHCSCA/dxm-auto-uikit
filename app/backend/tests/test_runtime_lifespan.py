@@ -10,11 +10,6 @@ from src import main as main_module
 def test_app_lifespan_closes_visible_browser_sessions(monkeypatch):
     calls: list[str] = []
 
-    monkeypatch.setattr(
-        main_module.batch_execution_runtime,
-        'shutdown',
-        lambda: calls.append('batch-runtime') or {'ok': True},
-    )
     monkeypatch.setattr(main_module.agent_console_service, 'stop', lambda: calls.append('agent-console') or {'active': False})
     monkeypatch.setattr(
         main_module.browser_agent_runtime,
@@ -28,7 +23,7 @@ def test_app_lifespan_closes_visible_browser_sessions(monkeypatch):
 
     asyncio.run(run_lifespan_once())
 
-    assert calls == ['running', 'batch-runtime', 'agent-console', 'browser-runtime']
+    assert calls == ['running', 'agent-console', 'browser-runtime']
 
 
 def test_app_lifespan_records_truth_when_browser_agent_shutdown_is_incomplete(monkeypatch):

@@ -6579,3 +6579,509 @@ function formatLogAge(seconds: number | null | undefined) {
   const hours = Math.floor(minutes / 60)
   return `${hours} 小时未写入`
 }
+
+// ==================== 批量保存配置面板 ====================
+
+interface VideoGenerationPanelProps {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  failureStrategy: 'ignore' | 'pause';
+  onFailureStrategyChange: (strategy: 'ignore' | 'pause') => void;
+  maxWaitSeconds: number;
+  onMaxWaitSecondsChange: (seconds: number) => void;
+}
+
+export const VideoGenerationPanel: React.FC<VideoGenerationPanelProps> = ({
+  enabled,
+  onEnabledChange,
+  failureStrategy,
+  onFailureStrategyChange,
+  maxWaitSeconds,
+  onMaxWaitSecondsChange,
+}) => {
+  return (
+    <div className="config-panel video-generation-panel">
+      <div className="panel-header">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onEnabledChange(e.target.checked)}
+          />
+          <span>启用产品视频生成</span>
+        </label>
+      </div>
+
+      {enabled && (
+        <div className="panel-content">
+          <div className="config-item">
+            <label>失败策略：</label>
+            <div className="radio-group">
+              <label>
+                <input
+                  type="radio"
+                  name="videoFailureStrategy"
+                  value="ignore"
+                  checked={failureStrategy === 'ignore'}
+                  onChange={() => onFailureStrategyChange('ignore')}
+                />
+                <span>免费额度用完继续</span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="videoFailureStrategy"
+                  value="pause"
+                  checked={failureStrategy === 'pause'}
+                  onChange={() => onFailureStrategyChange('pause')}
+                />
+                <span>程序问题暂停</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="config-item">
+            <label>最大等待时间：</label>
+            <input
+              type="number"
+              min="60"
+              max="600"
+              value={maxWaitSeconds}
+              onChange={(e) => onMaxWaitSecondsChange(parseInt(e.target.value))}
+            />
+            <span>秒</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ==================== 一键翻译配置面板 ====================
+
+interface AutoTranslatePanelProps {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  translateType: 'normal' | 'ai';
+  onTranslateTypeChange: (type: 'normal' | 'ai') => void;
+  direction: 'zh_en' | 'en_zh';
+  onDirectionChange: (direction: 'zh_en' | 'en_zh') => void;
+  applyTo: {
+    title: boolean;
+    attributes: boolean;
+    descriptions: boolean;
+    customNames: boolean;
+  };
+  onApplyToChange: (applyTo: AutoTranslatePanelProps['applyTo']) => void;
+}
+
+export const AutoTranslatePanel: React.FC<AutoTranslatePanelProps> = ({
+  enabled,
+  onEnabledChange,
+  translateType,
+  onTranslateTypeChange,
+  direction,
+  onDirectionChange,
+  applyTo,
+  onApplyToChange,
+}) => {
+  return (
+    <div className="config-panel auto-translate-panel">
+      <div className="panel-header">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onEnabledChange(e.target.checked)}
+          />
+          <span>启用一键翻译</span>
+        </label>
+      </div>
+
+      {enabled && (
+        <div className="panel-content">
+          <div className="config-item">
+            <label>翻译类型：</label>
+            <div className="radio-group">
+              <label>
+                <input
+                  type="radio"
+                  name="translateType"
+                  value="normal"
+                  checked={translateType === 'normal'}
+                  onChange={() => onTranslateTypeChange('normal')}
+                />
+                <span>普通翻译</span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="translateType"
+                  value="ai"
+                  checked={translateType === 'ai'}
+                  onChange={() => onTranslateTypeChange('ai')}
+                />
+                <span>AI翻译</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="config-item">
+            <label>翻译方向：</label>
+            <div className="radio-group">
+              <label>
+                <input
+                  type="radio"
+                  name="translateDirection"
+                  value="zh_en"
+                  checked={direction === 'zh_en'}
+                  onChange={() => onDirectionChange('zh_en')}
+                />
+                <span>中文 → 英文</span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="translateDirection"
+                  value="en_zh"
+                  checked={direction === 'en_zh'}
+                  onChange={() => onDirectionChange('en_zh')}
+                />
+                <span>英文 → 中文</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="config-item">
+            <label>翻译范围：</label>
+            <div className="checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={applyTo.title}
+                  onChange={(e) => onApplyToChange({ ...applyTo, title: e.target.checked })}
+                />
+                <span>标题</span>
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={applyTo.attributes}
+                  onChange={(e) => onApplyToChange({ ...applyTo, attributes: e.target.checked })}
+                />
+                <span>属性</span>
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={applyTo.descriptions}
+                  onChange={(e) => onApplyToChange({ ...applyTo, descriptions: e.target.checked })}
+                />
+                <span>描述</span>
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={applyTo.customNames}
+                  onChange={(e) => onApplyToChange({ ...applyTo, customNames: e.target.checked })}
+                />
+                <span>自定义名称</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ==================== 批发配置面板 ====================
+
+interface WholesalePanelProps {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  minQuantity: number;
+  onMinQuantityChange: (quantity: number) => void;
+  discountPercent: number;
+  onDiscountPercentChange: (percent: number) => void;
+  deductionMethod: 'payment' | 'order';
+  onDeductionMethodChange: (method: 'payment' | 'order') => void;
+}
+
+export const WholesalePanel: React.FC<WholesalePanelProps> = ({
+  enabled,
+  onEnabledChange,
+  minQuantity,
+  onMinQuantityChange,
+  discountPercent,
+  onDiscountPercentChange,
+  deductionMethod,
+  onDeductionMethodChange,
+}) => {
+  return (
+    <div className="config-panel wholesale-panel">
+      <div className="panel-header">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onEnabledChange(e.target.checked)}
+          />
+          <span>启用批发</span>
+        </label>
+      </div>
+
+      {enabled && (
+        <div className="panel-content">
+          <div className="config-item">
+            <label>起订件数：</label>
+            <input
+              type="number"
+              min="2"
+              max="100000"
+              value={minQuantity}
+              onChange={(e) => onMinQuantityChange(parseInt(e.target.value))}
+            />
+            <span>件</span>
+          </div>
+
+          <div className="config-item">
+            <label>减免百分比：</label>
+            <input
+              type="number"
+              min="1"
+              max="99"
+              value={discountPercent}
+              onChange={(e) => onDiscountPercentChange(parseInt(e.target.value))}
+            />
+            <span>%</span>
+          </div>
+
+          <div className="config-item">
+            <label>扣减方式：</label>
+            <div className="radio-group">
+              <label>
+                <input
+                  type="radio"
+                  name="deductionMethod"
+                  value="payment"
+                  checked={deductionMethod === 'payment'}
+                  onChange={() => onDeductionMethodChange('payment')}
+                />
+                <span>付款减库存</span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="deductionMethod"
+                  value="order"
+                  checked={deductionMethod === 'order'}
+                  onChange={() => onDeductionMethodChange('order')}
+                />
+                <span>下单减库存</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ==================== 半托管配置面板 ====================
+
+interface SemiManagedPanelProps {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  countriesStrategy: 'all' | 'custom';
+  onCountriesStrategyChange: (strategy: 'all' | 'custom') => void;
+  useBatchFill: boolean;
+  onUseBatchFillChange: (use: boolean) => void;
+  isOriginalBox: boolean;
+  onIsOriginalBoxChange: (value: boolean) => void;
+  logisticsAttr: string;
+  onLogisticsAttrChange: (value: string) => void;
+  weightKg: number;
+  onWeightKgChange: (value: number) => void;
+  lengthCm: number;
+  onLengthCmChange: (value: number) => void;
+  widthCm: number;
+  onWidthCmChange: (value: number) => void;
+  heightCm: number;
+  onHeightCmChange: (value: number) => void;
+  productPriceCny: number;
+  onProductPriceCnyChange: (value: number) => void;
+  jitStock: number;
+  onJitStockChange: (value: number) => void;
+}
+
+export const SemiManagedPanel: React.FC<SemiManagedPanelProps> = ({
+  enabled,
+  onEnabledChange,
+  countriesStrategy,
+  onCountriesStrategyChange,
+  useBatchFill,
+  onUseBatchFillChange,
+  isOriginalBox,
+  onIsOriginalBoxChange,
+  logisticsAttr,
+  onLogisticsAttrChange,
+  weightKg,
+  onWeightKgChange,
+  lengthCm,
+  onLengthCmChange,
+  widthCm,
+  onWidthCmChange,
+  heightCm,
+  onHeightCmChange,
+  productPriceCny,
+  onProductPriceCnyChange,
+  jitStock,
+  onJitStockChange,
+}) => {
+  return (
+    <div className="config-panel semi-managed-panel">
+      <div className="panel-header">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onEnabledChange(e.target.checked)}
+          />
+          <span>启用半托管</span>
+        </label>
+      </div>
+
+      {enabled && (
+        <div className="panel-content">
+          <div className="config-item">
+            <label>国家策略：</label>
+            <div className="radio-group">
+              <label>
+                <input
+                  type="radio"
+                  name="countriesStrategy"
+                  value="all"
+                  checked={countriesStrategy === 'all'}
+                  onChange={() => onCountriesStrategyChange('all')}
+                />
+                <span>全选</span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="countriesStrategy"
+                  value="custom"
+                  checked={countriesStrategy === 'custom'}
+                  onChange={() => onCountriesStrategyChange('custom')}
+                />
+                <span>自定义</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="config-item">
+            <label>
+              <input
+                type="checkbox"
+                checked={useBatchFill}
+                onChange={(e) => onUseBatchFillChange(e.target.checked)}
+              />
+              <span>使用批量填写</span>
+            </label>
+          </div>
+
+          {useBatchFill && (
+            <div className="batch-fill-config">
+              <h4>货品信息批量填写</h4>
+
+              <div className="config-item">
+                <label>是否原箱：</label>
+                <select
+                  value={isOriginalBox ? 'yes' : 'no'}
+                  onChange={(e) => onIsOriginalBoxChange(e.target.value === 'yes')}
+                >
+                  <option value="yes">是</option>
+                  <option value="no">否</option>
+                </select>
+              </div>
+
+              <div className="config-item">
+                <label>物流属性：</label>
+                <input
+                  type="text"
+                  value={logisticsAttr}
+                  onChange={(e) => onLogisticsAttrChange(e.target.value)}
+                  placeholder="请输入物流属性"
+                />
+              </div>
+
+              <div className="config-item">
+                <label>重量 (kg)：</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={weightKg}
+                  onChange={(e) => onWeightKgChange(parseFloat(e.target.value))}
+                />
+              </div>
+
+              <div className="config-item">
+                <label>尺寸 (cm)：</label>
+                <div className="dimension-inputs">
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="长"
+                    value={lengthCm}
+                    onChange={(e) => onLengthCmChange(parseFloat(e.target.value))}
+                  />
+                  <span>×</span>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="宽"
+                    value={widthCm}
+                    onChange={(e) => onWidthCmChange(parseFloat(e.target.value))}
+                  />
+                  <span>×</span>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="高"
+                    value={heightCm}
+                    onChange={(e) => onHeightCmChange(parseFloat(e.target.value))}
+                  />
+                </div>
+              </div>
+
+              <h4>变种信息批量填写</h4>
+
+              <div className="config-item">
+                <label>产品价格 (CNY)：</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={productPriceCny}
+                  onChange={(e) => onProductPriceCnyChange(parseFloat(e.target.value))}
+                />
+              </div>
+
+              <div className="config-item">
+                <label>JIT库存：</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={jitStock}
+                  onChange={(e) => onJitStockChange(parseInt(e.target.value))}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};

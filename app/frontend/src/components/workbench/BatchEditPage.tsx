@@ -320,6 +320,12 @@ export function BatchEditPage({
 
   return (
     <section className="module-layout batch-edit-page" aria-label="批量编辑商品">
+      {/* PublishGuard Banner - Permanent Warning */}
+      <div className="publishguard-banner publishguard-banner--batch" role="alert">
+        <strong>⚠ 本系统仅支持草稿保存，禁止任何发布操作</strong>
+        <p>最终发布永久禁止：立即发布、保存并发布、上线等按钮均已永久禁用。</p>
+      </div>
+
       <article className="module-card span-3 batch-builder-head">
         <div className="module-head">
           <div>

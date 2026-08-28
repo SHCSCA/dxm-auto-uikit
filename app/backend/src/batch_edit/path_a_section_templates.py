@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from src.batch_edit.frozen_execution_contract import FrozenExecutionContractError
 
@@ -48,12 +49,27 @@ PATH_A_RECOMMENDED_TEMPLATE_SECTIONS: tuple[dict[str, Any], ...] = (
     },
 )
 
+# Optional templates are surfaced when the user selects them, but they do not
+# block a basic Path A plan. Regional pricing is intentionally in this bucket
+# because a shop may have no regional template and use the DXM default.
+PATH_A_OPTIONAL_TEMPLATE_SECTIONS: tuple[dict[str, Any], ...] = (
+    {
+        "section": "regional_pricing",
+        "editor_label": "区域调价信息 · 区域调价模板",
+        "ref_type": "regional",
+        "category_bound": False,
+    },
+)
+
 # Map frozen DXM template-ref types onto the field-level reference-template
 # sections that `_apply_dxm_reference_templates_on_page` already knows.
 PATH_A_REF_TYPE_TO_REFERENCE_SECTION = {
     "attribute": "attribute_info",
     "freight": "freight",
     "service": "service",
+    "regional": "regional_pricing",
+    "variation": "variation",
+    "size": "size",
 }
 
 PATH_A_FILL_CONTEXT_KEY = "_path_a_fill_context"
@@ -77,6 +93,7 @@ def evaluate_path_a_section_templates(
     present: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     recommended_missing: list[dict[str, Any]] = []
+    optional_present: list[dict[str, Any]] = []
 
     for spec in PATH_A_REQUIRED_TEMPLATE_SECTIONS:
         match = _matching_ref(normalized_refs, spec, category)
@@ -94,12 +111,18 @@ def evaluate_path_a_section_templates(
         else:
             present.append(match)
 
+    for spec in PATH_A_OPTIONAL_TEMPLATE_SECTIONS:
+        match = _matching_ref(normalized_refs, spec, category)
+        if match is not None:
+            optional_present.append(match)
+
     return {
         "ok": not missing,
         "category_id": category,
         "present": present,
         "missing": missing,
         "recommended_missing": recommended_missing,
+        "optional_present": optional_present,
         "missing_labels": [item["editor_label"] for item in missing],
     }
 
@@ -120,7 +143,7 @@ def build_path_a_fill_context(
     reference_templates: dict[str, dict[str, Any]] = {}
     product_template: dict[str, Any] | None = None
 
-    for item in report["present"]:
+    for item in [*report["present"], *report.get("optional_present", [])]:
         ref_type = str(item.get("ref_type") or "")
         template_id = str(item.get("template_id") or "").strip()
         template_name = str(item.get("template_name") or "").strip()
@@ -203,3 +226,58 @@ def _matching_ref(
             "template_name": template_name or None,
         }
     return None
+
+
+@dataclass
+class VideoGenerationConfig:
+    """产品视频生成配置"""
+    enabled: bool = False                      # 是否启用
+    failure_strategy: Literal["ignore", "pause"] = "pause"  # 失败策略
+    max_wait_seconds: int = 300               # 最大等待时间
+    poll_interval_seconds: int = 5             # 轮询间隔
+
+
+@dataclass
+class AutoTranslateConfig:
+    """一键翻译配置"""
+    enabled: bool = False                      # 是否启用
+    translate_type: Literal["normal", "ai"] = "normal"  # 翻译类型
+    direction: Literal["zh_en", "en_zh"] = "zh_en"     # 翻译方向
+    apply_to: tuple[str, ...] = ("title", "attributes", "descriptions", "custom_names")  # 翻译范围
+
+
+@dataclass
+class WholesaleConfig:
+    """批发配置"""
+    enabled: bool = False                      # 是否启用
+    min_quantity: int = 3                      # 起订件数
+    discount_percent: int = 10                  # 减免百分比
+    deduction_method: Literal["payment", "order"] = "payment"  # 扣减方式
+
+
+@dataclass
+class SemiManagedConfig:
+    """半托管配置"""
+    enabled: bool = False                      # 是否启用
+    countries_strategy: Literal["all", "custom"] = "all"  # 国家策略
+    custom_countries: tuple[str, ...] = ()      # 自定义国家代码
+    use_batch_fill: bool = True                 # 使用批量填写
+    # 货品信息批量填写值
+    is_original_box: bool = True
+    logistics_attr: str = ""
+    weight_kg: float = 0.0
+    length_cm: float = 0.0
+    width_cm: float = 0.0
+    height_cm: float = 0.0
+    # 变种信息批量填写值
+    product_price_cny: float = 0.0
+    jit_stock: int = 0
+
+
+@dataclass
+class BatchDraftSaveConfig:
+    """批量只保存完整配置"""
+    video_generation: VideoGenerationConfig = field(default_factory=VideoGenerationConfig)
+    auto_translate: AutoTranslateConfig = field(default_factory=AutoTranslateConfig)
+    wholesale: WholesaleConfig = field(default_factory=WholesaleConfig)
+    semi_managed: SemiManagedConfig = field(default_factory=SemiManagedConfig)

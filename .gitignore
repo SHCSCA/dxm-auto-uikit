@@ -28,10 +28,25 @@ data/*.log
 app/backend/data/
 
 # Local agent/workspace metadata
+.agents/
 .codex/
 .hermes/
+.playwright-cli/
 .worktrees/
-.superdesign/tmp/
+.superdesign/
+app/frontend/.playwright-cli/
+
+# Local test/runtime scratch directories
+data_test*/
+output/
 
 # Local probe junk should live under tools/probes/, not root
 /tmp_*.py
+/analyze_mvp*.py
+/check4.py
+/debug_hash.py
+/final_check.py
+/list_headers.py
+/verify_sections.py
+/app/backend/debug_hash.py
+/tools/probes/category_tree_probe.py

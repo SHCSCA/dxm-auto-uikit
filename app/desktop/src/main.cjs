@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, safeStorage, shell, screen } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const crypto = require('node:crypto')
@@ -42,6 +42,7 @@ const {
   prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
 } = require('./runtime-start.cjs')
+const { resolveDesktopWindowLayout, browserBoundsEnvironment } = require('./window-layout.cjs')
 
 app.setName('DXM Agent Console')
 const nativeExitCoordinator = createNativeExitCoordinator({ app })
@@ -471,6 +472,7 @@ async function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
     dataDir,
     workflowProfileDir,
     resourceRoot,
+    visibleBrowserBounds,
   } = launchIdentity
   const backendLogPath = path.join(dataDir, 'backend.log')
   runtimeInfo.backendLogPath = backendLogPath
@@ -487,6 +489,7 @@ async function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
     DXM_BACKEND_URL: `http://127.0.0.1:${port}`,
     DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent',
     DXM_WORKFLOW_PERSISTENT_PROFILE: '1',
+    ...(visibleBrowserBounds ? { DXM_VISIBLE_BROWSER_BOUNDS: visibleBrowserBounds } : {}),
     PYTHONIOENCODING: 'utf-8',
     PYTHONDONTWRITEBYTECODE: '1',
   }, { port })
@@ -694,6 +697,7 @@ async function startDesktopRuntime() {
   runtimeInfo.qaVisibleSmokePath = qaVisibleSmokePath
 
   const repoRoot = resolveRepoRoot()
+  const desktopWindowLayout = resolveDesktopWindowLayout(screen.getPrimaryDisplay().workArea)
   const dataDir = resolveSelectedDataDir({
     isIsolatedQa: launchPolicy.isIsolatedQa,
     isPackaged: app.isPackaged,
@@ -749,6 +753,7 @@ async function startDesktopRuntime() {
     dataDir,
     workflowProfileDir,
     resourceRoot: repoRoot,
+    visibleBrowserBounds: browserBoundsEnvironment(desktopWindowLayout),
   })
   await waitForHealth(runtimeInfo.apiBase, 45000, ownership)
 
@@ -760,6 +765,7 @@ async function startDesktopRuntime() {
     qaCapturePath,
     qaCredentialSmokePath,
     qaVisibleSmokePath,
+    desktopWindowLayout,
   })
 }
 
@@ -769,10 +775,13 @@ async function createMainWindow(runtime) {
     getCurrentWindow: () => mainWindow,
     setCurrentWindow: (value) => { mainWindow = value },
     createWindow: () => {
+      const bounds = runtime.desktopWindowLayout.console
       const window = new BrowserWindow({
-        width: 1480,
-        height: 940,
-        minWidth: 1180,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        minWidth: 960,
         minHeight: 760,
         show: !runtime.qaCapturePath,
         backgroundColor: '#f6f8fb',

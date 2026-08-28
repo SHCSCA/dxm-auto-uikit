@@ -17,6 +17,10 @@ DXM_TEMPLATE_REF_TYPES = {
     "freight",
     "service",
     "size",
+    "regional",
+    "module_property",
+    "module_template",
+    "module_package",
 }
 DXM_TEMPLATE_REF_AVAILABILITY = {"available", "missing", "drifted"}
 _ContractError = TypeVar("_ContractError", bound=Exception)
@@ -69,17 +73,123 @@ class ResolvedTemplateReferences:
                     f"{ref['dxm_template_id']}@{ref['source_digest']}"
                 )
                 previous = resolved.get(field_key)
-                if previous is not None and previous[0] != value:
+                property_schema = allowed_fields.get(field_key)
+                try:
+                    normalized_value = _normalize_template_value(
+                        value,
+                        property_schema,
+                        reject=lambda detail: self._values.reject(
+                            "DXM_TEMPLATE_VALUE_NOT_IN_SCHEMA",
+                            f"template field {field_key} {detail}",
+                        ),
+                    )
+                except Exception:
+                    # Preserve the more useful conflict diagnosis when two
+                    # references disagree, even if the later value is also
+                    # not present in the target schema's option list.
+                    if previous is not None and previous[0] != value:
+                        self._values.reject(
+                            "DXM_TEMPLATE_VALUE_CONFLICT",
+                            "multiple DXM templates resolve field "
+                            f"{field_key} differently",
+                        )
+                    raise
+                if previous is not None and previous[0] != normalized_value:
                     self._values.reject(
                         "DXM_TEMPLATE_VALUE_CONFLICT",
                         "multiple DXM templates resolve field "
                         f"{field_key} differently",
                     )
                 resolved[field_key] = (
-                    self._values.clone(value),
+                    self._values.clone(normalized_value),
                     source_ref,
                 )
         return resolved
+
+
+def _normalize_template_value(
+    value: Any,
+    definition: Any,
+    *,
+    reject: Any,
+) -> Any:
+    """Interpret DXM template transport values against the frozen schema.
+
+    DXM has returned the same option as an id, a Chinese label, or an object
+    containing ``valueId``/``nameZh`` depending on the endpoint.  Execution
+    must persist the stable id, while structured SKU/region objects remain
+    structured and are never coerced to ``[object Object]``.
+    """
+
+    if not isinstance(definition, Mapping):
+        return value
+    options = _schema_choice_options(definition)
+    if options:
+        if definition.get("type") == "array":
+            raw_items = value if isinstance(value, list) else [value]
+            normalized_items: list[str] = []
+            for item in raw_items:
+                normalized = _normalize_template_choice(item, options)
+                if normalized is None:
+                    reject("contains an option that is not present in the frozen schema")
+                normalized_items.append(normalized)
+            return normalized_items
+        normalized = _normalize_template_choice(value, options)
+        if normalized is None:
+            reject("contains an option that is not present in the frozen schema")
+        return normalized
+    value_type = definition.get("type")
+    if value_type == "boolean" and isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "是"}:
+            return True
+        if lowered in {"false", "0", "no", "否"}:
+            return False
+    if value_type == "integer" and isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    if value_type == "number" and isinstance(value, str) and value.strip():
+        try:
+            return float(value.strip())
+        except ValueError:
+            pass
+    return value
+
+
+def _schema_choice_options(definition: Mapping[str, Any]) -> list[tuple[str, str]]:
+    raw_values = definition.get("values")
+    if not isinstance(raw_values, list) or not raw_values:
+        items = definition.get("items")
+        raw_values = items.get("values") if isinstance(items, Mapping) else None
+    if not isinstance(raw_values, list) or not raw_values:
+        raw_values = definition.get("enum")
+    if not isinstance(raw_values, list):
+        return []
+    options: list[tuple[str, str]] = []
+    for item in raw_values:
+        if isinstance(item, Mapping):
+            option_id = item.get("id") or item.get("valueId") or item.get("value_id") or item.get("idStr") or item.get("code") or item.get("value")
+            label = item.get("nameZh") or item.get("label") or item.get("text") or item.get("name")
+        else:
+            option_id = item
+            label = item
+        if option_id is None:
+            continue
+        options.append((str(option_id), str(label if label is not None else option_id).strip()))
+    return options
+
+
+def _normalize_template_choice(value: Any, options: list[tuple[str, str]]) -> str | None:
+    if isinstance(value, Mapping):
+        value = value.get("id") or value.get("valueId") or value.get("value_id") or value.get("idStr") or value.get("code") or value.get("value") or value.get("nameZh") or value.get("label") or value.get("text") or value.get("name")
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    for option_id, label in options:
+        if raw == option_id or raw == label or raw == f"{label} · {option_id}":
+            return option_id
+    return None
 
 
 class DxmTemplateReferenceStore:
@@ -93,7 +203,7 @@ class DxmTemplateReferenceStore:
         records: list[dict[str, Any]],
         *,
         shop_id: str,
-        category_ids: list[str],
+        category_ids: list[str] | None,
     ) -> list[dict[str, Any]]:
         if not isinstance(records, list):
             self._values.reject(
@@ -104,11 +214,11 @@ class DxmTemplateReferenceStore:
             shop_id,
             "sync shop_id",
         )
-        normalized_category_ids = [
+        normalized_category_ids = None if category_ids is None else [
             self._values.positive_id_text(category_id, "sync category_id")
             for category_id in category_ids
         ]
-        if (
+        if normalized_category_ids is not None and (
             not normalized_category_ids
             or len(set(normalized_category_ids)) != len(normalized_category_ids)
         ):
@@ -116,7 +226,7 @@ class DxmTemplateReferenceStore:
                 "DXM_TEMPLATE_REF_SYNC_INVALID",
                 "sync category scope must be non-empty and unique",
             )
-        category_scope = set(normalized_category_ids)
+        category_scope = None if normalized_category_ids is None else set(normalized_category_ids)
         normalized_records = [
             self._normalize(raw, index=index)
             for index, raw in enumerate(records)
@@ -126,6 +236,7 @@ class DxmTemplateReferenceStore:
                 record["shop_id"] != normalized_shop_id
                 or (
                     record["category_id"] is not None
+                    and category_scope is not None
                     and record["category_id"] not in category_scope
                 )
             ):
@@ -154,6 +265,7 @@ class DxmTemplateReferenceStore:
                 row_category_id = row["category_id"]
                 if (
                     row_category_id is not None
+                    and category_scope is not None
                     and row_category_id not in category_scope
                 ):
                     continue
@@ -302,13 +414,24 @@ class DxmTemplateReferenceStore:
                     "local plan references a missing DXM template",
                 )
             ref = self.stored(row)
-            if (
-                ref["source_digest"] != expected_digest
-                or ref["availability"] != "available"
-            ):
+            if ref["source_digest"] != expected_digest:
                 self._values.reject(
                     "DXM_TEMPLATE_REF_DRIFT",
-                    "readonly DXM template reference has drifted",
+                    (
+                        f"店小秘模板「{ref['observed_display_name']}」与方案创建时"
+                        "的解析结果不一致。请在“普货方案”同步店小秘模板，"
+                        "将当前方案保存为新版本后再预览；本次未生成快照，"
+                        "没有保存或发布。"
+                    ),
+                )
+            if ref["availability"] != "available":
+                self._values.reject(
+                    "DXM_TEMPLATE_REF_DRIFT",
+                    (
+                        f"店小秘模板「{ref['observed_display_name']}」当前不可用。"
+                        "请在“普货方案”同步店小秘模板，将当前方案保存为新版本"
+                        "后再预览；本次未生成快照，没有保存或发布。"
+                    ),
                 )
             if ref["shop_id"] != normalized_shop_id:
                 self._values.reject(
@@ -381,7 +504,7 @@ class DxmTemplateReferenceStore:
         if public["resolved_values_hash"] != expected_hash:
             self._values.reject(
                 "DXM_TEMPLATE_REF_DRIFT",
-                "stored DXM template value hash has drifted",
+                "本地店小秘模板的解析字段摘要不一致，已停止生成快照。",
             )
         if not isinstance(audit_items, list):
             self._values.reject(
@@ -391,7 +514,7 @@ class DxmTemplateReferenceStore:
         if public["audit_items_hash"] != canonical_sha256(audit_items):
             self._values.reject(
                 "DXM_TEMPLATE_REF_DRIFT",
-                "stored DXM template audit item hash has drifted",
+                "本地店小秘模板的审计字段摘要不一致，已停止生成快照。",
             )
         return {
             **public,

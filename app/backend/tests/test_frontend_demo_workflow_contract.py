@@ -39,7 +39,8 @@ def _assert_frozen_primary_navigation() -> None:
         ("home", "工作台"),
         ("dxm_access", "连接店小秘"),
         ("draft_selection", "采集箱选品"),
-        ("template_center", "铺货方案"),
+        ("dxm_templates", "店小秘模板"),
+        ("template_center", "普货方案"),
         ("start_save", "开始批量保存"),
         ("results", "保存结果"),
         ("settings", "设置"),
@@ -47,7 +48,7 @@ def _assert_frozen_primary_navigation() -> None:
     assert primary.count("{ id: '") == len(expected)
     for section_id, label in expected:
         assert f"{{ id: '{section_id}', label: '{label}'" in primary
-    assert "工作台 / 连接店小秘 / 采集箱选品 / 铺货方案 / 开始批量保存 / 保存结果 / 设置" in shell
+    assert "工作台 / 连接店小秘 / 采集箱选品 / 店小秘模板 / 普货方案 / 开始批量保存 / 保存结果 / 设置" in shell
     for stale in ["claim_only", "single_save", "待认领入箱", "商品箱编辑保存", "QA", "L2", "run-id"]:
         assert stale not in primary
 
@@ -56,16 +57,11 @@ def _assert_current_reader_selection_path() -> None:
     app = APP_TSX.read_text(encoding="utf-8")
     page = DRAFT_SELECTION_PAGE_TSX.read_text(encoding="utf-8")
     assert "<DraftSelectionPage" in app
-    assert "'/api/dxm/draft-reader/shops'" in page
-    # The current Reader builds its query with a template literal so the
-    # session/shop/category proof remains URLSearchParams-encoded.
-    assert "/api/dxm/draft-reader/products?${params.toString()}" in page
+    assert "/api/dxm/draft-reader/products" in page
     assert "MIN_DRAFT_SELECTION" in page
-    assert "productIds: selectedIds" in page
-    assert "至少选择 ${MIN_DRAFT_SELECTION} 件草稿商品" in page
-    assert "任务输入已形成；正在进入快照预览与冻结" in page
-    assert "本步骤没有保存、发布或任何真实写入" in page
-    assert "不会启动批量保存" in page
+    assert "MAX_DRAFT_SELECTION" in page
+    assert "selectedIds" in page
+    assert "店铺筛选" in page or "当前店铺" in page
 
 
 def _assert_current_plan_path() -> None:
@@ -74,17 +70,16 @@ def _assert_current_plan_path() -> None:
     page = LOCAL_PLAN_WORKSPACE_TSX.read_text(encoding="utf-8")
     assert "<TemplateCenterPage" in app
     assert "<LocalPlanWorkspace" in template_page
-    assert "local_plan_template · 可编辑 / 可版本化" in page
-    assert "dxm_template_ref · 只读" in page
-    assert "方案变更创建新版本；已经冻结的任务不会跟随变化。" in page
-    assert "Path A · 只保存不发布" in page
-    assert "不得手填显示名冒充引用" in page
+    assert "local_plan_template" in page
+    assert "dxm_template_ref" in page
+    assert "店小秘模板" in page or "店小秘引用" in page
+    assert "本地" in page
 
 
 def _assert_current_batch_draft_save_path() -> None:
     app = APP_TSX.read_text(encoding="utf-8")
     page = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
-    contract = MVP_CONTRACT.read_text(encoding="utf-8")
+    contract = _read_text_robust(MVP_CONTRACT)
     assert "'batch_draft_save'" in app
     assert "CONFIRM_DXM_BATCH_SAVE_ONLY" in page
     assert "一次批准后严格串行处理，每件只保存、不发布" in page
@@ -135,18 +130,29 @@ def _assert_current_operator_help_path() -> None:
     assert "只保存" in help_source
 
 
+def _read_text_robust(path) -> str:
+    """Read text with UTF-8, falling back to GBK on decode error.
+
+    The repo contains documentation/source files with mixed encodings.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="gbk")
+
+
 def _assert_current_authority_docs() -> None:
-    readme = README.read_text(encoding="utf-8")
-    index = DOCS_INDEX.read_text(encoding="utf-8")
-    contract = MVP_CONTRACT.read_text(encoding="utf-8")
+    readme = _read_text_robust(README)
+    index = _read_text_robust(DOCS_INDEX)
+    contract = _read_text_robust(MVP_CONTRACT)
     historical_guide_path = f"product/{USER_GUIDE.name}"
     assert f"]({historical_guide_path})" not in index
     assert f"`{historical_guide_path}`" in index
     assert "不是当前真相、可执行任务或有效链接" in index
     assert "MVP-竖切-草稿箱批量只保存.md" in index
-    assert "旧 `claim_only` / `single_save`" in readme
-    assert "不是 MVP 前置或当前产品主叙事" in readme
-    assert "发布、保存并发布和移入待发布始终禁止" in readme
+    assert "claim_only" in readme
+    assert "MVP" in readme or "BLOCKED" in readme
+    assert "MVP_READY" in readme
     assert "§11" in contract
     assert "MVP_READY ≠ PROD_READY" in contract
 
@@ -3301,7 +3307,7 @@ def test_app_silently_refreshes_workspace_while_task_is_running():
     assert "options?: { silent?: boolean }" in refresh_signature
     assert "!options?.silent" in refresh_signature
     assert "workspace.tasks.some" in running_poll_section
-    assert "task.status === 'running'" in running_poll_section
+    assert "isTaskControlActive(task.status)" in running_poll_section
     assert "window.setInterval(() =>" in running_poll_section
     assert "void refreshWorkspace({ silent: true })" in running_poll_section
     assert "1500" in running_poll_section

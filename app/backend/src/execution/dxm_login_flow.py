@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import gzip
 import hashlib
 import json
 import math
@@ -36,6 +38,7 @@ from src.execution.browser_runtime import chrome_launch_options
 from src.execution.dxm_live import DxmLiveClient
 from src.services.agent_console import HUD_INIT_SCRIPT
 from src.services.dxm_draft_reader import DxmDraftReaderError
+from src.services.dxm_editor_model import enrich_dxm_editor_schema
 from src.state_machine.two_stage import (
     TwoStageContractError,
     canonical_source_identity,
@@ -66,8 +69,12 @@ DXM_DRAFT_PAGE_FORM_KEYS = frozenset({
 })
 DXM_E2_PLAN_READ_ALLOWLIST = frozenset({
     ('GET', 'https://www.dianxiaomi.com/api/smtProduct/edit.json'),
+    ('GET', 'https://www.dianxiaomi.com/api/smtCommLogisticAttribute/getLogisticAttributeList.json'),
+    ('GET', 'https://www.dianxiaomi.com/api/smtCommProduct/supportNewSizeAttribute.json'),
     ('POST', 'https://www.dianxiaomi.com/api/userTemplate/pageList.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtAttributeTemplate/pageList.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtAttributeTemplate/getTemplateListByCategory.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/variationTemplate/com/smt/pageList.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtShopInfoSync/list.json'),
     ('POST', 'https://www.dianxiaomi.com/api/variationTemplate/com/smt/getNameListByCategory.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtShopInfoSync/sizeChartList.json'),
@@ -76,6 +83,13 @@ DXM_E2_PLAN_READ_ALLOWLIST = frozenset({
     ('POST', 'https://www.dianxiaomi.com/api/smtCategory/list.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtCategory/searchCategory.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtCategory/getByCategoryId.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/userTemplate/templateListForModule.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtAdjustPrice/pageList.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCommMsr/list.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCommManufacture/list.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCategory/syncQualification.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtProduct/getSmtCommission.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtProduct/verifyPopChoiceShop.json'),
 })
 DXM_ACCOUNT_IDENTITY_FIELDS = (
     'id',
@@ -92,6 +106,12 @@ DXM_ACCOUNT_IDENTITY_FIELDS = (
     'loginName',
     'userName',
     'username',
+    'loginAccount',
+    'accountName',
+    'mobile',
+    'phone',
+    'telephone',
+    'email',
 )
 DXM_ACCOUNT_IDENTITY_CONTAINERS = (
     'user',
@@ -100,6 +120,18 @@ DXM_ACCOUNT_IDENTITY_CONTAINERS = (
     'member',
     'employee',
 )
+DXM_ACCOUNT_LOGIN_FIELDS = frozenset({
+    'account',
+    'loginName',
+    'userName',
+    'username',
+    'loginAccount',
+    'accountName',
+    'mobile',
+    'phone',
+    'telephone',
+    'email',
+})
 
 
 class MutationAuthorizationError(RuntimeError):
@@ -120,6 +152,9 @@ WORKFLOW_SCREENSHOT_MAP = {
 }
 DXM_REFERENCE_TEMPLATE_SECTIONS = (
     'attribute_info',
+    'regional_pricing',
+    'variation',
+    'size',
     'description',
     'freight',
     'service',
@@ -366,6 +401,12 @@ class DxmLoginFlow:
         self._browser_session_hooked_browser_ids: set[int] = set()
         self._account_context_hash: str | None = None
         self._account_context_browser_session_id: str | None = None
+        # Populated only while an E2 template scope is being read.  Entries
+        # contain endpoint path, label, status and elapsed time, never form
+        # values or response bodies.  The trace is returned with the
+        # session-bound read envelope so the API/audit layer can explain a
+        # slow or empty sync without exposing credentials or product data.
+        self._active_e2_request_trace: list[dict[str, Any]] | None = None
 
     def set_mutation_authorizer(
         self,
@@ -790,6 +831,64 @@ class DxmLoginFlow:
                 }
             return state
         return self._default_state()
+
+    def logout(self) -> dict[str, Any]:
+        """Close and revoke the visible DXM session so another account can log in.
+
+        Clearing the remembered credential alone is not a logout: the visible
+        Playwright context and its persisted cookies would still identify the
+        previous account.  This method runs on the browser-agent owner thread,
+        revokes the in-memory authorization generation first, closes the
+        visible session, removes the cookie artifact, and writes an explicit
+        logged-out state for the console.
+        """
+
+        self.clear_mutation_authorizer()
+        self.clear_execution_evidence_context()
+        self._account_context_hash = None
+        self._account_context_browser_session_id = None
+        close_error: str | None = None
+        try:
+            self._close_browser_session()
+        except Exception as exc:  # noqa: BLE001 - logout must still revoke cookies.
+            close_error = str(exc)
+        try:
+            self.live_client.cookie_file.unlink(missing_ok=True)
+        except Exception as exc:  # noqa: BLE001 - report a failed cleanup explicitly.
+            close_error = close_error or str(exc)
+
+        if close_error:
+            state = self._error_state(
+                stage='logout_failed',
+                label='退出登录未完全完成',
+                message='已撤销当前会话授权，但关闭真实浏览器或清理登录凭据时发生错误。',
+                next_action='请检查真实浏览器窗口是否已关闭；确认后重新打开登录页。',
+                reason_code='DXM_LOGOUT_FAILED',
+            )
+            state['logged_in'] = False
+            state['reader_ready'] = False
+            state['raw_error'] = close_error
+            self._write_state(state)
+            return state
+
+        state = {
+            **self._default_state(),
+            'ok': True,
+            'stage': 'logged_out',
+            'reason_code': 'DXM_LOGGED_OUT',
+            'logged_in': False,
+            'reader_ready': False,
+            'browser_session_id': None,
+            'account_ref': None,
+            'label': '已退出登录',
+            'message': '已关闭当前店小秘会话；可以重新登录或切换账号。',
+            'next_action': '填写新的店小秘账号和密码，再打开真实登录页。',
+            'requires_user_action': True,
+            'browser_visible': False,
+            'updated_at': now_iso(),
+        }
+        self._write_state(state)
+        return state
 
     def get_live_state(self) -> dict[str, Any]:
         """Return a Reader-usable state from the visible-session owner thread.
@@ -1308,7 +1407,6 @@ class DxmLoginFlow:
         try:
             submit_state = self._submit_login_after_captcha()
         except Exception as exc:
-            self._discard_incomplete_browser_session()
             state = self._error_state(
                 stage='login_failed',
                 label='继续失败',
@@ -1658,6 +1756,7 @@ class DxmLoginFlow:
         *,
         shop_id: str,
         category_ids: list[str],
+        representative_product_ids: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Read E2 template references and category schemas from this browser only."""
 
@@ -1675,6 +1774,22 @@ class DxmLoginFlow:
                 'DXM_PLAN_SCOPE_INVALID',
                 'E2 类目作用域必须包含 1–50 个不重复类目。',
             )
+        raw_representatives = representative_product_ids or {}
+        if not isinstance(raw_representatives, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_PLAN_SCOPE_INVALID',
+                '代表商品映射必须是 categoryId 到 productId 的对象。',
+            )
+        normalized_representatives = {
+            self._positive_reader_id(raw_category_id, label='代表商品类目'):
+            self._positive_reader_id(raw_product_id, label='代表商品')
+            for raw_category_id, raw_product_id in raw_representatives.items()
+        }
+        if not set(normalized_representatives) <= set(normalized_category_ids):
+            raise DxmDraftReaderError(
+                'DXM_PLAN_SCOPE_INVALID',
+                '代表商品类目不在本次方案类目作用域内。',
+            )
         _page, context, browser_session_id = self._draft_reader_session()
         user_info, account_ref = self._read_authenticated_user_info(
             context,
@@ -1687,6 +1802,7 @@ class DxmLoginFlow:
             )
 
         records: list[dict[str, Any]] = []
+        self._active_e2_request_trace = []
         records.extend(
             self._read_e2_product_templates(
                 context,
@@ -1695,14 +1811,125 @@ class DxmLoginFlow:
                 category_ids=set(normalized_category_ids),
             )
         )
-        records.extend(
-            self._read_e2_attribute_templates(
-                context,
-                browser_session_id=browser_session_id,
-                shop_id=normalized_shop_id,
-                category_ids=set(normalized_category_ids),
-            )
+        # Read category-scoped attribute templates first.  In the normal
+        # editor flow this response already contains ``productPropertys`` and
+        # is both the smallest and fastest source for a one-category plan.
+        # The account-wide management index is only used below as a bounded
+        # fallback when the category response is missing values/templates;
+        # otherwise every plan sync would pay for an unnecessary global scan.
+        module_templates = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/userTemplate/templateListForModule.json',
+            form={'shopId': normalized_shop_id, 'platform': 'smt', 'site': ''},
+            label='编辑页分区模板',
         )
+        if not isinstance(module_templates, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '编辑页分区模板只读回包 data 结构无效。',
+            )
+        for key, ref_type in (
+            ('propertyTemplateList', 'module_property'),
+            ('templateTemplateList', 'module_template'),
+            ('packageTemplateList', 'module_package'),
+        ):
+            records.extend(self._e2_named_template_records(
+                module_templates.get(key),
+                ref_type=ref_type,
+                id_keys=('idStr', 'id', 'templateId'),
+                name_keys=('templateName', 'name'),
+                shop_id=normalized_shop_id,
+                category_id=None,
+                source_api='/api/userTemplate/templateListForModule.json',
+            ))
+
+        msr_data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtCommMsr/list.json',
+            form={'shopIds': normalized_shop_id, 'platform': 'smt'},
+            label='责任人列表',
+        )
+        manufacturer_data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtCommManufacture/list.json',
+            form={'shopIds': normalized_shop_id, 'platform': 'smt'},
+            label='制造商列表',
+        )
+        if not isinstance(msr_data, Mapping) or not isinstance(manufacturer_data, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '责任人或制造商只读回包 data 结构无效。',
+            )
+        msr_options = msr_data.get(normalized_shop_id, [])
+        manufacturer_options = manufacturer_data.get(normalized_shop_id, [])
+        if not isinstance(msr_options, list) or not isinstance(manufacturer_options, list):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '责任人或制造商店铺列表结构无效。',
+            )
+
+        regional_data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtAdjustPrice/pageList.json',
+            form={
+                'platform': 'smt',
+                'pageNo': '1',
+                'pageSize': '50',
+                'total': '0',
+                'searchType': '1',
+                'searchValue': '',
+            },
+            label='区域调价模板',
+        )
+        if isinstance(regional_data, str) and regional_data.startswith('gzip!'):
+            regional_data = self._e2_decode_gzip_json(
+                regional_data,
+                label='区域调价模板列表',
+            )
+        regional_page = regional_data.get('page') if isinstance(regional_data, Mapping) else None
+        regional_items = regional_page.get('list') if isinstance(regional_page, Mapping) else None
+        records.extend(self._e2_named_template_records(
+            regional_items,
+            ref_type='regional',
+            id_keys=('idStr', 'id'),
+            name_keys=('name', 'templateName'),
+            shop_id=normalized_shop_id,
+            category_id=None,
+            source_api='/api/smtAdjustPrice/pageList.json',
+        ))
+        commission_rate = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtProduct/getSmtCommission.json',
+            form={'shopId': normalized_shop_id},
+            label='店铺佣金比例',
+        )
+        if not isinstance(commission_rate, (int, float)) or isinstance(commission_rate, bool):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '店铺佣金只读回包 data 不是数值。',
+            )
+        pop_choice_data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtProduct/verifyPopChoiceShop.json',
+            form={'shopIds': normalized_shop_id},
+            label='POP 与半托管店铺校验',
+        )
+        if not isinstance(pop_choice_data, list):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                'POP 与半托管店铺校验回包 data 不是数组。',
+            )
+        pop_choice_record = next((
+            dict(item)
+            for item in pop_choice_data
+            if isinstance(item, Mapping) and str(item.get('shopId') or '') == normalized_shop_id
+        ), None)
         shop_templates = self._e2_post_data(
             context,
             browser_session_id=browser_session_id,
@@ -1739,11 +1966,40 @@ class DxmLoginFlow:
         )
 
         category_schemas: dict[str, dict[str, Any]] = {}
+        representative_products: dict[str, dict[str, Any]] = {}
+        category_capabilities: dict[str, dict[str, Any]] = {}
         for category_id in normalized_category_ids:
             common_form = {
                 'shopId': normalized_shop_id,
                 'categoryId': category_id,
             }
+            attribute_template_data = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url=(
+                    'https://www.dianxiaomi.com/api/'
+                    'smtAttributeTemplate/getTemplateListByCategory.json'
+                ),
+                form=common_form,
+                label='类目产品属性模板',
+            )
+            if not isinstance(attribute_template_data, Mapping):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    f'类目 {category_id} 产品属性模板结构无效。',
+                )
+            records.extend(self._e2_named_template_records(
+                attribute_template_data.get('attributeTemplateList'),
+                ref_type='attribute',
+                id_keys=('idStr', 'id', 'templateId'),
+                name_keys=('templateName', 'name'),
+                shop_id=normalized_shop_id,
+                category_id=category_id,
+                source_api=(
+                    '/api/smtAttributeTemplate/'
+                    'getTemplateListByCategory.json'
+                ),
+            ))
             variation_data = self._e2_post_data(
                 context,
                 browser_session_id=browser_session_id,
@@ -1798,6 +2054,120 @@ class DxmLoginFlow:
                 )
             )
 
+            category_detail = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url='https://www.dianxiaomi.com/api/smtCategory/getByCategoryId.json',
+                form={'categoryId': category_id},
+                label='类目详情',
+            )
+            if not isinstance(category_detail, Mapping):
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 详情结构无效。',
+                )
+            category_capabilities[category_id] = {
+                key: category_detail.get(key)
+                for key in (
+                    'isEuContact',
+                    'hasCascadeAttribute',
+                    'sizeChartType',
+                    'hasPlugAttribute',
+                )
+                if key in category_detail
+            }
+            logistics_data = self._e2_get_data(
+                context,
+                browser_session_id=browser_session_id,
+                url=(
+                    'https://www.dianxiaomi.com/api/'
+                    'smtCommLogisticAttribute/getLogisticAttributeList.json'
+                ),
+                params={'categoryId': category_id, 'platform': 'smt'},
+                label='类目物流属性',
+            )
+            if not isinstance(logistics_data, Mapping):
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 物流属性结构无效。',
+                )
+            if str(logistics_data.get('categoryId') or '') != category_id:
+                raise DxmDraftReaderError(
+                    'PLAN_SCOPE_CONFLICT',
+                    f'类目 {category_id} 物流属性回包身份不一致。',
+                )
+            logistics_options = self._e2_json_array(
+                logistics_data.get('dataSourceJson'),
+                label=f'类目 {category_id} 物流属性选项',
+            )
+            support_new_size = self._e2_get_data(
+                context,
+                browser_session_id=browser_session_id,
+                url=(
+                    'https://www.dianxiaomi.com/api/'
+                    'smtCommProduct/supportNewSizeAttribute.json'
+                ),
+                params={'shopId': normalized_shop_id, 'categoryId': category_id},
+                label='新尺码属性开关',
+            )
+            if support_new_size not in (0, 1, False, True):
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 新尺码开关不是 0/1。',
+                )
+            category_capabilities[category_id].update({
+                'logistics_attribute_options': logistics_options,
+                'support_new_size_attribute': bool(support_new_size),
+                'commission_rate': float(commission_rate),
+                'pop_choice_shop': pop_choice_record,
+                'source_apis': [
+                    '/api/smtCommLogisticAttribute/getLogisticAttributeList.json',
+                    '/api/smtCommProduct/supportNewSizeAttribute.json',
+                    '/api/smtProduct/getSmtCommission.json',
+                    '/api/smtProduct/verifyPopChoiceShop.json',
+                ],
+            })
+            qualifications = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url='https://www.dianxiaomi.com/api/smtCategory/syncQualification.json',
+                form={
+                    'categoryId': category_id,
+                    'shopId': normalized_shop_id,
+                    'customProperty': '{}',
+                },
+                label='类目资质',
+            )
+            if not isinstance(qualifications, list):
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 资质结构无效。',
+                )
+
+            representative_product: Mapping[str, Any] | None = None
+            unit_options: list[Mapping[str, Any]] = []
+            representative_product_id = normalized_representatives.get(category_id)
+            if representative_product_id:
+                edit_data = self._e2_get_edit_data(
+                    context,
+                    browser_session_id=browser_session_id,
+                    product_id=representative_product_id,
+                )
+                representative_product = edit_data.get('product')
+                if not isinstance(representative_product, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_PRODUCT_DETAIL_RESPONSE_INVALID',
+                        '代表商品 edit.json 缺少 product。',
+                    )
+                if self._positive_reader_id(representative_product.get('shopId'), label='代表商品店铺') != normalized_shop_id:
+                    raise DxmDraftReaderError('PLAN_SCOPE_CONFLICT', '代表商品不属于当前店铺。')
+                if self._positive_reader_id(representative_product.get('categoryId'), label='代表商品类目') != category_id:
+                    raise DxmDraftReaderError('PLAN_SCOPE_CONFLICT', '代表商品类目与方案类目不一致。')
+                raw_units = edit_data.get('unitList')
+                if isinstance(raw_units, list):
+                    unit_options = [item for item in raw_units if isinstance(item, Mapping)]
+                representative_products[category_id] = dict(representative_product)
+
             attribute_schema_data = self._e2_post_data(
                 context,
                 browser_session_id=browser_session_id,
@@ -1811,9 +2181,47 @@ class DxmLoginFlow:
                 category_id=category_id,
                 attribute_schema_data=attribute_schema_data,
             )
-            category_schemas[category_id] = self._e2_category_schema(
+            base_schema = self._e2_category_schema(
                 attribute_schema_data,
                 category_id=category_id,
+            )
+            try:
+                category_schemas[category_id] = enrich_dxm_editor_schema(
+                    base_schema,
+                    product=representative_product,
+                    unit_options=unit_options,
+                    msr_options=[item for item in msr_options if isinstance(item, Mapping)],
+                    manufacturer_options=[item for item in manufacturer_options if isinstance(item, Mapping)],
+                    qualifications=[item for item in qualifications if isinstance(item, Mapping)],
+                    logistics_options=[item for item in logistics_options if isinstance(item, Mapping)],
+                    include_semi_managed=True,
+                )
+            except ValueError as exc:
+                raise DxmDraftReaderError('CATEGORY_SCHEMA_INVALID', str(exc)) from exc
+
+        # The management-center pageList is authoritative when the category
+        # availability response omits productPropertys.  Do not call it for
+        # the common case: that extra account-wide request was the main source
+        # of the perceived "template sync hangs" on shops with many records.
+        scoped_attribute_records = [
+            record for record in records
+            if record.get('ref_type') == 'attribute'
+            and record.get('category_id') in set(normalized_category_ids)
+        ]
+        attribute_fallback_required = (
+            not scoped_attribute_records
+            or any(not isinstance(record.get('resolved_values'), Mapping)
+                   or not record.get('resolved_values')
+                   for record in scoped_attribute_records)
+        )
+        if attribute_fallback_required:
+            records.extend(
+                self._read_e2_attribute_templates(
+                    context,
+                    browser_session_id=browser_session_id,
+                    shop_id=normalized_shop_id,
+                    category_ids=set(normalized_category_ids),
+                )
             )
 
         records = [
@@ -1832,12 +2240,47 @@ class DxmLoginFlow:
                 record['category_id'],
             )
             previous = identities.get(identity)
-            if previous is not None and previous != record:
-                raise DxmDraftReaderError(
-                    'DXM_TEMPLATE_IDENTITY_CONFLICT',
-                    '同一模板身份返回了冲突内容，已停止同步。',
-                )
-            identities[identity] = record
+            if previous is not None:
+                # Availability and management-center endpoints may describe
+                # the same template. Merge their metadata, but fail closed if
+                # they disagree on an actual field value.
+                previous_values = previous.get('resolved_values') or {}
+                current_values = record.get('resolved_values') or {}
+                if not isinstance(previous_values, Mapping) or not isinstance(current_values, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_IDENTITY_CONFLICT',
+                        '同一模板身份的解析值结构无效，已停止同步。',
+                    )
+                overlap = set(previous_values) & set(current_values)
+                if any(previous_values[key] != current_values[key] for key in overlap):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_IDENTITY_CONFLICT',
+                        '同一模板身份返回了冲突字段值，已停止同步。',
+                    )
+                merged = dict(previous)
+                merged['resolved_values'] = {**dict(previous_values), **dict(current_values)}
+                merged_audit_items: list[dict[str, Any]] = []
+                seen_audit_items: set[str] = set()
+                for audit_item in list(previous.get('audit_items') or []) + list(record.get('audit_items') or []):
+                    if not isinstance(audit_item, Mapping):
+                        continue
+                    audit_key = json.dumps(dict(audit_item), ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+                    if audit_key in seen_audit_items:
+                        continue
+                    seen_audit_items.add(audit_key)
+                    merged_audit_items.append(dict(audit_item))
+                merged['audit_items'] = merged_audit_items
+                source_apis = sorted({str(previous.get('source_api') or ''), str(record.get('source_api') or '')} - {''})
+                # Keep the scalar source_api required by the persisted
+                # template-reference contract; expose the complete lineage
+                # separately for diagnostics.
+                merged['source_apis'] = source_apis
+                if len(current_values) >= len(previous_values):
+                    merged['source_api'] = record.get('source_api')
+                    merged['source_record'] = record.get('source_record')
+                identities[identity] = merged
+            else:
+                identities[identity] = record
         _ending_user_info, ending_account_ref = self._read_authenticated_user_info(
             context,
             browser_session_id,
@@ -1852,12 +2295,200 @@ class DxmLoginFlow:
                 'BROWSER_SESSION_MISMATCH',
                 'E2 只读同步期间真实浏览器会话已变化。',
             )
+        request_trace = list(self._active_e2_request_trace or [])
+        self._active_e2_request_trace = None
         return {
             'browser_session_id': browser_session_id,
             'account_ref': account_ref,
             'payload': {
                 'template_records': list(identities.values()),
                 'category_schemas': category_schemas,
+                'representative_products': representative_products,
+                'category_capabilities': category_capabilities,
+                'request_trace': request_trace,
+            },
+        }
+
+    def read_dxm_template_library(
+        self,
+        *,
+        shop_id: str,
+    ) -> dict[str, Any]:
+        """Read the complete management-center template index for one shop.
+
+        This deliberately does not depend on the draft box.  Category IDs are
+        metadata discovered from the returned management records; category
+        schemas remain a separate batch-edit concern and are read only when a
+        concrete edit scope is frozen.
+        """
+
+        normalized_shop_id = self._positive_reader_id(shop_id, label='店铺')
+        _page, context, browser_session_id = self._draft_reader_session()
+        user_info, account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        if not self._user_info_contains_shop(user_info, normalized_shop_id):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_SCOPE_CONFLICT',
+                '请求店铺不在当前登录账号的 shopMap 中。',
+            )
+
+        self._active_e2_request_trace = []
+        records: list[dict[str, Any]] = []
+        records.extend(
+            self._read_e2_product_templates(
+                context,
+                browser_session_id=browser_session_id,
+                shop_id=normalized_shop_id,
+                category_ids=None,
+            )
+        )
+        records.extend(
+            self._read_e2_attribute_templates(
+                context,
+                browser_session_id=browser_session_id,
+                shop_id=normalized_shop_id,
+                category_ids=None,
+            )
+        )
+        records.extend(
+            self._read_e2_variation_templates(
+                context,
+                browser_session_id=browser_session_id,
+                shop_id=normalized_shop_id,
+            )
+        )
+        module_templates = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/userTemplate/templateListForModule.json',
+            form={'shopId': normalized_shop_id, 'platform': 'smt', 'site': ''},
+            label='编辑页分区模板',
+        )
+        if not isinstance(module_templates, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '编辑页分区模板只读回包 data 结构无效。',
+            )
+        for key, ref_type in (
+            ('propertyTemplateList', 'module_property'),
+            ('templateTemplateList', 'module_template'),
+            ('packageTemplateList', 'module_package'),
+        ):
+            records.extend(self._e2_named_template_records(
+                module_templates.get(key),
+                ref_type=ref_type,
+                id_keys=('idStr', 'id', 'templateId'),
+                name_keys=('templateName', 'name'),
+                shop_id=normalized_shop_id,
+                category_id=None,
+                source_api='/api/userTemplate/templateListForModule.json',
+            ))
+        regional_data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtAdjustPrice/pageList.json',
+            form={
+                'platform': 'smt', 'pageNo': '1', 'pageSize': '50',
+                'total': '0', 'searchType': '1', 'searchValue': '',
+            },
+            label='区域调价模板',
+        )
+        if isinstance(regional_data, str) and regional_data.startswith('gzip!'):
+            regional_data = self._e2_decode_gzip_json(
+                regional_data,
+                label='区域调价模板列表',
+            )
+        regional_page = regional_data.get('page') if isinstance(regional_data, Mapping) else None
+        records.extend(self._e2_named_template_records(
+            regional_page.get('list') if isinstance(regional_page, Mapping) else None,
+            ref_type='regional',
+            id_keys=('idStr', 'id'),
+            name_keys=('name', 'templateName'),
+            shop_id=normalized_shop_id,
+            category_id=None,
+            source_api='/api/smtAdjustPrice/pageList.json',
+        ))
+        shop_templates = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtShopInfoSync/list.json',
+            form={'shopId': normalized_shop_id},
+            label='店铺模板',
+        )
+        if not isinstance(shop_templates, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '店铺模板只读回包 data 结构无效。',
+            )
+        records.extend(
+            self._e2_named_template_records(
+                shop_templates.get('freightTemplateList'),
+                ref_type='freight',
+                id_keys=('templateId',),
+                name_keys=('templateName',),
+                shop_id=normalized_shop_id,
+                category_id=None,
+                source_api='/api/smtShopInfoSync/list.json',
+            )
+        )
+        records.extend(
+            self._e2_named_template_records(
+                shop_templates.get('promiseTemplateList'),
+                ref_type='service',
+                id_keys=('templateId',),
+                name_keys=('templateName',),
+                shop_id=normalized_shop_id,
+                category_id=None,
+                source_api='/api/smtShopInfoSync/list.json',
+            )
+        )
+
+        identities: dict[tuple[str, str, str, str | None], dict[str, Any]] = {}
+        category_ids: list[str] = []
+        for record in records:
+            category_id = record.get('category_id')
+            if category_id is not None and category_id not in category_ids:
+                category_ids.append(category_id)
+            identity = (
+                record['ref_type'],
+                record['dxm_template_id'],
+                record['shop_id'],
+                category_id,
+            )
+            previous = identities.get(identity)
+            if previous is not None and previous != record:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_IDENTITY_CONFLICT',
+                    '同一店铺模板身份返回了冲突内容，已停止同步。',
+                )
+            identities[identity] = record
+
+        _ending_user_info, ending_account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        if ending_account_ref != account_ref:
+            raise DxmDraftReaderError(
+                'AUTH_ACCOUNT_MISMATCH',
+                '店铺模板同步期间登录账号已变化，已丢弃全部结果。',
+            )
+        if self.browser_session_id() != browser_session_id:
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_MISMATCH',
+                '店铺模板同步期间真实浏览器会话已变化。',
+            )
+        request_trace = list(self._active_e2_request_trace or [])
+        self._active_e2_request_trace = None
+        return {
+            'browser_session_id': browser_session_id,
+            'account_ref': account_ref,
+            'payload': {
+                'template_records': list(identities.values()),
+                'category_ids': category_ids,
+                'category_schemas': {},
+                'request_trace': request_trace,
             },
         }
 
@@ -1870,10 +2501,10 @@ class DxmLoginFlow:
         """Read current edit.json values for the confirmed E2 draft scope."""
 
         normalized_shop_id = self._positive_reader_id(shop_id, label='店铺')
-        if not isinstance(product_ids, list) or not 3 <= len(product_ids) <= 100:
+        if not isinstance(product_ids, list) or not 1 <= len(product_ids) <= 100:
             raise DxmDraftReaderError(
                 'PLAN_ITEM_COUNT_INVALID',
-                'E2 编辑页当前值读取必须绑定 3–100 件当次草稿。',
+                'E2 编辑页当前值读取必须绑定 1–100 件当次草稿。',
             )
         normalized_product_ids = [
             self._positive_reader_id(value, label='商品')
@@ -1992,7 +2623,7 @@ class DxmLoginFlow:
         *,
         browser_session_id: str,
         shop_id: str,
-        category_ids: set[str],
+        category_ids: set[str] | None,
     ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         page_no = 1
@@ -2003,7 +2634,10 @@ class DxmLoginFlow:
                 url='https://www.dianxiaomi.com/api/userTemplate/pageList.json',
                 form={
                     'platform': 'smt',
-                    'shopId': shop_id,
+                    # The management-center request uses an empty shop filter
+                    # and returns the account-wide index. Scope is enforced by
+                    # validating each returned record below.
+                    'shopId': '',
                     'pageNo': str(page_no),
                     'pageSize': '50',
                     'total': '0',
@@ -2055,10 +2689,7 @@ class DxmLoginFlow:
                     label='产品模板店铺',
                 )
                 if record_shop_id != shop_id:
-                    raise DxmDraftReaderError(
-                        'DXM_TEMPLATE_SCOPE_CONFLICT',
-                        '产品模板属于另一个店铺。',
-                    )
+                    continue
                 raw_category_id = raw.get('categoryId') or raw.get('nodePathId')
                 category_id = (
                     None
@@ -2068,7 +2699,7 @@ class DxmLoginFlow:
                         label='产品模板类目',
                     )
                 )
-                if category_id is not None and category_id not in category_ids:
+                if category_ids is not None and category_id is not None and category_id not in category_ids:
                     continue
                 records.append(
                     self._e2_template_record(
@@ -2091,7 +2722,7 @@ class DxmLoginFlow:
         *,
         browser_session_id: str,
         shop_id: str,
-        category_ids: set[str],
+        category_ids: set[str] | None,
     ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         page_no = 1
@@ -2161,7 +2792,7 @@ class DxmLoginFlow:
                     raw.get('categoryId'),
                     label='属性模板类目',
                 )
-                if category_id not in category_ids:
+                if category_ids is not None and category_id not in category_ids:
                     continue
                 records.append(
                     self._e2_template_record(
@@ -2178,20 +2809,191 @@ class DxmLoginFlow:
                 return records
             page_no += 1
 
-    def _e2_post_data(
+    def _read_e2_variation_templates(
+        self,
+        context: BrowserContext,
+        *,
+        browser_session_id: str,
+        shop_id: str,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page_no = 1
+        while True:
+            data = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url=(
+                    'https://www.dianxiaomi.com/api/'
+                    'variationTemplate/com/smt/pageList.json'
+                ),
+                form={
+                    'platform': 'smt',
+                    # 0 means all shops for the management-center index.
+                    'shopId': '0',
+                    'pageNo': str(page_no),
+                    'pageSize': '50',
+                    'total': '0',
+                    'searchType': '1',
+                    'searchValue': '',
+                },
+                label='变种模板',
+            )
+            if not isinstance(data, Mapping) or not isinstance(data.get('page'), Mapping):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    '变种模板只读回包缺少分页 data.page。',
+                )
+            page = data['page']
+            observed_page_no = self._strict_reader_nonnegative_int(
+                page.get('pageNo'),
+                label='变种模板 pageNo',
+            )
+            page_size = self._strict_reader_nonnegative_int(
+                page.get('pageSize'),
+                label='变种模板 pageSize',
+            )
+            total_pages = self._strict_reader_nonnegative_int(
+                page.get('totalPage'),
+                label='变种模板 totalPage',
+            )
+            raw_items = page.get('list')
+            if (
+                observed_page_no != page_no
+                or page_size != 50
+                or not isinstance(raw_items, list)
+                or total_pages > 100
+                or (total_pages == 0 and (page_no != 1 or raw_items))
+                or (total_pages > 0 and not 1 <= page_no <= total_pages)
+            ):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_PAGINATION_INVALID',
+                    '变种模板分页回包不闭合。',
+                )
+            for raw in raw_items:
+                if isinstance(raw, Mapping) and raw.get('shopId') not in (None, ''):
+                    if self._positive_reader_id(raw.get('shopId'), label='变种模板店铺') != shop_id:
+                        continue
+                records.append(
+                    self._e2_template_record(
+                        raw,
+                        ref_type='variation',
+                        id_keys=('idStr', 'id'),
+                        name_keys=('templateName', 'name'),
+                        shop_id=shop_id,
+                        category_id=None,
+                        source_api=(
+                            '/api/variationTemplate/com/smt/'
+                            'pageList.json'
+                        ),
+                    )
+                )
+            if total_pages in (0, page_no):
+                return records
+            page_no += 1
+
+    def _e2_get_edit_data(
+        self,
+        context: BrowserContext,
+        *,
+        browser_session_id: str,
+        product_id: str,
+    ) -> Mapping[str, Any]:
+        url = 'https://www.dianxiaomi.com/api/smtProduct/edit.json'
+        self._assert_e2_product_detail_read_allowlisted(
+            'GET',
+            url,
+            params={'id': product_id},
+        )
+        started = time.perf_counter()
+        try:
+            response = context.request.get(
+                url,
+                params={'id': product_id},
+                timeout=15_000,
+            )
+        except Exception as exc:
+            raise DxmDraftReaderError(
+                'DXM_PRODUCT_DETAIL_READ_FAILED',
+                '当前真实店小秘会话的代表商品编辑数据读取失败。',
+            ) from exc
+        payload = self._validated_draft_reader_response(
+            response,
+            label='代表商品编辑数据',
+            expected_browser_session_id=browser_session_id,
+        )
+        code = payload.get('code')
+        if not (
+            (type(code) is int and code == 0)
+            or (type(code) is str and code == '0')
+        ):
+            raise DxmDraftReaderError(
+                'DXM_PRODUCT_DETAIL_READ_REJECTED',
+                '代表商品 edit.json 未返回严格成功状态。',
+            )
+        data = payload.get('data')
+        if not isinstance(data, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_PRODUCT_DETAIL_RESPONSE_INVALID',
+                '代表商品 edit.json 缺少 data。',
+            )
+        entries = self._active_e2_request_trace
+        if entries is not None and len(entries) < 256:
+            entries.append({
+                'label': '代表商品编辑数据',
+                'path': '/api/smtProduct/edit.json',
+                'status': getattr(response, 'status', None),
+                'outcome': 'ok',
+                'elapsed_ms': round((time.perf_counter() - started) * 1000, 1),
+                'data_kind': 'object',
+                'item_count': 1,
+            })
+        return data
+
+    def _e2_get_data(
         self,
         context: BrowserContext,
         *,
         browser_session_id: str,
         url: str,
-        form: dict[str, str],
+        params: dict[str, str],
         label: str,
-        allow_null: bool = False,
     ) -> Any:
-        self._assert_e2_plan_read_allowlisted('POST', url, form=form)
+        path = urlparse(url).path
+        allowed_params = {
+            '/api/smtCommLogisticAttribute/getLogisticAttributeList.json': {
+                'categoryId', 'platform',
+            },
+            '/api/smtCommProduct/supportNewSizeAttribute.json': {
+                'shopId', 'categoryId',
+            },
+        }
+        if (
+            ('GET', url) not in DXM_E2_PLAN_READ_ALLOWLIST
+            or path not in allowed_params
+            or set(params) != allowed_params[path]
+            or any(
+                not str(params.get(key) or '').isdecimal()
+                or int(str(params.get(key))) <= 0
+                for key in ({'categoryId', 'shopId'} & set(params))
+            )
+            or ('platform' in params and params.get('platform') != 'smt')
+        ):
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_ALLOWLIST_VIOLATION',
+                '编辑页能力 GET 请求偏离冻结的只读合同。',
+            )
+        started = time.perf_counter()
         try:
-            response = context.request.post(url, form=form, timeout=15_000)
+            response = context.request.get(url, params=params, timeout=15_000)
         except Exception as exc:
+            self._e2_trace_read(
+                label=label,
+                path=path,
+                status=None,
+                outcome='failed',
+                started=started,
+                reason='request_exception',
+            )
             raise DxmDraftReaderError(
                 'DXM_PLAN_READ_FAILED',
                 f'当前真实店小秘会话的{label}读取失败。',
@@ -2206,19 +3008,169 @@ class DxmLoginFlow:
             (type(code) is int and code == 0)
             or (type(code) is str and code == '0')
         ):
+            self._e2_trace_read(
+                label=label,
+                path=path,
+                status=getattr(response, 'status', None),
+                outcome='failed',
+                started=started,
+                reason='non_success_code',
+            )
             raise DxmDraftReaderError(
                 'DXM_PLAN_READ_REJECTED',
                 f'店小秘{label}只读接口未返回严格成功状态。',
             )
         data = payload.get('data')
-        if data is None and allow_null:
-            return None
-        if data is None:
-            raise DxmDraftReaderError(
-                'DXM_TEMPLATE_RESPONSE_INVALID',
-                f'店小秘{label}只读回包缺少 data。',
-            )
+        self._e2_trace_read(
+            label=label,
+            path=path,
+            status=getattr(response, 'status', None),
+            outcome='ok',
+            started=started,
+            data=data,
+        )
         return data
+
+    def _e2_trace_read(
+        self,
+        *,
+        label: str,
+        path: str,
+        status: int | None,
+        outcome: str,
+        started: float,
+        reason: str | None = None,
+        data: Any = None,
+    ) -> None:
+        entries = self._active_e2_request_trace
+        if entries is None or len(entries) >= 256:
+            return
+        entry: dict[str, Any] = {
+            'label': label,
+            'path': path,
+            'status': status,
+            'outcome': outcome,
+            'elapsed_ms': round((time.perf_counter() - started) * 1000, 1),
+        }
+        if reason:
+            entry['reason'] = reason[:120]
+        if isinstance(data, Mapping):
+            entry['data_kind'] = 'object'
+        elif isinstance(data, list):
+            entry['data_kind'] = 'array'
+            entry['item_count'] = len(data)
+        elif data is None:
+            entry['data_kind'] = 'null'
+        else:
+            entry['data_kind'] = type(data).__name__
+        entries.append(entry)
+
+    @staticmethod
+    def _e2_json_array(value: Any, *, label: str) -> list[Any]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'{label}不是合法 JSON。',
+                ) from exc
+        if not isinstance(value, list):
+            raise DxmDraftReaderError(
+                'CATEGORY_SCHEMA_INVALID',
+                f'{label}不是数组。',
+            )
+        return value
+
+    def _e2_post_data(
+        self,
+        context: BrowserContext,
+        *,
+        browser_session_id: str,
+        url: str,
+        form: dict[str, str],
+        label: str,
+        allow_null: bool = False,
+    ) -> Any:
+        self._assert_e2_plan_read_allowlisted('POST', url, form=form)
+        started = time.perf_counter()
+        path = urlparse(url).path
+
+        def trace(status: int | None, outcome: str, *, reason: str | None = None, data: Any = None) -> None:
+            entries = self._active_e2_request_trace
+            if entries is None or len(entries) >= 256:
+                return
+            summary: dict[str, Any] = {
+                'label': label,
+                'path': path,
+                'status': status,
+                'outcome': outcome,
+                'elapsed_ms': round((time.perf_counter() - started) * 1000, 1),
+            }
+            if reason:
+                summary['reason'] = reason[:120]
+            if isinstance(data, Mapping):
+                summary['data_kind'] = 'object'
+                for key in ('list', 'sizeList', 'freightTemplateList', 'promiseTemplateList', 'variationTemplateList', 'nameList', 'attributeList', 'childAttributeList'):
+                    value = data.get(key)
+                    if isinstance(value, list):
+                        summary['item_count'] = len(value)
+                        break
+                page = data.get('page')
+                if isinstance(page, Mapping) and isinstance(page.get('list'), list):
+                    summary['item_count'] = len(page['list'])
+                    summary['total_pages'] = page.get('totalPage')
+            elif isinstance(data, list):
+                summary['data_kind'] = 'array'
+                summary['item_count'] = len(data)
+            elif data is None:
+                summary['data_kind'] = 'null'
+            else:
+                summary['data_kind'] = type(data).__name__
+            entries.append(summary)
+
+        trace_written = False
+        try:
+            response = context.request.post(url, form=form, timeout=15_000)
+        except Exception as exc:
+            trace(None, 'failed', reason='request_exception')
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_FAILED',
+                f'当前真实店小秘会话的{label}读取失败。',
+            ) from exc
+        try:
+            payload = self._validated_draft_reader_response(
+                response,
+                label=label,
+                expected_browser_session_id=browser_session_id,
+            )
+            code = payload.get('code')
+            if not (
+                (type(code) is int and code == 0)
+                or (type(code) is str and code == '0')
+            ):
+                raise DxmDraftReaderError(
+                    'DXM_PLAN_READ_REJECTED',
+                    f'店小秘{label}只读接口未返回严格成功状态。',
+                )
+            data = payload.get('data')
+            if data is None and allow_null:
+                trace(getattr(response, 'status', None), 'ok', data=None)
+                trace_written = True
+                return None
+            if data is None:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    f'店小秘{label}只读回包缺少 data。',
+                )
+            trace(getattr(response, 'status', None), 'ok', data=data)
+            trace_written = True
+            return data
+        except Exception as exc:
+            # Every failed request gets one bounded diagnostic record.
+            if not trace_written:
+                trace(getattr(response, 'status', None), 'failed', reason=getattr(exc, 'reason_code', None) or type(exc).__name__)
+            raise
 
     def _read_e2_child_attribute_cases(
         self,
@@ -2327,6 +3279,7 @@ class DxmLoginFlow:
         if path in {
             '/api/userTemplate/pageList.json',
             '/api/smtAttributeTemplate/pageList.json',
+            '/api/variationTemplate/com/smt/pageList.json',
         }:
             valid = (
                 keys
@@ -2345,9 +3298,79 @@ class DxmLoginFlow:
                 and form.get('searchType') == '1'
                 and form.get('searchValue') == ''
                 and (
-                    path != '/api/smtAttributeTemplate/pageList.json'
-                    or form.get('shopId') == '-1'
+                    (
+                        path != '/api/userTemplate/pageList.json'
+                        or form.get('shopId') == ''
+                    )
+                    and (
+                        path != '/api/smtAttributeTemplate/pageList.json'
+                        or form.get('shopId') == '-1'
+                    )
+                    and (
+                        path != '/api/variationTemplate/com/smt/pageList.json'
+                        or form.get('shopId', '').isdecimal()
+                        and int(form.get('shopId', '0')) >= 0
+                    )
                 )
+            )
+        elif path == '/api/smtAdjustPrice/pageList.json':
+            valid = (
+                keys == {
+                    'platform', 'pageNo', 'pageSize', 'total',
+                    'searchType', 'searchValue',
+                }
+                and form.get('platform') == 'smt'
+                and form.get('pageNo') == '1'
+                and form.get('pageSize') == '50'
+                and form.get('total') == '0'
+                and form.get('searchType') == '1'
+                and form.get('searchValue') == ''
+            )
+        elif path == '/api/userTemplate/templateListForModule.json':
+            valid = (
+                keys == {'shopId', 'platform', 'site'}
+                and form.get('platform') == 'smt'
+                and form.get('site') == ''
+            )
+        elif path == '/api/smtAttributeTemplate/getTemplateListByCategory.json':
+            valid = (
+                keys == {'shopId', 'categoryId'}
+                and form.get('shopId', '').isdecimal()
+                and int(form.get('shopId', '0')) > 0
+                and form.get('categoryId', '').isdecimal()
+                and int(form.get('categoryId', '0')) > 0
+            )
+        elif path in {
+            '/api/smtCommMsr/list.json',
+            '/api/smtCommManufacture/list.json',
+        }:
+            valid = (
+                keys == {'shopIds', 'platform'}
+                and form.get('platform') == 'smt'
+                and str(form.get('shopIds') or '').isdecimal()
+                and int(str(form.get('shopIds'))) > 0
+            )
+        elif path == '/api/smtCategory/syncQualification.json':
+            valid = (
+                keys == {'categoryId', 'shopId', 'customProperty'}
+                and form.get('customProperty') == '{}'
+                and all(
+                    str(form.get(key) or '').isdecimal()
+                    and int(str(form.get(key))) > 0
+                    for key in ('categoryId', 'shopId')
+                )
+            )
+        elif path == '/api/smtProduct/getSmtCommission.json':
+            valid = (
+                keys == {'shopId'}
+                and str(form.get('shopId') or '').isdecimal()
+                and int(str(form.get('shopId'))) > 0
+            )
+        elif path == '/api/smtProduct/verifyPopChoiceShop.json':
+            valid = (
+                keys == {'shopIds'}
+                and str(form.get('shopIds') or '').isdecimal()
+                and int(str(form.get('shopIds'))) > 0
             )
         elif path == '/api/smtShopInfoSync/list.json':
             valid = keys == {'shopId'}
@@ -2805,6 +3828,44 @@ class DxmLoginFlow:
                     value,
                     allow_multiple=True,
                 )
+        elif ref_type == 'regional':
+            encoded = raw.get('data')
+            if not isinstance(encoded, str) or not encoded.startswith('gzip!'):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    '区域调价模板缺少 gzip! 编码数据。',
+                )
+            decoded = cls._e2_decode_gzip_json(
+                encoded,
+                label='区域调价模板数据',
+            )
+            if not isinstance(decoded, Mapping):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    '区域调价模板解码后不是对象。',
+                )
+            add(
+                'aeopNationalQuoteConfiguration',
+                json.dumps(decoded, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
+            )
+        elif ref_type in {'module_property', 'module_template', 'module_package'}:
+            module_data = raw.get('data')
+            if isinstance(module_data, str) and module_data.strip():
+                try:
+                    module_data = json.loads(module_data)
+                except ValueError as exc:
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        f'{ref_type} 模板 data 不是有效 JSON。',
+                    ) from exc
+            if module_data not in (None, ''):
+                if not isinstance(module_data, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        f'{ref_type} 模板 data 不是对象。',
+                    )
+                for field_key, value in module_data.items():
+                    add(str(field_key), value)
         elif ref_type == 'freight':
             add('freightTemplateId', template_id)
         elif ref_type == 'service':
@@ -2812,6 +3873,19 @@ class DxmLoginFlow:
         elif ref_type == 'size':
             add('sizechartId', template_id)
         return resolved
+
+    @staticmethod
+    def _e2_decode_gzip_json(encoded: str, *, label: str) -> Any:
+        try:
+            return json.loads(
+                gzip.decompress(base64.b64decode(encoded.removeprefix('gzip!')))
+                .decode('utf-8')
+            )
+        except (ValueError, OSError, UnicodeDecodeError) as exc:
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                f'{label}无法解码。',
+            ) from exc
 
     @classmethod
     def _e2_schema_normalized_template_record(
@@ -2996,14 +4070,17 @@ class DxmLoginFlow:
                 'type': 'string',
                 'minLength': 1,
                 'natural_language': True,
-                'ui_label_zh': '英文标题',
-                'source_api': '/api/smtProduct/pageList.json',
+                'ui_label_zh': '产品标题',
+                'source_api': '/api/smtProduct/edit.json',
+                'ui_visible': True,
             },
             'aeopAeProductSKUs': {
                 'type': 'array',
                 'natural_language': False,
                 'ui_label_zh': 'SKU 行',
                 'schema_origin': 'dxm_product_editor',
+                'ui_control': 'sku_matrix',
+                'ui_visible': True,
                 'items': {
                     'type': 'object',
                     'properties': {
@@ -3074,6 +4151,7 @@ class DxmLoginFlow:
                 'natural_language': False,
                 'ui_label_zh': '主图与附图',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': True,
             },
             'detail': {
                 'type': 'string',
@@ -3097,6 +4175,7 @@ class DxmLoginFlow:
                 'natural_language': False,
                 'ui_label_zh': '包装后重量',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': True,
             },
             'packageLength': {
                 'type': 'number',
@@ -3104,6 +4183,7 @@ class DxmLoginFlow:
                 'natural_language': False,
                 'ui_label_zh': '包装长度',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': True,
             },
             'packageWidth': {
                 'type': 'number',
@@ -3111,6 +4191,7 @@ class DxmLoginFlow:
                 'natural_language': False,
                 'ui_label_zh': '包装宽度',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': True,
             },
             'packageHeight': {
                 'type': 'number',
@@ -3118,12 +4199,14 @@ class DxmLoginFlow:
                 'natural_language': False,
                 'ui_label_zh': '包装高度',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': True,
             },
             'originalBox': {
                 'type': 'boolean',
                 'natural_language': False,
                 'ui_label_zh': '原包装',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': True,
             },
             'productPrice': {
                 'type': 'number',
@@ -3157,25 +4240,55 @@ class DxmLoginFlow:
                 'natural_language': False,
                 'ui_label_zh': '运费模板',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': False,
             },
             'promiseTemplateId': {
                 'type': 'string',
                 'natural_language': False,
                 'ui_label_zh': '服务模板',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': False,
             },
             'sizechartId': {
                 'type': 'string',
                 'natural_language': False,
                 'ui_label_zh': '尺码模板',
                 'schema_origin': 'dxm_product_editor',
+                'ui_visible': False,
             },
+        }
+        editor_sections = {
+            'title': 'basic_info',
+            'aeopAeProductSKUs': 'product_info',
+            'imageURLs': 'product_info',
+            'detail': 'description_info',
+            'mobileDetail': 'description_info',
+            'grossWeight': 'packaging_info',
+            'packageLength': 'packaging_info',
+            'packageWidth': 'packaging_info',
+            'packageHeight': 'packaging_info',
+            'originalBox': 'packaging_info',
+            'productPrice': 'product_info',
+            'productMinPrice': 'product_info',
+            'productMaxPrice': 'product_info',
+            'currencyCode': 'product_info',
+            'freightTemplateId': 'template_main',
+            'promiseTemplateId': 'template_main',
+            'sizechartId': 'description_info',
         }
         for editor_field_key, editor_definition in properties.items():
             editor_definition['ui_binding'] = (
                 f'dxm_editor:{editor_field_key}'
             )
-        required = ['title']
+            editor_definition['ui_section'] = editor_sections[editor_field_key]
+            editor_definition.setdefault(
+                'source_api',
+                '/api/smtProduct/edit.json',
+            )
+        # Titles are optional in a shared plan: leaving the field empty means
+        # every product keeps its own existing title.  The target category is
+        # the shared required value and is added by schema enrichment.
+        required: list[str] = []
         conditional_requirements: list[dict[str, Any]] = []
         for raw in value:
             if not isinstance(raw, Mapping):
@@ -3183,6 +4296,10 @@ class DxmLoginFlow:
                     'CATEGORY_SCHEMA_INVALID',
                     f'类目 {category_id} 包含无效属性定义。',
                 )
+            visible = cls._strict_reader_bool(
+                raw.get('visible', 1),
+                label='visible',
+            )
             attribute_id = cls._positive_reader_id(
                 raw.get('arrtNameId'),
                 label='属性名',
@@ -3242,6 +4359,10 @@ class DxmLoginFlow:
                 'natural_language': False,
                 'ui_label_zh': name_zh,
                 'ui_binding': f'dxm_attribute:{attribute_id}',
+                'ui_section': 'attribute_info',
+                'source_api': '/api/smtCategory/attributeList.json',
+                'option_source': '/api/smtCategory/attributeList.json',
+                'ui_visible': visible,
                 'name_en': str(raw.get('nameEn') or '').strip() or None,
                 'input_type': input_type,
                 'sku': cls._strict_reader_bool(raw.get('sku'), label='sku'),
@@ -3352,6 +4473,13 @@ class DxmLoginFlow:
                         'natural_language': False,
                         'ui_label_zh': child_name_zh,
                         'ui_binding': f'dxm_attribute:{child_id}',
+                        'ui_section': 'attribute_info',
+                        'source_api': '/api/smtCategory/childAttributeList.json',
+                        'option_source': '/api/smtCategory/childAttributeList.json',
+                        'ui_visible': cls._strict_reader_bool(
+                            child.get('visible', 1),
+                            label='子属性 visible',
+                        ),
                         'name_en': (
                             str(child.get('nameEn') or '').strip() or None
                         ),
@@ -3509,7 +4637,7 @@ class DxmLoginFlow:
         return payload, self._authenticated_account_ref(payload)
 
     @staticmethod
-    def _authenticated_account_ref(payload: Mapping[str, Any]) -> str:
+    def _authenticated_account_identity(payload: Mapping[str, Any]) -> dict[str, str]:
         code = payload.get('code')
         if not (
             (type(code) is int and code == 0)
@@ -3551,6 +4679,24 @@ class DxmLoginFlow:
                 'AUTH_ACCOUNT_UNPROVEN',
                 '当前 userInfo 回包缺少稳定账号身份，已按失败关闭。',
             )
+        return identity
+
+    @staticmethod
+    def _authenticated_account_values(payload: Mapping[str, Any]) -> set[str]:
+        return set(DxmLoginFlow._authenticated_account_identity(payload).values())
+
+    @staticmethod
+    def _authenticated_account_login_values(payload: Mapping[str, Any]) -> set[str]:
+        identity = DxmLoginFlow._authenticated_account_identity(payload)
+        return {
+            value
+            for key, value in identity.items()
+            if key.rsplit('.', 1)[-1] in DXM_ACCOUNT_LOGIN_FIELDS
+        }
+
+    @staticmethod
+    def _authenticated_account_ref(payload: Mapping[str, Any]) -> str:
+        identity = DxmLoginFlow._authenticated_account_identity(payload)
         canonical = json.dumps(
             identity,
             ensure_ascii=False,
@@ -3560,6 +4706,32 @@ class DxmLoginFlow:
         return hashlib.sha256(
             f'dxm-auth-account:{canonical}'.encode('utf-8')
         ).hexdigest()[:32]
+
+    @staticmethod
+    def _normalize_login_identifier(value: Any) -> str:
+        return str(value or '').strip().casefold()
+
+    def _visible_account_matches_requested(self, username: str) -> bool:
+        """Prove that the visible browser belongs to the account being entered."""
+
+        requested = self._normalize_login_identifier(username)
+        if not requested:
+            return False
+        try:
+            _page, context, browser_session_id = self._draft_reader_session()
+            payload, _account_ref = self._read_authenticated_user_info(
+                context,
+                browser_session_id,
+            )
+            values = self._authenticated_account_login_values(payload)
+        except Exception:
+            # An unproven identity must never be treated as a match.  The
+            # caller will close the old session and start a clean login.
+            return False
+        return requested in {
+            self._normalize_login_identifier(value)
+            for value in values
+        }
 
     def _draft_reader_session(self) -> tuple[Page, BrowserContext, str]:
         self._promote_dxm_page_from_connected_browser()
@@ -3670,7 +4842,7 @@ class DxmLoginFlow:
                 f'店小秘{label}只读接口未成功返回，已停止读取。',
             )
         try:
-            payload = response.json()
+            payload = self._response_json_payload(response)
         except Exception as exc:
             raise DxmDraftReaderError(
                 'DXM_RESPONSE_SCHEMA_INVALID',
@@ -3687,6 +4859,41 @@ class DxmLoginFlow:
                 '解析只读回包时真实浏览器会话已变化，已丢弃结果。',
             )
         return dict(payload)
+
+    @staticmethod
+    def _response_json_payload(response: Any) -> Any:
+        """Decode API JSON using the response bytes before Playwright's json().
+
+        The DXM template endpoints have historically returned Chinese text
+        with inconsistent charset headers.  ``APIResponse.json()`` can decode
+        those bytes with replacement characters, permanently turning names
+        such as 撕膜 into ``����``.  Prefer a strict charset-aware byte decode;
+        retain the small fake-response ``json()`` fallback used by tests.
+        """
+        body_reader = getattr(response, 'body', None)
+        if callable(body_reader):
+            raw = body_reader()
+            if isinstance(raw, bytes):
+                headers = getattr(response, 'headers', {}) or {}
+                content_type = str(headers.get('content-type', '') or '')
+                match = re.search(r'charset\s*=\s*["\']?([A-Za-z0-9._-]+)', content_type, re.IGNORECASE)
+                declared = (match.group(1).lower() if match else '')
+                candidates: list[str] = []
+                if declared in {'utf-8', 'utf8', 'utf-8-sig'}:
+                    candidates.append('utf-8-sig' if declared == 'utf-8-sig' else 'utf-8')
+                elif declared in {'gbk', 'gb2312', 'gb18030'}:
+                    candidates.append('gb18030')
+                candidates.extend(codec for codec in ('utf-8-sig', 'utf-8', 'gb18030') if codec not in candidates)
+                for codec in candidates:
+                    try:
+                        return json.loads(raw.decode(codec, errors='strict'))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                raise ValueError('response bytes are not valid JSON in supported encodings')
+        json_reader = getattr(response, 'json', None)
+        if not callable(json_reader):
+            raise ValueError('response has no JSON reader')
+        return json_reader()
 
     def capture_draft_box_scope(self, max_items: int) -> dict[str, Any]:
         """Read the ordered scope from the already-visible draft-box page.
@@ -4649,9 +5856,15 @@ class DxmLoginFlow:
             and (context is None or not self._is_playwright_object_closed(context))
             and (browser is None or self._is_browser_connected(browser))
         )
-        state['browser_visible'] = browser_alive and not self._is_headless()
+        headless = self._is_headless()
+        # The recovery contract is about the user-visible browser window: when
+        # running in non-headless mode the externally-visible window stays open
+        # across recovery even if the in-process Playwright handles were
+        # discarded after a failed launch.
+        browser_visible = (browser_alive or not headless) and not headless
+        state['browser_visible'] = browser_visible
         next_action = str(state.get('next_action') or '').strip()
-        if browser_alive and '真实浏览器窗口会保留' not in next_action:
+        if browser_visible and '真实浏览器窗口会保留' not in next_action:
             state['next_action'] = f'真实浏览器窗口会保留；{next_action}'
         if browser_alive:
             try:
@@ -4706,17 +5919,46 @@ class DxmLoginFlow:
                 'reader_reason_code': reader_status['reason_code'],
             }
 
-        # A current authenticated home is already the strongest login proof.
-        # Navigating it back to the public root can replace the Reader-usable
-        # page with a login/about:blank tab and split the two status sources.
+        def close_unmatched_session() -> Page:
+            switched = self.logout()
+            if switched.get('reason_code') != 'DXM_LOGGED_OUT':
+                raise RuntimeError(
+                    'DXM_ACCOUNT_SWITCH_FAILED: 当前旧账号会话未能安全清理。'
+                )
+            return self._ensure_page()
+
+        # A current authenticated home is reusable only when the visible
+        # account is proven to match the account the operator just entered.
+        # Previously this branch returned success for any logged-in page,
+        # which made a new username appear to log in as the old account.
         if self._page_looks_logged_in(page):
-            return authenticated_home_state()
+            if self._visible_account_matches_requested(username):
+                return authenticated_home_state()
+            self._trace_workflow_event(
+                'login:account_mismatch_reset',
+                requested_username_length=len(str(username or '').strip()),
+                human_step='发现旧账号会话，准备切换账号',
+            )
+            page = close_unmatched_session()
         # Login is deliberately sterile: old task HUD hooks must not interfere
         # with the credential/captcha page or keep the login API pending.
         self._goto_sterile(page, 'https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
         page.wait_for_timeout(1500)
         if self._page_looks_logged_in(page):
-            return authenticated_home_state()
+            if self._visible_account_matches_requested(username):
+                return authenticated_home_state()
+            self._trace_workflow_event(
+                'login:account_mismatch_after_reset',
+                requested_username_length=len(str(username or '').strip()),
+                human_step='旧账号仍被复用，重新建立干净登录会话',
+            )
+            page = close_unmatched_session()
+            self._goto_sterile(page, 'https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
+            page.wait_for_timeout(1500)
+            if self._page_looks_logged_in(page):
+                raise RuntimeError(
+                    'DXM_ACCOUNT_SWITCH_FAILED: 清理旧账号后仍检测到已登录会话。'
+                )
         self._fill_first_available(page, [
             'input[placeholder="请输入用户名"]',
             'input[name="account"]',
@@ -4740,6 +5982,7 @@ class DxmLoginFlow:
             'page_url': page.url,
             'screenshot_url': screenshot_url,
             'browser_visible': not self._is_headless(),
+            'visible_logged_in': False,
         }
 
     def _submit_login_after_captcha(self) -> dict[str, Any]:
@@ -5078,9 +6321,7 @@ class DxmLoginFlow:
             row_info = None
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
         visible_draft_box = os.name == 'nt' and not self._is_headless()
-        if skip_draft_list:
-            pass
-        elif visible_draft_box:
+        if visible_draft_box:
             self._trace_workflow_event(
                 'draft_box_action:sterile_goto_start',
                 url=draft_url,
@@ -5105,7 +6346,7 @@ class DxmLoginFlow:
                 reason='visible_draft_box_uses_non_blocking_ready_wait',
                 human_step='可见商品箱跳过弹窗脚本处理',
             )
-        else:
+        elif not skip_draft_list:
             self._goto_with_live_hud(page, draft_url, wait_until='domcontentloaded', timeout=45000)
             self._wait_for_page_ready(
                 page,
@@ -9470,12 +10711,13 @@ class DxmLoginFlow:
             if isinstance(result, dict):
                 return result
         except Exception as exc:  # noqa: BLE001 - retry later; do not treat HUD blue as a spinner.
+            native_state = self._visible_editor_native_loading_state(page)
             return {
                 'ready': False,
-                'loading': False,
-                'reason': f'编辑页状态读取失败：{str(exc)[:160]}',
+                'loading': native_state.get('loading'),
+                'reason': native_state.get('reason') or f'编辑页状态读取失败：{str(exc)[:160]}',
                 'dom_error': str(exc)[:240],
-                'source': 'dom_error',
+                'source': native_state.get('source') or 'native_snapshot',
                 'verified_by': None,
             }
         return {'ready': False, 'reason': '编辑页状态结果不可读', 'source': 'dom'}
@@ -11974,13 +13216,23 @@ class DxmLoginFlow:
         key = str(field.get('field_key') or '')
         label = str(field.get('ui_label_zh') or '')
         binding = str(field.get('ui_binding') or '')
+        ui_control = str(field.get('ui_control') or '').strip()
         expected = field.get('resolved_value')
+        if ui_control in {'regional_pricing', 'json'}:
+            return {
+                'ok': False,
+                'observed': None,
+                'strategy': 'complex_control_route_required',
+                'match_count': 0,
+                'reason': f'复杂控件 {ui_control} 尚未绑定经过验证的真实编辑页执行器',
+            }
         probe = self._probe_visible_frozen_field(page, key, label, binding, expected)
         plan = {
             'ok': False,
             'field_key': key,
             'ui_label_zh': label,
             'ui_binding': binding,
+            'ui_control': ui_control or None,
             'expected': expected,
             'observed': probe.get('observed'),
             'strategy': probe.get('strategy'),
@@ -12084,6 +13336,13 @@ class DxmLoginFlow:
         label = str(plan.get('ui_label_zh') or '')
         expected = plan.get('expected')
         strategy = str(plan.get('strategy') or '')
+        if str(plan.get('ui_control') or '').strip() in {'regional_pricing', 'json'}:
+            return {
+                'ok': False,
+                'write_attempted': False,
+                'strategy': 'complex_control_route_required',
+                'reason': '复杂控件没有经过验证的真实页面执行器，已拒绝通用文本填充。',
+            }
         if key == 'title':
             filled = self._fill_visible_editor_title_with_native_input(
                 page,
@@ -13836,6 +15095,44 @@ class DxmLoginFlow:
         }
 
     def _fill_media_assets_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+        description_result = self._apply_configured_description_workflow(
+            page,
+            defaults or {},
+        )
+        if description_result.get('ok') is not True:
+            return {
+                'ok': False,
+                'stage': 'fill_description_failed',
+                'label': '新版描述流程失败',
+                'message': description_result.get('reason') or '新版描述流程未完成。',
+                'page_title': page.title(),
+                'page_url': page.url,
+                'fill_result': {'description': description_result},
+                'published': None,
+            }
+        editor_actions = (defaults or {}).get('_editor_actions')
+        marketing_action = editor_actions.get('marketing_images') if isinstance(editor_actions, Mapping) else None
+        marketing_requested = marketing_action == {
+            'generate_from_product_images': True,
+            'required_slots': ['1:1_white_background', '3:4_scene'],
+        }
+        configured_marketing_result = {'ok': True, 'skipped': True, 'reason': 'not_configured'}
+        if marketing_requested:
+            configured_marketing_result = self._generate_marketing_images_on_page(page)
+            if configured_marketing_result.get('ok') is not True:
+                return {
+                    'ok': False,
+                    'stage': 'fill_marketing_images_failed',
+                    'label': '营销图片一键生成失败',
+                    'message': configured_marketing_result.get('reason') or '营销图片未完整生成。',
+                    'page_title': page.title(),
+                    'page_url': page.url,
+                    'fill_result': {
+                        'description': description_result,
+                        'marketing_images': configured_marketing_result,
+                    },
+                    'published': None,
+                }
         if isinstance(defaults, Mapping) and isinstance(defaults.get('_frozen_execution_payload'), Mapping):
             slots = self._extract_image_slots(self._flatten_editor_defaults(defaults))
             if not slots:
@@ -13847,6 +15144,8 @@ class DxmLoginFlow:
                     'page_title': page.title() if hasattr(page, 'title') else '店小秘编辑页',
                     'page_url': getattr(page, 'url', ''),
                     'fill_result': {
+                        'description': description_result,
+                        'marketing_images': configured_marketing_result,
                         'image_slots': [],
                         'configured_slot_count': 0,
                         'skipped': True,
@@ -13929,12 +15228,103 @@ class DxmLoginFlow:
             'page_url': page.url,
             'screenshot_url': self._artifact_url(screenshot_path),
             'fill_result': {
+                'description': description_result,
                 'image_slots': slot_results,
                 'eu_outer_package_image': eu_result,
                 'marketing_images': marketing_result,
             },
             'published': None,
         }
+
+    def _apply_configured_description_workflow(
+        self,
+        page: Page,
+        defaults: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        actions = defaults.get('_editor_actions')
+        description = actions.get('description') if isinstance(actions, Mapping) else None
+        if description in (None, {}):
+            return {'ok': True, 'configured': False, 'skipped': True}
+        if description != {
+            'editor': 'new',
+            'generate_mobile_from_pc': True,
+            'confirm_before_save': True,
+        }:
+            return {
+                'ok': False,
+                'configured': True,
+                'reason': 'DESCRIPTION_WORKFLOW_CONTRACT_INVALID',
+            }
+
+        def click_exact(text: str, *, scopes: list[Any] | None = None) -> bool:
+            for scope in scopes or [page, *page.frames]:
+                try:
+                    locator = scope.get_by_text(text, exact=True)
+                    for index in range(min(locator.count(), 8)):
+                        candidate = locator.nth(index)
+                        if candidate.is_visible():
+                            candidate.click(timeout=3000)
+                            return True
+                except Exception:
+                    continue
+            return False
+
+        try:
+            section = page.locator('#describeInfo')
+            if section.count() and section.first.is_visible():
+                section.first.scroll_into_view_if_needed()
+            if not click_exact('使用新版编辑器'):
+                return {'ok': False, 'configured': True, 'reason': '未找到“使用新版编辑器”入口'}
+            page.wait_for_timeout(700)
+            editor_scopes: list[Any] = []
+            for frame in page.frames:
+                if frame == page.main_frame:
+                    continue
+                try:
+                    if frame.get_by_text('根据PC端描述一键生成', exact=True).count() or frame.get_by_text('根据 PC 端描述一键生成', exact=True).count():
+                        editor_scopes.append(frame)
+                except Exception:
+                    continue
+            dialogs = page.locator(
+                '.ant-modal:has-text("新版编辑器"), '
+                '[role="dialog"]:has-text("新版编辑器")'
+            )
+            for index in range(min(dialogs.count(), 5)):
+                dialog = dialogs.nth(index)
+                if dialog.is_visible():
+                    editor_scopes.append(dialog)
+            if not editor_scopes:
+                return {
+                    'ok': False,
+                    'configured': True,
+                    'reason': '未找到可边界化的新版本描述编辑器窗口，已停止以避免误点主页面保存',
+                }
+            if not click_exact('根据PC端描述一键生成', scopes=editor_scopes):
+                if not click_exact('根据 PC 端描述一键生成', scopes=editor_scopes):
+                    return {'ok': False, 'configured': True, 'reason': '新版编辑器未出现“根据 PC 端描述一键生成”'}
+            page.wait_for_timeout(500)
+            if not click_exact('确认', scopes=editor_scopes) and not click_exact('确定', scopes=editor_scopes):
+                return {'ok': False, 'configured': True, 'reason': '生成后未出现确认按钮'}
+            page.wait_for_timeout(500)
+            if not click_exact('保存', scopes=editor_scopes):
+                return {'ok': False, 'configured': True, 'reason': '新版编辑器未出现保存按钮'}
+            page.wait_for_timeout(700)
+            return {
+                'ok': True,
+                'configured': True,
+                'workflow': [
+                    '使用新版编辑器',
+                    '根据 PC 端描述一键生成',
+                    '确认',
+                    '保存',
+                ],
+            }
+        except Exception as exc:
+            return {
+                'ok': False,
+                'configured': True,
+                'reason': f'DESCRIPTION_WORKFLOW_FAILED: {exc}',
+            }
 
     def _fill_compliance_defaults_on_page(
         self,
@@ -16217,6 +17607,9 @@ class DxmLoginFlow:
         label_sections = {
             'freight': '运费模板',
             'service': '服务模板',
+            'regional_pricing': '区域调价信息',
+            'variation': '变种模板',
+            'size': '尺码表',
             'eu_responsible': '欧盟责任人',
             'manufacturer': '品牌制造商',
         }
@@ -20567,6 +21960,7 @@ class DxmLoginFlow:
         args = list(options.pop('args', []))
         if not headless:
             remote_debugging_port = self._ensure_visible_remote_debugging_port()
+            window_position, window_size, layout_mode = self._visible_browser_window_arguments()
             args.extend([
                 '--disable-notifications',
                 '--disable-session-crashed-bubble',
@@ -20574,8 +21968,8 @@ class DxmLoginFlow:
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--new-window',
-                '--window-position=80,80',
-                '--window-size=1600,950',
+                window_position,
+                window_size,
                 f'--remote-debugging-port={remote_debugging_port}',
                 '--remote-debugging-address=127.0.0.1',
                 '--remote-allow-origins=*',
@@ -20583,6 +21977,7 @@ class DxmLoginFlow:
             self._trace_workflow_event(
                 'ensure_page:visible_devtools_port_configured',
                 port=remote_debugging_port,
+                window_layout=layout_mode,
                 human_step='准备独立浏览器控制通道',
             )
         launch_kwargs = {**options}
@@ -20610,6 +22005,29 @@ class DxmLoginFlow:
         self._reapply_live_hud_if_available(self._page)
         self._trace_workflow_event('ensure_page:new_page_created', current_url=getattr(self._page, 'url', None))
         return self._page
+
+    @staticmethod
+    def _visible_browser_window_arguments() -> tuple[str, str, str]:
+        """Read only the launcher-provided visible-browser geometry.
+
+        The Electron launcher calculates it from the actual display work area.
+        Invalid or absent values intentionally fall back to the documented
+        standalone browser size, so a malformed environment can never stop an
+        operator from seeing the real DXM login window.
+        """
+        raw = str(os.environ.get('DXM_VISIBLE_BROWSER_BOUNDS') or '').strip()
+        if raw:
+            try:
+                value = json.loads(raw)
+                x = int(value['x'])
+                y = int(value['y'])
+                width = int(value['width'])
+                height = int(value['height'])
+                if -20_000 <= x <= 20_000 and -20_000 <= y <= 20_000 and 800 <= width <= 4_000 and 600 <= height <= 3_000:
+                    return f'--window-position={x},{y}', f'--window-size={width},{height}', 'launcher_side_by_side'
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                pass
+        return '--window-position=80,80', '--window-size=1280,850', 'standalone_fallback'
 
     def _promote_dxm_page_from_connected_browser(self) -> Page | None:
         """Promote an async-opened DXM home tab into the single session facade.

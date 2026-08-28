@@ -132,6 +132,15 @@ class DxmTemplateRefSyncRequest(BaseModel):
 
     shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
     category_ids: list[str] = Field(min_length=1, max_length=50)
+    representative_product_ids: dict[str, str] = Field(default_factory=dict)
+
+
+class DxmTemplateShopSyncRequest(BaseModel):
+    """Request a full management-center template sync for one real DXM shop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
 
 
 class LocalPlanTemplateRequest(BaseModel):
@@ -146,6 +155,16 @@ class LocalPlanTemplateRequest(BaseModel):
     fill_rules: dict[str, Any]
     dxm_template_refs: list[dict[str, Any]]
     field_mappings: dict[str, Any]
+    source_policies: dict[str, Any] = Field(default_factory=dict)
+    editor_actions: dict[str, Any] = Field(default_factory=dict)
+    scope_contract: str | None = None
+    # v3 keeps the operator's configuration intent separate from the
+    # per-product execution projection. These fields are optional so legacy
+    # v1/v2 plans remain readable while the UI migrates them explicitly.
+    configuration_contract: str | None = None
+    status: Literal['draft', 'ready'] = 'ready'
+    semi_managed: dict[str, Any] | None = None
+    source_snapshots: dict[str, Any] = Field(default_factory=dict)
     validation_policy: dict[str, Any]
     exception_policy: dict[str, Any]
     provenance: str

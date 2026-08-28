@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getJson, getJsonOrDefault, postJson } from './api'
+import { getJson, getJsonOrDefault, postJson, withDxmSessionBusyRetry } from './api'
 import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
@@ -22,9 +22,10 @@ import {
 } from './components/WorkbenchModules'
 import { OperationAuditTimeline } from './components/workbench/OperationAuditTimeline'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
+import { DxmShopProvider } from './dxmShopContext'
 import type { ConfirmedDraftTaskInput } from './draftSelection'
 import { isSupportedSourceProductUrl } from './sourceUrl'
-import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, DxmDraftShop, DxmDraftShopsResponse, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { isTaskControlActive } from './taskControl'
 import { composeWorkspace } from './workspace'
 
@@ -174,6 +175,11 @@ export default function App() {
     exceptions: [],
     reports: [],
   }))
+  const [dxmShops, setDxmShops] = useState<DxmDraftShop[]>([])
+  const [dxmShopsSnapshot, setDxmShopsSnapshot] = useState<DxmDraftShopsResponse | null>(null)
+  const [selectedDxmShopId, setSelectedDxmShopId] = useState('')
+  const [dxmShopsLoading, setDxmShopsLoading] = useState(false)
+  const [dxmShopsError, setDxmShopsError] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
   const [activeScopeSnapshot, setActiveScopeSnapshot] = useState<DraftBoxScopeSnapshot | null>(null)
@@ -186,6 +192,7 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [dxmLoginRequestPending, setDxmLoginRequestPending] = useState(false)
   const [agentConsole, setAgentConsole] = useState<AgentConsoleSession | null>(null)
   const [finalCheck, setFinalCheck] = useState<FinalDeliveryCheckSummary | null>(null)
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
@@ -241,6 +248,50 @@ export default function App() {
     agent: 0,
   })
   const lastObservedL2CompletionRef = useRef<string | null>(null)
+  // refreshWorkspace is called by page entry, background polling and sync
+  // completion.  An older Promise.all can finish after a newer template sync
+  // and overwrite its 35 refs with its earlier empty snapshot.  Only the
+  // newest refresh is allowed to commit UI state.
+  const workspaceRefreshGenerationRef = useRef(0)
+  const dxmShopRefreshPromiseRef = useRef<Promise<DxmDraftShopsResponse | null> | null>(null)
+
+  const refreshDxmShops = useCallback(async (force = false): Promise<DxmDraftShopsResponse | null> => {
+    if (!force && dxmShopsSnapshot) return dxmShopsSnapshot
+    if (dxmShopRefreshPromiseRef.current) return dxmShopRefreshPromiseRef.current
+
+    const refreshPromise = (async (): Promise<DxmDraftShopsResponse | null> => {
+      setDxmShopsLoading(true)
+      setDxmShopsError(null)
+      try {
+        const response = await withDxmSessionBusyRetry(
+          () => getJson<DxmDraftShopsResponse>('/api/dxm/draft-reader/shops'),
+        )
+        setDxmShopsSnapshot(response)
+        setDxmShops(response.shops)
+        setSelectedDxmShopId((current) => (
+          current && response.shops.some((shop) => shop.id === current)
+            ? current
+            : response.shops[0]?.id ?? ''
+        ))
+        return response
+      } catch (error) {
+        // Keep the last verified shop list during a transient login/session
+        // busy window; an empty response must never silently switch shops.
+        setDxmShopsError(error instanceof Error ? error.message : '店铺列表读取失败，请稍后重试。')
+        return null
+      } finally {
+        setDxmShopsLoading(false)
+      }
+    })()
+    dxmShopRefreshPromiseRef.current = refreshPromise
+    try {
+      return await refreshPromise
+    } finally {
+      if (dxmShopRefreshPromiseRef.current === refreshPromise) {
+        dxmShopRefreshPromiseRef.current = null
+      }
+    }
+  }, [dxmShopsSnapshot])
 
   const selectedTask = useMemo(
     () => workspace.tasks.find((task) => task.id === selectedTaskId) ?? workspace.tasks[0] ?? null,
@@ -270,6 +321,8 @@ export default function App() {
   }, [activeSection])
 
   const refreshWorkspace = useCallback(async (options?: { silent?: boolean }) => {
+    const refreshGeneration = workspaceRefreshGenerationRef.current + 1
+    workspaceRefreshGenerationRef.current = refreshGeneration
     const deliveryPath = selectedTaskId ? `/api/delivery/workspace?task_id=${selectedTaskId}` : '/api/delivery/workspace'
     const failures: ApiFailure[] = []
     const loadOrFallback = async <T,>(path: string, fallback: T): Promise<T> => {
@@ -332,6 +385,9 @@ export default function App() {
       exceptions,
       reports,
     })
+    if (refreshGeneration !== workspaceRefreshGenerationRef.current) {
+      return nextWorkspace
+    }
     const editBatchStateFailed = failures.some((failure) => failure.path === '/api/edit-batches')
     setWorkspace(nextWorkspace)
     if (!editBatchStateFailed) setEditBatches(batchSummaries)
@@ -875,8 +931,16 @@ export default function App() {
       return
     }
     setBusy(true)
+    setDxmLoginRequestPending(true)
     setOperationError(null)
     try {
+      // Never reuse a previous account's shop snapshot while a new visible
+      // login is being opened.  The successful continuation below is the
+      // only place that repopulates this account-scoped source of truth.
+      setDxmShops([])
+      setDxmShopsSnapshot(null)
+      setSelectedDxmShopId('')
+      setDxmShopsError(null)
       if (dxmLoginDraft.rememberCredential) {
         const saver = window.dxmDesktop?.saveDxmCredential
         if (saver) {
@@ -897,6 +961,11 @@ export default function App() {
         username,
         password: dxmLoginDraft.password,
       })
+      // The backend has handed the visible browser to the operator.  Release
+      // the global UI lock before the read-only refresh fan-out below; a slow
+      // log/workspace refresh must not disable the captcha-complete action.
+      setBusy(false)
+      setDxmLoginRequestPending(false)
       setOperationNotice(humanDxmLoginFlowNotice(loginStart, '已打开真实店小秘登录页；请在弹出的真实浏览器中完成验证码。'))
       if (!dxmLoginDraft.rememberCredential) {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
@@ -916,6 +985,7 @@ export default function App() {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
       setBusy(false)
+      setDxmLoginRequestPending(false)
     }
   }
 
@@ -959,8 +1029,48 @@ export default function App() {
     }
   }
 
+  async function logoutDxm(clearAccount = false) {
+    setBusy(true)
+    setDxmLoginRequestPending(true)
+    setOperationError(null)
+    setOperationNotice(null)
+    try {
+      const result = await postJson<Record<string, unknown>>('/api/dxm/logout', {})
+      if (clearAccount) {
+        await clearSavedDxmCredential(false)
+      }
+      setDxmLoginDraft((current) => ({
+        ...current,
+        username: clearAccount ? '' : current.username,
+        password: '',
+        rememberCredential: clearAccount ? false : current.rememberCredential,
+      }))
+      // A logout invalidates every shop-scoped reader/template/plan view. Do
+      // not leave the previous account's shop selected while the next login
+      // is being established.
+      setDxmShops([])
+      setDxmShopsSnapshot(null)
+      setSelectedDxmShopId('')
+      setDxmShopsError(null)
+      setOperationNotice(String(result.message ?? (clearAccount ? '已退出并清除当前账号，可以切换新账号。' : '已退出店小秘登录态。')))
+      setActiveSection('dxm_access')
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+      await refreshWorkspace()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '退出店小秘登录态失败'
+      setOperationError(humanDxmLoginError(message))
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+    } finally {
+      setBusy(false)
+      setDxmLoginRequestPending(false)
+    }
+  }
+
   async function continueDxmLogin() {
     setBusy(true)
+    setDxmLoginRequestPending(true)
     setOperationError(null)
     try {
       const loginResult = await postJson<Record<string, unknown>>('/api/dxm/login/continue', { confirm: true })
@@ -975,8 +1085,20 @@ export default function App() {
         setOperationError(message)
         setActiveSection('dxm_access')
       } else {
-        setOperationNotice(`${message} 正在进入真实采集箱选品；不会保存或发布。`)
-        setActiveSection('draft_selection')
+        // Login success is the boundary at which the account's shopMap becomes
+        // authoritative. Read it before entering any shop-scoped page; the
+        // sidebar selector is the single source of truth afterwards.
+        const shops = await refreshDxmShops(true)
+        if (!shops) {
+          setOperationError('店小秘已登录，但店铺列表暂未读到。不会把它误判成“暂无店铺”；请留在本页点击“重新读取店铺”后再进入采集箱。')
+          setActiveSection('dxm_access')
+        } else if (!shops.shops.length) {
+          setOperationError('店小秘已登录且店铺列表读取成功，但该账号没有返回可用店铺。请在真实店小秘确认店铺授权后再重试。')
+          setActiveSection('dxm_access')
+        } else {
+          setOperationNotice(`${message} 已读取 ${shops.shops.length} 个店铺，正在进入真实采集箱选品；不会保存或发布。`)
+          setActiveSection('draft_selection')
+        }
       }
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -989,6 +1111,7 @@ export default function App() {
       await refreshRuntimeLogs()
     } finally {
       setBusy(false)
+      setDxmLoginRequestPending(false)
     }
   }
 
@@ -1319,10 +1442,13 @@ export default function App() {
             dxmLoginDraft={dxmLoginDraft}
             dxmCredentialState={dxmCredentialState}
             busy={busy}
+            loginRequestPending={dxmLoginRequestPending}
             onDxmLoginDraftChange={setDxmLoginDraft}
             onClearSavedDxmCredential={() => { void clearSavedDxmCredential() }}
             onOpenDxmLogin={openDxmLogin}
             onContinueDxmLogin={continueDxmLogin}
+            onLogoutDxm={() => { void logoutDxm(false) }}
+            onSwitchDxmAccount={() => { void logoutDxm(true) }}
             onNavigateDxmTarget={navigateDxmTarget}
             onShowConsole={() => setActiveSection('draft_selection')}
           />
@@ -1548,7 +1674,12 @@ export default function App() {
             editBatches={editBatches}
             selectedTask={selectedTask}
             runtimeStatus={runtimeStatus}
+            currentShopId={selectedDxmShopId}
+            currentShopName={dxmShops.find((shop) => shop.id === selectedDxmShopId)?.name ?? null}
+            shopLoading={dxmShopsLoading}
+            shopError={dxmShopsError}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onRefreshShops={() => { void refreshDxmShops(true) }}
             onShowDraftEdit={startNewEditBatch}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConsole={() => setActiveSection('start_save')}
@@ -1560,13 +1691,24 @@ export default function App() {
   })()
 
   return (
-    <AppShell
-      activeSection={currentSection}
-      onSectionChange={setWorkbenchSection}
-      sidebarCollapsed={sidebarCollapsed}
-      onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
-      sourceLabel={sourceLabels[workspace.source]}
+    <DxmShopProvider
+      value={{
+        shops: dxmShops,
+        snapshot: dxmShopsSnapshot,
+        selectedShopId: selectedDxmShopId,
+        loading: dxmShopsLoading,
+        error: dxmShopsError,
+        setSelectedShopId: setSelectedDxmShopId,
+        refresh: refreshDxmShops,
+      }}
     >
+      <AppShell
+        activeSection={currentSection}
+        onSectionChange={setWorkbenchSection}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+        sourceLabel={sourceLabels[workspace.source]}
+      >
       {showGlobalSafetyStatus && (
         <SafetyStatusBar
           workspace={workspace}
@@ -1624,7 +1766,8 @@ export default function App() {
         )}
       </div>
       {content}
-    </AppShell>
+      </AppShell>
+    </DxmShopProvider>
   )
 }
 
@@ -1762,6 +1905,9 @@ function humanDxmLoginError(message: string) {
   const commonTail = '账号密码不会用于保存或发布；可在右侧实时日志查看后端和启动器细节。'
   const browserRuntimeMessage = humanBrowserRuntimeError(message)
   if (browserRuntimeMessage) return `${browserRuntimeMessage}${commonTail}`
+  if (normalized.includes('dxm_account_switch_failed') || normalized.includes('账号会话未能安全清理')) {
+    return `当前真实浏览器仍绑定旧店小秘账号，系统没有把它冒充成新账号。请关闭旧的真实浏览器窗口后，再点击“切换账号”或重新打开登录页。${commonTail}`
+  }
   if (
     message.includes('Internal Server Error')
     || normalized.includes('post /api/dxm/login/start failed')

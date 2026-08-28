@@ -159,6 +159,25 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS canonical_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                product_id INTEGER,
+                mode TEXT NOT NULL,
+                claim_mark TEXT NOT NULL,
+                canonical_receipt_sha256 TEXT NOT NULL UNIQUE,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                job_status TEXT,
+                error_code TEXT,
+                error_detail TEXT,
+                needs_manual_review INTEGER NOT NULL DEFAULT 0,
+                receipt_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ownership_locks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 lock_token TEXT NOT NULL UNIQUE,
@@ -186,6 +205,28 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_ownership_locks_token
                 ON ownership_locks (lock_token);
+
+            CREATE TABLE IF NOT EXISTS writer_fences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                writer_fence_id TEXT NOT NULL UNIQUE,
+                shop_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 0,
+                acquired_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                released_at TEXT,
+                invalidated_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_writer_fences_shop_active
+                ON writer_fences (shop_id, status, expires_at);
+
+            CREATE INDEX IF NOT EXISTS idx_writer_fences_fence_id
+                ON writer_fences (writer_fence_id);
 
             CREATE TABLE IF NOT EXISTS mutation_dispatch_ledger (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -667,6 +708,7 @@ def init_db() -> None:
             """
         )
         migrate_reports_published_to_tristate(conn)
+        migrate_canonical_receipts(conn)
         disable_legacy_generated_starter_templates(conn)
         disable_edit_batch_bundles_with_quarantined_sources(conn)
         disable_unexecutable_edit_batch_bundles(conn)
@@ -680,6 +722,39 @@ def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str
     for column_name, column_definition in columns.items():
         if column_name not in existing:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def migrate_canonical_receipts(conn: sqlite3.Connection) -> bool:
+    """Create the canonical_receipts table if it does not exist (safe for existing DBs)."""
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(canonical_receipts)").fetchall()
+    }
+    if "canonical_receipt_sha256" not in existing:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                product_id INTEGER,
+                mode TEXT NOT NULL,
+                claim_mark TEXT NOT NULL,
+                canonical_receipt_sha256 TEXT NOT NULL UNIQUE,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                job_status TEXT,
+                error_code TEXT,
+                error_detail TEXT,
+                needs_manual_review INTEGER NOT NULL DEFAULT 0,
+                receipt_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        return True
+    return False
 
 
 def migrate_reports_published_to_tristate(conn: sqlite3.Connection) -> bool:

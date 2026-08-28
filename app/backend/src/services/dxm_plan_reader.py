@@ -17,6 +17,7 @@ from src.execution.browser_agent_protocol import (
 )
 from src.execution.account_identity import account_context_hash
 from src.services.dxm_draft_reader import DxmDraftReader
+from src.services.dxm_editor_model import normalize_dxm_editor_schemas
 
 
 DXM_E2_TEMPLATE_REF_TYPES = {
@@ -26,6 +27,10 @@ DXM_E2_TEMPLATE_REF_TYPES = {
     "freight",
     "service",
     "size",
+    "regional",
+    "module_property",
+    "module_template",
+    "module_package",
 }
 DXM_E2_READ_APIS = {
     "/api/userTemplate/pageList.json",
@@ -38,6 +43,13 @@ DXM_E2_READ_APIS = {
     "/api/smtShopInfoSync/sizeChartList.json",
     "/api/smtCategory/attributeList.json",
     "/api/smtCategory/childAttributeList.json",
+    "/api/smtCategory/getByCategoryId.json",
+    "/api/smtCategory/syncQualification.json",
+    "/api/userTemplate/templateListForModule.json",
+    "/api/smtAdjustPrice/pageList.json",
+    "/api/smtCommMsr/list.json",
+    "/api/smtCommManufacture/list.json",
+    "/api/smtProduct/edit.json",
 }
 
 
@@ -53,7 +65,13 @@ class DxmPlanReader:
     def __init__(self, source: Any) -> None:
         self._source = source
 
-    def read_scope(self, *, shop_id: str, category_ids: list[str]) -> dict[str, Any]:
+    def read_scope(
+        self,
+        *,
+        shop_id: str,
+        category_ids: list[str],
+        representative_product_ids: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
         normalized_shop_id = _positive_id_text(shop_id, "shop_id")
         normalized_category_ids = [
             _positive_id_text(value, "category_id")
@@ -74,10 +92,23 @@ class DxmPlanReader:
                 "DXM_PLAN_READER_UNAVAILABLE",
                 "当前真实浏览器没有提供 E2 只读模板与类目读取能力。",
             )
-        envelope = reader(
-            shop_id=normalized_shop_id,
-            category_ids=normalized_category_ids,
-        )
+        normalized_representatives: dict[str, str] = {}
+        for raw_category_id, raw_product_id in (representative_product_ids or {}).items():
+            category_id = _positive_id_text(raw_category_id, "representative category_id")
+            product_id = _positive_id_text(raw_product_id, "representative product_id")
+            if category_id not in normalized_category_ids:
+                raise DxmPlanReaderError(
+                    "DXM_PLAN_SCOPE_INVALID",
+                    "代表商品类目不在本次方案作用域内。",
+                )
+            normalized_representatives[category_id] = product_id
+        reader_kwargs: dict[str, Any] = {
+            "shop_id": normalized_shop_id,
+            "category_ids": normalized_category_ids,
+        }
+        if normalized_representatives:
+            reader_kwargs["representative_product_ids"] = normalized_representatives
+        envelope = reader(**reader_kwargs)
         browser_session_id, account_ref, payload = self._validated_envelope(envelope)
         raw_records = payload.get("template_records")
         if not isinstance(raw_records, list):
@@ -99,6 +130,49 @@ class DxmPlanReader:
                 "DXM_TEMPLATE_IDENTITY_CONFLICT",
                 "店小秘模板只读回包含重复身份，已停止同步。",
             )
+        raw_category_schemas = payload.get("category_schemas")
+        if not isinstance(raw_category_schemas, Mapping):
+            raise DxmPlanReaderError(
+                "CATEGORY_SCHEMA_INVALID",
+                "店小秘类目只读回包缺少 category_schemas。",
+            )
+        try:
+            category_schemas = normalize_dxm_editor_schemas(raw_category_schemas)
+        except ValueError as exc:
+            raise DxmPlanReaderError(
+                "CATEGORY_SCHEMA_INVALID",
+                str(exc),
+            ) from exc
+        representative_values: dict[str, dict[str, Any]] = {}
+        raw_representatives = payload.get("representative_products", {})
+        if not isinstance(raw_representatives, Mapping):
+            raise DxmPlanReaderError(
+                "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
+                "代表商品编辑数据必须按类目返回对象。",
+            )
+        for category_id, product_id in normalized_representatives.items():
+            raw_product = raw_representatives.get(category_id)
+            detail_product_id, detail = self._validated_product_detail(
+                raw_product,
+                shop_id=normalized_shop_id,
+            )
+            if detail_product_id != product_id:
+                raise DxmPlanReaderError(
+                    "PRODUCT_IDENTITY_CONFLICT",
+                    "代表商品 edit.json 身份与请求不一致。",
+                )
+            if _positive_id_text(detail.get("categoryId"), "detail category_id") != category_id:
+                raise DxmPlanReaderError(
+                    "PLAN_SCOPE_CONFLICT",
+                    "代表商品 edit.json 类目与请求不一致。",
+                )
+            representative_values[category_id] = {
+                "__product_id": product_id,
+                **self._current_values_from_detail(
+                    detail,
+                    schema=category_schemas[category_id],
+                ),
+            }
         return {
             "source": "api",
             "session_bound": True,
@@ -107,7 +181,72 @@ class DxmPlanReader:
             "shop_id": normalized_shop_id,
             "category_ids": normalized_category_ids,
             "template_records": records,
-            "category_schemas": payload.get("category_schemas"),
+            "category_schemas": category_schemas,
+            "representative_products": representative_values,
+            "category_capabilities": payload.get("category_capabilities", {}),
+            # The live reader records only bounded endpoint metadata (path,
+            # status, item count and elapsed time).  Preserve it so the
+            # template-sync API can explain slow reads without exposing form
+            # values or response bodies.  Older/fake readers may omit it.
+            "request_trace": payload.get("request_trace", [])
+            if isinstance(payload.get("request_trace", []), list)
+            else [],
+        }
+
+    def read_template_library(self, *, shop_id: str) -> dict[str, Any]:
+        """Read the account/shop management template index without draft scope."""
+
+        normalized_shop_id = _positive_id_text(shop_id, "shop_id")
+        reader = getattr(self._source, "read_dxm_template_library", None)
+        if not callable(reader):
+            raise DxmPlanReaderError(
+                "DXM_TEMPLATE_LIBRARY_UNAVAILABLE",
+                "当前真实浏览器没有提供店铺级模板读取能力。",
+            )
+        envelope = reader(shop_id=normalized_shop_id)
+        browser_session_id, account_ref, payload = self._validated_envelope(envelope)
+        raw_records = payload.get("template_records")
+        if not isinstance(raw_records, list):
+            raise DxmPlanReaderError(
+                "DXM_TEMPLATE_RESPONSE_INVALID",
+                "店小秘店铺级模板回包缺少 template_records。",
+            )
+        raw_category_ids = payload.get("category_ids", [])
+        if not isinstance(raw_category_ids, list):
+            raise DxmPlanReaderError(
+                "DXM_TEMPLATE_RESPONSE_INVALID",
+                "店小秘店铺级模板回包缺少有效 category_ids。",
+            )
+        category_ids = list(dict.fromkeys(
+            _positive_id_text(value, "template category_id")
+            for value in raw_category_ids
+        ))
+        records = [
+            self._normalize_template_record(
+                raw,
+                index=index,
+                shop_id=normalized_shop_id,
+                category_ids=set(category_ids),
+            )
+            for index, raw in enumerate(raw_records)
+        ]
+        if len({self._record_identity(record) for record in records}) != len(records):
+            raise DxmPlanReaderError(
+                "DXM_TEMPLATE_IDENTITY_CONFLICT",
+                "店小秘店铺级模板回包包含重复身份，已停止同步。",
+            )
+        return {
+            "source": "api",
+            "session_bound": True,
+            "session_ref": self._session_ref(browser_session_id, account_ref),
+            "account_context_hash": self._account_context_hash(account_ref),
+            "shop_id": normalized_shop_id,
+            "category_ids": category_ids,
+            "template_records": records,
+            "category_schemas": {},
+            "request_trace": payload.get("request_trace", [])
+            if isinstance(payload.get("request_trace", []), list)
+            else [],
         }
 
     def build_snapshot_request(
@@ -605,18 +744,37 @@ class DxmPlanReader:
                 value = attribute_values[field_key]
             elif field_key in detail:
                 value = detail[field_key]
-            if field_key == "aeopAeProductSKUs" and isinstance(value, str):
+            definition = properties[field_key]
+            if (
+                definition.get("type") == "string"
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                value = str(value)
+            if (
+                isinstance(value, str)
+                and definition.get("type") in {"array", "object"}
+                and definition.get("wire_format") != "semicolon_delimited"
+                and value.lstrip().startswith(
+                    "[" if definition.get("type") == "array" else "{"
+                )
+            ):
                 try:
                     value = json.loads(value)
                 except json.JSONDecodeError as exc:
                     raise DxmPlanReaderError(
                         "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
-                        "编辑页 SKU 当前值不是有效 JSON 数组。",
+                        f"编辑页字段 {field_key} 不是有效 JSON。",
                     ) from exc
-                if not isinstance(value, list):
+                if definition.get("type") == "array" and not isinstance(value, list):
                     raise DxmPlanReaderError(
                         "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
-                        "编辑页 SKU 当前值不是数组。",
+                        f"编辑页字段 {field_key} 不是数组。",
+                    )
+                if definition.get("type") == "object" and not isinstance(value, Mapping):
+                    raise DxmPlanReaderError(
+                        "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
+                        f"编辑页字段 {field_key} 不是对象。",
                     )
             if value is None or value == "" or value == [] or value == {}:
                 continue
@@ -803,6 +961,12 @@ class DxmPlanReader:
                     "reason_code": "DXM_TEMPLATE_ATTRIBUTE_ID_UNMAPPED",
                 }
             )
+        # A plan binding must change when its executable interpretation changes,
+        # not when DXM adds or reorders transport/display-only fields in a list
+        # response.  `source_record` is deliberately kept out of the persisted
+        # model and is therefore not a stable execution contract.  The fields
+        # below are the complete parsed reference contract consumed by the
+        # snapshot compiler and browser runner.
         digest_body = {
             "ref_type": ref_type,
             "dxm_template_id": _positive_id_text(
@@ -811,17 +975,21 @@ class DxmPlanReader:
             ),
             "shop_id": record_shop_id,
             "category_id": category_id,
+            "resolved_values": resolved_values,
+            "audit_items": audit_items,
+        }
+        return {
+            "ref_type": digest_body["ref_type"],
+            "dxm_template_id": digest_body["dxm_template_id"],
+            "shop_id": digest_body["shop_id"],
+            "category_id": digest_body["category_id"],
             "observed_display_name": _normalized_text(
                 value.get("observed_display_name"),
                 "observed_display_name",
             ),
             "source_api": source_api,
-            "source_record": value.get("source_record"),
             "resolved_values": resolved_values,
             "audit_items": audit_items,
-        }
-        return {
-            **{key: item for key, item in digest_body.items() if key != "source_record"},
             "availability": "available",
             "source_digest": canonical_sha256(digest_body),
         }

@@ -1,0 +1,114 @@
+{
+    "schema":  "dxm.category_catalog_manifest.v1",
+    "generatedBy":  "scripts/sync-dxm-category-catalog.ps1",
+    "normalizerVersion":  "2",
+    "synchronizedAt":  "2026-08-25",
+    "upstreamRoot":  "D:/Desktop/py/DXM-TX",
+    "allowedSourceScope":  "data/capture/categories only",
+    "excludedSensitiveScopes":  [
+                                    "data/sessions",
+                                    "Cookie",
+                                    "storage state",
+                                    "account",
+                                    "shop",
+                                    "product",
+                                    "raw business capture"
+                                ],
+    "catalog":  {
+                    "relativePath":  "resources/dxm/category-catalog/category-catalog.v1.json",
+                    "sha256":  "B79C02BACC23759E2CAFA632EEF0EAAAB53868D38C2F164408B3BD9CABCA671B",
+                    "bytes":  16463596,
+                    "schema":  "dxm.category_catalog.v1",
+                    "observedAt":  "2026-07-28T02:02:18Z",
+                    "counts":  {
+                                   "nodes":  13216,
+                                   "leaves":  11864,
+                                   "roots":  36,
+                                   "executableLeaves":  11852,
+                                   "unexecutableLeaves":  12,
+                                   "ancestorPathConflicts":  12,
+                                   "observedLevelUntrusted":  13005,
+                                   "nonLeafWithoutObservedChild":  4,
+                                   "duplicateLeafDisplayPaths":  1
+                               }
+                },
+    "sources":  [
+                    {
+                        "relativePath":  "data/capture/categories/all_nodes.json",
+                        "sha256":  "25A665AFAAF34E2626F2DC43A58B3A7FB3147E85340E3B97FA7C13C461178A10",
+                        "bytes":  8185050,
+                        "disposition":  "IMPORTED_NORMALIZED"
+                    },
+                    {
+                        "relativePath":  "data/capture/categories/category_leaf_mapping.json",
+                        "sha256":  "7CC422A5E07110700597D0FC0BB03E5D74F54FED345544C39F8EF09DB6E6DB35",
+                        "bytes":  9491494,
+                        "disposition":  "METADATA_AND_COUNT_CROSSCHECK"
+                    },
+                    {
+                        "relativePath":  "data/capture/categories/category_leaf_mapping.csv",
+                        "sha256":  "21326822B0797AFFA075DDB1A315986085403E1153E997E05D6DEA114B2AB483",
+                        "bytes":  2778530,
+                        "disposition":  "EXCLUDED_REDUNDANT_OLDER_SNAPSHOT"
+                    },
+                    {
+                        "relativePath":  "data/capture/categories/leaf_id_to_path_compact.json",
+                        "sha256":  "B320916CDC88931DD24E5D96E0D8AB75EF5BAB7283ED89FB5A3F1461DB27D4C2",
+                        "bytes":  3274096,
+                        "disposition":  "EXCLUDED_STALE_11795_LEAF_SNAPSHOT"
+                    },
+                    {
+                        "relativePath":  "data/capture/categories/root_list.json",
+                        "sha256":  "913CB7C0D81E24519E37DD0450A2B63898A50544E63678EE757673C3AA448E81",
+                        "bytes":  21925,
+                        "disposition":  "ROOT_COUNT_CROSSCHECK"
+                    }
+                ],
+    "drift":  {
+                  "compactLeafCount":  11795,
+                  "currentLeafCount":  11864,
+                  "disposition":  "CURRENT_ALL_NODES_WINS; OLDER_COMPACT_RECORDED_NOT_IMPORTED"
+              },
+    "quality":  {
+                    "leafProjectionVerified":  true,
+                    "forwardAndReverseIndexesVerified":  true,
+                    "rootRecordsVerified":  true,
+                    "observedLevelTrusted":  false,
+                    "derivedDepthDistribution":  {
+                                                     "0":  36,
+                                                     "1":  437,
+                                                     "2":  4139,
+                                                     "3":  8601,
+                                                     "4":  3
+                                                 },
+                    "ancestorPathConflictIds":  [
+                                                    "100005881",
+                                                    "100005882",
+                                                    "100007349",
+                                                    "142705",
+                                                    "200352144",
+                                                    "200355142",
+                                                    "201305506",
+                                                    "201510201",
+                                                    "201510301",
+                                                    "201510401",
+                                                    "201510501",
+                                                    "201510701"
+                                                ],
+                    "nonLeafWithoutObservedChildIds":  [
+                                                           "100000047",
+                                                           "200004309",
+                                                           "200327169",
+                                                           "202228804"
+                                                       ],
+                    "duplicateLeafDisplayPaths":  [
+                                                      {
+                                                          "nodePath":  "Mother \u0026 Kids(母婴（含儿童服装/童鞋/儿童用品）)/Kids Shoes(童鞋)/Leather Shoes(皮鞋)",
+                                                          "categoryIds":  [
+                                                                              "200002401",
+                                                                              "200002402"
+                                                                          ]
+                                                      }
+                                                  ]
+                }
+}

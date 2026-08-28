@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { BatchSavePlaceholderPage } from '../../src/components/workbench/BatchSavePlaceholderPage'
 import { LocalPlanWorkspace } from '../../src/components/workbench/LocalPlanWorkspace'
 import type { ConfirmedDraftTaskInput } from '../../src/draftSelection'
-import type { DxmTemplateRef } from '../../src/types'
+import type { DxmTemplateRef, LocalPlanTemplate } from '../../src/types'
 import '../../src/styles.css'
 
 const taskInput: ConfirmedDraftTaskInput = {
@@ -21,6 +21,28 @@ const taskInput: ConfirmedDraftTaskInput = {
   },
 }
 
+const activePlan: LocalPlanTemplate = {
+  model: 'local_plan_template',
+  id: 71,
+  lineage_id: 71,
+  supersedes_id: null,
+  name: '可删除方案',
+  version: '1.0.0',
+  shop_id: '3001',
+  category_ids: ['100'],
+  path: 'A',
+  fixed_values: { publish_allowed: false },
+  fill_rules: { '100': {} },
+  dxm_template_refs: [],
+  field_mappings: {},
+  validation_policy: { required_fields: 'fail_closed', natural_language: 'english_before_save' },
+  exception_policy: { unknown: 'stop_batch' },
+  provenance: 'browser_fixture',
+  is_active: true,
+  created_at: '2026-08-20T00:00:00Z',
+  updated_at: '2026-08-20T00:00:00Z',
+}
+
 function E2PlanHarness() {
   const [refs, setRefs] = useState<DxmTemplateRef[]>([])
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
@@ -29,7 +51,7 @@ function E2PlanHarness() {
   return (
     <main className="workspace-content">
       <LocalPlanWorkspace
-        plans={[]}
+        plans={[activePlan]}
         dxmTemplateRefs={refs}
         onChanged={() => {
           setRefs([{

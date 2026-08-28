@@ -163,6 +163,33 @@ def test_adapter_exposes_e2_product_detail_reader_unchanged():
     ]
 
 
+def test_adapter_forwards_e2_representative_products_without_signature_drift():
+    class PlanScopeFlow(FakeLoginFlow):
+        def read_e2_plan_scope(self, *, shop_id, category_ids, representative_product_ids=None):
+            self.calls.append((
+                'read_e2_plan_scope',
+                shop_id,
+                tuple(category_ids),
+                representative_product_ids,
+            ))
+            return {'payload': {'category_schemas': {}}}
+
+    flow = PlanScopeFlow()
+    result = DxmWorkflowAdapter(flow).read_e2_plan_scope(
+        shop_id='6517349',
+        category_ids=['100004476'],
+        representative_product_ids={'100004476': '130658341390401740'},
+    )
+
+    assert result == {'payload': {'category_schemas': {}}}
+    assert flow.calls == [(
+        'read_e2_plan_scope',
+        '6517349',
+        ('100004476',),
+        {'100004476': '130658341390401740'},
+    )]
+
+
 def test_workflow_event_listener_forwards_to_login_flow():
     flow = FakeWorkflowEventLoginFlow()
     adapter = DxmWorkflowAdapter(flow)

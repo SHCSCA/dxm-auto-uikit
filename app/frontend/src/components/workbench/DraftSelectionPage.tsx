@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { getJson } from '../../api'
+import { getJson, withDxmSessionBusyRetry } from '../../api'
+import { useDxmShop } from '../../dxmShopContext'
 import {
   DraftProductIdentityConflictError,
+  MAX_DRAFT_SELECTION,
   MIN_DRAFT_SELECTION,
   ReaderSessionChangedError,
   assertRealDraftPageResponse,
@@ -37,7 +39,7 @@ type DraftSelectionPageProps = {
   onReviewSnapshot: () => boolean
 }
 
-const PAGE_SIZES = [20, 50, 100] as const
+const PAGE_SIZES = [20, 50, 100, 200] as const
 const DEFAULT_PAGE_SIZE = 100
 
 const emptyPagination: DxmDraftPageResponse['pagination'] = {
@@ -58,16 +60,23 @@ export function DraftSelectionPage({
   onShowPlans,
   onReviewSnapshot,
 }: DraftSelectionPageProps) {
+  const {
+    selectedShopId: globalShopId,
+    setSelectedShopId,
+    snapshot: globalShopSnapshot,
+    loading: globalShopsLoading,
+    error: globalShopReadError,
+    refresh: refreshDxmShops,
+  } = useDxmShop()
   const [shopsResponse, setShopsResponse] = useState<DxmDraftShopsResponse | null>(null)
   const [products, setProducts] = useState<DxmDraftProduct[]>([])
   const [pagination, setPagination] = useState(emptyPagination)
-  const [shopId, setShopId] = useState('-1')
+  const [shopId, setShopId] = useState('')
   const [pageNo, setPageNo] = useState(1)
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(DEFAULT_PAGE_SIZE)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectedProducts, setSelectedProducts] = useState<Record<string, DxmDraftProduct>>({})
   const [planId, setPlanId] = useState('')
-  const [shopsLoading, setShopsLoading] = useState(true)
   const [productsLoading, setProductsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -76,6 +85,7 @@ export function DraftSelectionPage({
   const [categoryLevels, setCategoryLevels] = useState<DxmCategoryRecord[][]>([[], [], []])
   const [categorySelection, setCategorySelection] = useState<(DxmCategoryRecord | null)[]>([null, null, null])
   const [categoryLoading, setCategoryLoading] = useState(false)
+  const [categoryError, setCategoryError] = useState<string | null>(null)
   const [categorySearch, setCategorySearch] = useState('')
   const [categorySearchResults, setCategorySearchResults] = useState<DxmCategoryRecord[]>([])
   const [targetCategoryId, setTargetCategoryId] = useState<string | null>(null)
@@ -83,9 +93,16 @@ export function DraftSelectionPage({
   const [targetCategoryMatch, setTargetCategoryMatch] = useState<string | null>(null)
   const [targetCategoryPath, setTargetCategoryPath] = useState('')
   const requestSequence = useRef(0)
+  // Product pages and the optional category cascade are independent read
+  // channels.  A slow/failed category request must never make a valid draft
+  // page look stale (and vice versa).
+  const categoryRequestSequence = useRef(0)
   const readerSessionRef = useRef<string | null>(null)
   const selectedProductsRef = useRef<Record<string, DxmDraftProduct>>({})
   const confirmedHandoffRef = useRef(false)
+  const confirmationTokenRef = useRef(0)
+  const categoryRootSessionRef = useRef<string | null>(null)
+  const shopsLoading = globalShopsLoading
 
   const availablePlans = useMemo(
     () => e2LocalPlans?.filter((plan) => plan.is_active)
@@ -94,15 +111,44 @@ export function DraftSelectionPage({
   )
   const selectedPlanId = Number(planId)
   const selectedPlan = availablePlans.find((plan) => plan.id === selectedPlanId) ?? null
+  const planOwnsTargetCategory = selectedPlan !== null
+    && 'scope_contract' in selectedPlan
+    && selectedPlan.scope_contract === 'single_target_category.v2'
   const selectedCount = selectedIds.length
   const pageSelectionIds = products.map((product) => product.id)
   const currentPageFullySelected = pageSelectionIds.length > 0
     && pageSelectionIds.every((productId) => selectedIds.includes(productId))
-  const canReviewTask = selectedCount >= MIN_DRAFT_SELECTION
+  const selectionCountIsWithinBatchLimit = selectedCount >= MIN_DRAFT_SELECTION
+    && selectedCount <= MAX_DRAFT_SELECTION
+  const canReviewTask = selectionCountIsWithinBatchLimit
     && selectedPlan !== null
+    && (!planOwnsTargetCategory || targetCategoryId !== null)
     && productSessionRef !== null
     && productSessionRef === shopsResponse?.session_ref
     && error === null
+
+  useEffect(() => {
+    if (!planOwnsTargetCategory || !selectedPlan || !('category_ids' in selectedPlan)) return
+    const categoryId = selectedPlan.category_ids[0]
+    if (!categoryId) return
+    let cancelled = false
+    setTargetCategoryId(categoryId)
+    setTargetCategoryName(null)
+    setTargetCategoryMatch(null)
+    setTargetCategoryPath('')
+    void withDxmSessionBusyRetry(
+      () => getJson<DxmCategoryRecord | null>(`/api/dxm/category/get?category_id=${encodeURIComponent(categoryId)}`),
+    ).then((record) => {
+      if (cancelled || !record) return
+      setTargetCategoryName(categoryLabel(record))
+      setTargetCategoryMatch(record.nameEn || record.nameZh || null)
+      setTargetCategoryPath(categoryPathLabel(record))
+      setCategorySelection([null, null, record])
+    }).catch(() => {
+      if (!cancelled) setTargetCategoryName(`类目 ${categoryId}`)
+    })
+    return () => { cancelled = true }
+  }, [planOwnsTargetCategory, selectedPlan])
 
   const invalidateReaderState = useCallback((
     reason: DraftSelectionInvalidationReason,
@@ -110,6 +156,8 @@ export function DraftSelectionPage({
   ) => {
     const invalidated = invalidateDraftSelectionState(reason)
     requestSequence.current += 1
+    categoryRequestSequence.current += 1
+    confirmedHandoffRef.current = false
     setSelectedIds(invalidated.selectedIds)
     setSelectedProducts(invalidated.selectedProducts)
     selectedProductsRef.current = invalidated.selectedProducts
@@ -124,10 +172,12 @@ export function DraftSelectionPage({
     }
   }, [onTaskInputChange])
 
-  const loadShops = useCallback(async () => {
-    setShopsLoading(true)
+  const loadShops = useCallback(async (force = false) => {
     try {
-      const rawResponse = await getJson<unknown>('/api/dxm/draft-reader/shops')
+      const rawResponse = await refreshDxmShops(force)
+      if (!rawResponse) {
+        throw new Error(globalShopReadError || '店铺列表读取失败，请稍后重试。')
+      }
       const response = assertRealDraftShopsResponse(rawResponse)
       const sessionChanged = readerSessionRef.current !== null
         && readerSessionRef.current !== response.session_ref
@@ -136,61 +186,89 @@ export function DraftSelectionPage({
       }
       readerSessionRef.current = response.session_ref
       setShopsResponse(response)
-      setError(null)
-      if (sessionChanged) setNotice('真实浏览器会话已变化，原选择已清空，避免跨会话任务输入漂移。')
+      const availableShopIds = new Set(response.shops.map((shop) => shop.id))
+      const preferredShopId = globalShopId && availableShopIds.has(globalShopId)
+        ? globalShopId
+        : response.shops[0]?.id ?? ''
+      if (preferredShopId) {
+        setShopId((current) => current && availableShopIds.has(current) ? current : preferredShopId)
+        if (globalShopId !== preferredShopId) setSelectedShopId(preferredShopId)
+      }
+      if (sessionChanged) {
+        // A new reader session invalidates every prior product identity and
+        // draft handoff.  Surface it as a blocking state even if the list can
+        // be reloaded successfully afterwards; otherwise a stale confirmation
+        // could look successful during the re-render window.
+        setError('真实浏览器会话已变化，原选择已清空；请重新读取并确认任务输入。')
+        setNotice('真实浏览器会话已变化，原选择已清空，避免跨会话任务输入漂移。')
+      } else {
+        // An automatic provider re-render after a changed session must not
+        // erase the fail-closed notice.  A deliberate operator refresh is
+        // allowed to clear it only after the fresh read succeeds.
+        setError((current) => force || !current?.includes('会话已变化') ? null : current)
+      }
       return response
     } catch (caught) {
       invalidateReaderState('reader_failure', true)
       setError(humanReaderError(caught))
       return null
-    } finally {
-      setShopsLoading(false)
     }
-  }, [invalidateReaderState])
+  }, [globalShopId, globalShopReadError, invalidateReaderState, refreshDxmShops, setSelectedShopId])
 
   const loadCategoryChildren = useCallback(async (level: number, pcid: string) => {
-    const sequence = requestSequence.current + 1
-    requestSequence.current = sequence
+    const sequence = categoryRequestSequence.current + 1
+    categoryRequestSequence.current = sequence
     setCategoryLoading(true)
     try {
       const params = new URLSearchParams(pcid ? { pcid } : {})
-      const records = await getJson<DxmCategoryRecord[]>(
-        `/api/dxm/category/children?${params.toString()}`,
+      const records = await withDxmSessionBusyRetry(
+        () => getJson<DxmCategoryRecord[]>(
+          `/api/dxm/category/children?${params.toString()}`,
+        ),
       )
-      if (sequence !== requestSequence.current) return
+      if (sequence !== categoryRequestSequence.current) return
       setCategoryLevels((current) => {
         const next = [...current]
-        next[level] = records
+        // DXM may return an empty root/child page while search already gave us
+        // a verified full path.  Keep that path as the cascade source instead
+        // of turning the next selector back into a disabled empty control.
+        next[level] = records.length || !next[level].length ? records : next[level]
         return next
       })
+      setCategoryError(null)
       setCategoryLoading(false)
     } catch (caught) {
-      if (sequence !== requestSequence.current) return
+      if (sequence !== categoryRequestSequence.current) return
       setCategoryLevels((current) => {
-        const next = [...current]
-        next[level] = []
-        return next
+        // Keep a search-derived path when the optional children request is
+        // unavailable; otherwise the operator would lose the just-selected
+        // category and the cascade would fall back to search-only again.
+        return current
       })
       setCategoryLoading(false)
-      setError(humanCategoryError(caught))
+      setCategoryError(humanCategoryError(caught))
     }
   }, [])
-
-  useEffect(() => {
-    void loadCategoryChildren(0, '')
-  }, [loadCategoryChildren])
 
   const adoptTargetCategory = useCallback((
     record: DxmCategoryRecord,
     drillIntoChildren: boolean,
     level?: number,
   ) => {
-    const name = record.nameZh || record.nameEn || ''
-    const path = record.nodePath || [record.nameZh, record.nameEn].filter(Boolean).join('/')
-    setTargetCategoryId(record.categoryId)
-    setTargetCategoryName(name || null)
-    setTargetCategoryMatch(name || null)
-    setTargetCategoryPath(path)
+    const name = categoryLabel(record)
+    const path = categoryPathLabel(record)
+    // A first- or second-level click only opens the next selector.  It must
+    // never accidentally become the batch target category.  The third level
+    // (or a provider-declared leaf selected from search) is the only value
+    // eligible for the subsequent frozen snapshot.
+    const isFinalCategory = level === 2 || isLeafCategory(record)
+    setTargetCategoryId(isFinalCategory ? record.categoryId : null)
+    setTargetCategoryName(isFinalCategory ? (name || null) : null)
+    // Keep the English name as the execution hint while the visible label is
+    // always Chinese-first.  The frozen backend mapping still owns the final
+    // value written into DXM.
+    setTargetCategoryMatch(isFinalCategory ? (record.nameEn || record.nameZh || null) : null)
+    setTargetCategoryPath(isFinalCategory ? path : '')
     setCategorySelection((current) => {
       const next = [...current]
       if (level !== undefined) {
@@ -205,7 +283,7 @@ export function DraftSelectionPage({
     setCategorySearchResults([])
     onTaskInputChange(null)
     setNotice('已设置统一目标类目；整批商品将统一切换到该类目，快照预检会按目标类目必填字段把关。')
-    setError((current) => current?.startsWith('类目') ? null : current)
+    setCategoryError(null)
   }, [loadCategoryChildren, onTaskInputChange])
 
   const pickCategory = useCallback((level: number, record: DxmCategoryRecord) => {
@@ -218,15 +296,22 @@ export function DraftSelectionPage({
     setCategoryLoading(true)
     try {
       const params = new URLSearchParams({ keyword })
-      const records = await getJson<DxmCategoryRecord[]>(
-        `/api/dxm/category/search?${params.toString()}`,
+      const records = await withDxmSessionBusyRetry(
+        () => getJson<DxmCategoryRecord[]>(
+          `/api/dxm/category/search?${params.toString()}`,
+        ),
       )
       setCategorySearchResults(records)
+      // Some DXM sessions return an empty root list even though category search
+      // returns full paths.  Use those paths as a read-only cascade fallback so
+      // the operator is not forced to use search-only selection.
+      setCategoryLevels((current) => mergeCategorySearchLevels(current, records))
       setCategoryLoading(false)
+      setCategoryError(null)
     } catch (caught) {
       setCategorySearchResults([])
       setCategoryLoading(false)
-      setError(humanCategoryError(caught))
+      setCategoryError(humanCategoryError(caught))
     }
   }
 
@@ -241,6 +326,12 @@ export function DraftSelectionPage({
     nextPageNo: number,
     expectedSessionRef: string,
   ) => {
+    if (!nextShopId) {
+      setProducts([])
+      setPagination(emptyPagination)
+      setProductsLoading(false)
+      return
+    }
     const sequence = requestSequence.current + 1
     requestSequence.current = sequence
     setProductsLoading(true)
@@ -250,8 +341,10 @@ export function DraftSelectionPage({
         page_no: String(nextPageNo),
         page_size: String(pageSize),
       })
-      const rawResponse = await getJson<unknown>(
-        `/api/dxm/draft-reader/products?${params.toString()}`,
+      const rawResponse = await withDxmSessionBusyRetry(
+        () => getJson<unknown>(
+          `/api/dxm/draft-reader/products?${params.toString()}`,
+        ),
       )
       const response = assertRealDraftPageResponse(rawResponse, {
         shopId: nextShopId,
@@ -298,13 +391,38 @@ export function DraftSelectionPage({
     onTaskInputChange(invalidated.confirmedInput)
     return () => {
       requestSequence.current += 1
-      if (!confirmedHandoffRef.current) onTaskInputChange(invalidated.confirmedInput)
+      categoryRequestSequence.current += 1
+      confirmationTokenRef.current += 1
+      if (!confirmedHandoffRef.current) {
+        // React may defer a parent update issued while the child is being
+        // removed.  Apply it once immediately and once after the commit so a
+        // stale task input cannot survive a page unmount.
+        onTaskInputChange(invalidated.confirmedInput)
+        queueMicrotask(() => {
+          if (!confirmedHandoffRef.current) onTaskInputChange(null)
+        })
+      }
     }
   }, [onTaskInputChange])
 
   useEffect(() => {
+    if (globalShopSnapshot) {
+      void loadShops()
+      return
+    }
+    // First entry after a desktop restart has no cached shop snapshot.  Read
+    // it once here; subsequent pages reuse the provider result.
     void loadShops()
-  }, [loadShops])
+  }, [globalShopSnapshot, loadShops])
+
+  useEffect(() => {
+    if (!shopsResponse) return
+    const availableShopIds = new Set(shopsResponse.shops.map((shop) => shop.id))
+    const nextShopId = globalShopId && availableShopIds.has(globalShopId)
+      ? globalShopId
+      : shopsResponse.shops[0]?.id ?? ''
+    if (nextShopId && nextShopId !== shopId) changeShop(nextShopId)
+  }, [globalShopId, shopId, shopsResponse])
 
   useEffect(() => {
     if (!shopsResponse) {
@@ -315,14 +433,31 @@ export function DraftSelectionPage({
   }, [loadProducts, pageNo, pageSize, shopId, shopsResponse])
 
   useEffect(() => {
+    // The reader owns one visible browser session.  Load root categories only
+    // after the first concrete shop/product read completes so both requests
+    // cannot race and turn a valid cascade into a misleading 409 failure.
+    if (
+      !shopsResponse
+      || productsLoading
+      || categoryLoading
+      || categoryLevels[0].length
+      || categoryRootSessionRef.current === shopsResponse.session_ref
+    ) return
+    categoryRootSessionRef.current = shopsResponse.session_ref
+    void loadCategoryChildren(0, '')
+  }, [categoryLevels, categoryLoading, loadCategoryChildren, productsLoading, shopsResponse])
+
+  useEffect(() => {
     if (!planId || availablePlans.some((plan) => String(plan.id) === planId)) return
     setPlanId('')
     onTaskInputChange(null)
   }, [availablePlans, onTaskInputChange, planId])
 
   function changeShop(nextShopId: string) {
+    if (!nextShopId) return
     const nextSelection = resetSelectionForShopChange(shopId, nextShopId, selectedIds)
     setShopId(nextShopId)
+    setSelectedShopId(nextShopId)
     setPageNo(1)
     setSelectedIds(nextSelection)
     setProductSessionRef(null)
@@ -377,11 +512,23 @@ export function DraftSelectionPage({
   }
 
   async function confirmTaskInput() {
+    const confirmationToken = confirmationTokenRef.current + 1
+    confirmationTokenRef.current = confirmationToken
     setConfirming(true)
+    // A page can be reused after a Reader refresh.  Treat every new
+    // confirmation as a fresh handoff decision; never inherit a previous
+    // auto-advance marker into the next unmount lifecycle.
+    confirmedHandoffRef.current = false
     try {
-      const freshShops = await loadShops()
+      const expectedReaderSessionRef = readerSessionRef.current
+      // Confirming an input is a security boundary: it must re-read the
+      // live reader session rather than reuse the page's display snapshot.
+      const freshShops = await loadShops(true)
+      if (confirmationToken !== confirmationTokenRef.current) return
       if (
         !freshShops
+        || !expectedReaderSessionRef
+        || freshShops.session_ref !== expectedReaderSessionRef
         || !productSessionRef
         || productSessionRef !== freshShops.session_ref
         || readerSessionRef.current !== freshShops.session_ref
@@ -402,6 +549,7 @@ export function DraftSelectionPage({
         },
         productSessionRef,
       )
+      if (confirmationToken !== confirmationTokenRef.current) return
       onTaskInputChange(nextInput)
       setNotice('任务输入已形成；正在进入快照预览与冻结，本步骤没有保存、发布或任何真实写入。')
       setError(null)
@@ -412,28 +560,37 @@ export function DraftSelectionPage({
         setError(caught.message)
       } else {
         setError(humanReaderError(caught)
-          || `至少选择 ${MIN_DRAFT_SELECTION} 件草稿商品，并选择一个本地编辑方案。`)
+          || `请选择 ${MIN_DRAFT_SELECTION}–${MAX_DRAFT_SELECTION} 件草稿商品，并选择一个本地编辑方案。`)
       }
       onTaskInputChange(null)
     } finally {
-      setConfirming(false)
+      if (confirmationToken === confirmationTokenRef.current) setConfirming(false)
     }
   }
 
   async function refreshReader() {
     setNotice(null)
+    categoryRootSessionRef.current = null
+    setCategoryError(null)
     invalidateReaderState('reader_refresh', false)
-    const shops = await loadShops()
+    const shops = await loadShops(true)
     if (!shops) return
     const availableShopIds = new Set(shops.shops.map((shop) => shop.id))
-    if (shopId !== '-1' && !availableShopIds.has(shopId)) {
-      changeShop('-1')
+    if (!shopId || !availableShopIds.has(shopId)) {
+      const nextShopId = shops.shops[0]?.id ?? ''
+      if (nextShopId) changeShop(nextShopId)
       return
     }
   }
 
   return (
     <section className="draft-selection-page" aria-label="采集箱草稿选品">
+      {/* PublishGuard Banner - Permanent Warning */}
+      <div className="publishguard-banner publishguard-banner--draft" role="alert">
+        <strong>⚠ 本系统仅支持草稿保存，禁止任何发布操作</strong>
+        <p>最终发布永久禁止：立即发布、保存并发布、上线等按钮均已永久禁用。</p>
+      </div>
+
       <header className="draft-selection-hero">
         <div>
           <span className="draft-selection-eyebrow">E1 · 只读选品</span>
@@ -456,6 +613,9 @@ export function DraftSelectionPage({
             <strong>真实草稿读取已停止</strong>
             <span>{error}</span>
           </div>
+          <button className="button button--secondary" type="button" onClick={() => { void refreshReader() }} disabled={shopsLoading || productsLoading}>
+            重新读取草稿
+          </button>
           <button className="button button--secondary" type="button" onClick={onShowDxmAccess}>检查店小秘连接</button>
         </div>
       )}
@@ -466,8 +626,8 @@ export function DraftSelectionPage({
           <div className="draft-selection-toolbar">
             <label>
               <span>店铺筛选</span>
-              <select value={shopId} onChange={(event) => changeShop(event.target.value)} disabled={shopsLoading}>
-                <option value="-1">全部店铺</option>
+              <select value={shopId} onChange={(event) => changeShop(event.target.value)} disabled={shopsLoading || !shopId}>
+                {!shopId && <option value="">请先选择店铺</option>}
                 {(shopsResponse?.shops ?? []).map((shop) => (
                   <option key={shop.id} value={shop.id}>
                     {shop.name} / {shop.platform}
@@ -511,7 +671,7 @@ export function DraftSelectionPage({
                     <small>「{shopLabel}」{product.source_platform ? ` · ${product.source_platform}` : ''}</small>
                     <small className="draft-product-row__category">
                       类目：{product.category_name || `类目 ${product.category_id ?? '未知'}`}
-                      {product.category_name && product.category_id ? ` · categoryId ${product.category_id}` : ''}
+                      {product.category_name && product.category_id ? ` · 类目编号 ${product.category_id}` : ''}
                     </small>
                   </span>
                 </label>
@@ -569,8 +729,8 @@ export function DraftSelectionPage({
               <span>任务输入</span>
               <h2>{selectedCount} 件已选择</h2>
             </div>
-            <span className={`status-pill ${selectedCount >= MIN_DRAFT_SELECTION ? 'ok' : 'warn'}`}>
-              最少 {MIN_DRAFT_SELECTION} 件
+            <span className={`status-pill ${selectionCountIsWithinBatchLimit ? 'ok' : 'warn'}`}>
+              范围 {MIN_DRAFT_SELECTION}–{MAX_DRAFT_SELECTION} 件
             </span>
           </div>
 
@@ -589,7 +749,8 @@ export function DraftSelectionPage({
               </button>
             ))}
             {selectedCount > 8 && <small>另有 {selectedCount - 8} 件已选择，ID 会全部进入任务输入。</small>}
-            {selectedCount === 0 && <p>从左侧真实草稿中选择至少 {MIN_DRAFT_SELECTION} 件；选择可跨分页保留。</p>}
+            {selectedCount === 0 && <p>从左侧真实草稿中选择 {MIN_DRAFT_SELECTION}–{MAX_DRAFT_SELECTION} 件；选择可跨分页保留。</p>}
+            {selectedCount > MAX_DRAFT_SELECTION && <p>本次最多可确认 {MAX_DRAFT_SELECTION} 件，请移除多余商品后继续。</p>}
           </div>
 
           <label className="draft-selection-plan">
@@ -600,7 +761,7 @@ export function DraftSelectionPage({
                 <option key={plan.id} value={plan.id}>{'name' in plan ? `${plan.name} · v${plan.version}` : plan.template_name}</option>
               ))}
             </select>
-            <small>仅引用 local_plan_template；不会把 DXM 模板引用自动升级为执行方案。</small>
+            <small>仅引用本地普货方案；店小秘模板只用于配置参考，不会被自动升级为执行方案。</small>
           </label>
 
           {!availablePlans.length && (
@@ -610,8 +771,14 @@ export function DraftSelectionPage({
           )}
 
           <div className="draft-selection-target">
-            <span>统一目标类目（可选）</span>
-            <div className="draft-selection-target__cascade">
+            <span>{planOwnsTargetCategory ? '方案目标类目' : '统一目标类目（旧方案兼容）'}</span>
+            {planOwnsTargetCategory ? (
+              <div className="draft-selection-target__plan-owned">
+                <strong>{targetCategoryPath || targetCategoryName || `类目 ${targetCategoryId ?? ''}`}</strong>
+                <small>由普货方案固定；本次选择的全部商品都会切换到这个类目。如需更换，请编辑或新建方案。</small>
+              </div>
+            ) : <>
+            <div className="draft-selection-target__cascade" aria-label="统一目标类目三级联动">
               {[0, 1, 2].map((level) => (
                 <select
                   key={level}
@@ -648,6 +815,39 @@ export function DraftSelectionPage({
                 搜索
               </button>
             </div>
+            <small className="draft-selection-target__cascade-status">
+              {categoryLoading
+                ? '正在读取店小秘类目树，请等待当前层完成。'
+                : categorySelection[1]
+                  ? '已选择二级类目，请继续选择三级类目；只有末级类目会作为统一目标。'
+                  : categorySelection[0]
+                    ? '已选择一级类目，请继续选择二级类目。'
+                    : '先从一级类目开始逐层选择；搜索仅用于快速定位和补充。'}
+            </small>
+            <small>搜索结果会自动补全可选的三级路径；它是快速定位方式，不替代逐级选择。</small>
+            {!categoryLevels[0].length && !categoryLoading && (
+              <small className="draft-selection-target__hint">
+                一级类目暂未读取到。可重新读取三级联动，或搜索类目作为补充；搜索不是唯一选择方式。
+              </small>
+            )}
+            {categoryError && (
+              <div className="draft-selection-target__error" role="status" aria-live="polite">
+                <span>{categoryError}</span>
+                <button
+                  className="button button--quiet"
+                  type="button"
+                  disabled={categoryLoading}
+                  onClick={() => {
+                    categoryRootSessionRef.current = null
+                    setCategoryLevels([[], [], []])
+                    setCategorySelection([null, null, null])
+                    void loadCategoryChildren(0, '')
+                  }}
+                >
+                  重新读取类目
+                </button>
+              </div>
+            )}
             {categorySearchResults.length > 0 && (
               <ul className="draft-selection-target__results">
                 {categorySearchResults.map((record) => (
@@ -657,7 +857,7 @@ export function DraftSelectionPage({
                       onClick={() => adoptTargetCategory(record, false)}
                     >
                       <span>{categoryLabel(record)}</span>
-                      <small>{record.nodePath || `categoryId ${record.categoryId}`}</small>
+                      <small>{categoryPathLabel(record)} · 类目编号 {record.categoryId}</small>
                     </button>
                   </li>
                 ))}
@@ -666,18 +866,31 @@ export function DraftSelectionPage({
             {targetCategoryId && (
               <small className="draft-selection-target__picked">
                 整批将统一切换到：{targetCategoryPath || targetCategoryLabel}
-                （categoryId {targetCategoryId}）
+                （类目编号 {targetCategoryId}）
               </small>
             )}
-            <small>不选择则沿用商品当前类目；选择后快照预检按目标类目必填字段把关。</small>
+            <small>旧方案不选择时沿用商品当前类目；选择后快照预检按目标类目必填字段把关。</small>
+            </>}
           </div>
 
           <div className="draft-selection-contract">
-            <span>待复核输入</span>
+            <div className="draft-selection-contract__intro">
+              <span>待复核输入</span>
+              <small>这三项决定本次批量保存的店铺、商品范围和普货方案；确认后会进入快照校验，不会立即保存。</small>
+            </div>
             <dl>
-              <div><dt>shopId</dt><dd>{shopId}</dd></div>
-              <div><dt>productIds</dt><dd>{selectedCount} 个真实 ID</dd></div>
-              <div><dt>planId</dt><dd>{selectedPlan?.id ?? '待选择'}</dd></div>
+              <div>
+                <dt>店铺</dt>
+                <dd>{shopId ? `${shopName(shopId, shopsResponse)}（编号 ${shopId}）` : '未选择店铺'}</dd>
+              </div>
+              <div>
+                <dt>商品范围</dt>
+                <dd>{selectedCount ? `${selectedCount} 件真实草稿` : '未选择商品'}</dd>
+              </div>
+              <div>
+                <dt>普货方案</dt>
+                <dd>{selectedPlan ? planLabel(selectedPlan) : '未选择方案'}</dd>
+              </div>
             </dl>
           </div>
 
@@ -696,7 +909,13 @@ export function DraftSelectionPage({
             && (
             <div className="draft-selection-confirmed" role="status">
               <strong>任务输入已确认</strong>
-              <code>{JSON.stringify(taskInput.input)}</code>
+              <span>
+                店铺：{shopName(taskInput.input.shopId, shopsResponse)} · 商品：{taskInput.input.productIds.length} 件 · 普货方案：{selectedPlan ? planLabel(selectedPlan) : `方案编号 ${taskInput.input.planId}`}
+              </span>
+              <details>
+                <summary>查看内部绑定（排查用）</summary>
+                <code>{JSON.stringify(taskInput.input)}</code>
+              </details>
               <span>只读选品完成；下一步只预览并冻结 draft 任务，不会启动批量保存。</span>
             </div>
             )}
@@ -718,7 +937,69 @@ function paginationSummary(pagination: DxmDraftPageResponse['pagination']) {
 }
 
 function categoryLabel(record: DxmCategoryRecord) {
-  return record.nameZh || record.nameEn || `类目 ${record.categoryId}`
+  if (record.nameZh) return displayCategoryName(record.nameZh)
+  if (record.nameEn) return `未提供中文名称（${record.nameEn}）`
+  return `类目 ${record.categoryId}`
+}
+
+function planLabel(plan: Template | LocalPlanTemplate) {
+  return 'name' in plan
+    ? `${plan.name}（版本 ${plan.version}）`
+    : `${plan.template_name}（已启用）`
+}
+
+function categoryPathLabel(record: DxmCategoryRecord) {
+  const rawPath = record.nodePath || categoryLabel(record)
+  return rawPath
+    .split(/\s*(?:>|\/)\s*/)
+    .map((segment) => displayCategoryName(segment))
+    .filter(Boolean)
+    .join(' / ')
+}
+
+function displayCategoryName(value: string) {
+  const normalized = value.trim()
+  const chinese = normalized.match(/[\u3400-\u9fff][\u3400-\u9fff\s·（）()\-]*/)?.[0]?.trim()
+  if (chinese) return chinese.replace(/[()（）]/g, '').trim()
+  return normalized
+}
+
+function isLeafCategory(record: DxmCategoryRecord) {
+  return record.isleaf === 1 || record.isleaf === '1' || record.isleaf === true
+}
+
+function mergeCategorySearchLevels(
+  current: DxmCategoryRecord[][],
+  records: DxmCategoryRecord[],
+) {
+  const next = current.map((level) => [...level])
+  for (const result of records) {
+    const ids = (result.nodePathId || '').split('/').map((value) => value.trim()).filter(Boolean)
+    const names = (result.nodePath || '').split(/\s*(?:>|\/)\s*/).map((value) => value.trim()).filter(Boolean)
+    const leafId = result.categoryId
+    if (!ids.length || ids[ids.length - 1] !== leafId) ids.push(leafId)
+    if (!names.length) names.push(categoryLabel(result))
+    const offset = Math.max(0, 3 - ids.length)
+    ids.slice(-3).forEach((id, index) => {
+      const sourceIndex = names.length - ids.slice(-3).length + index
+      const name = names[sourceIndex] || (index === ids.slice(-3).length - 1 ? categoryLabel(result) : `类目 ${id}`)
+      const level = offset + index
+      if (level > 2) return
+      const existing = next[level].find((item) => item.categoryId === id)
+      const record: DxmCategoryRecord = {
+        categoryId: id,
+        nameZh: displayCategoryName(name),
+        nameEn: index === ids.slice(-3).length - 1 ? result.nameEn : undefined,
+        nodePath: names.slice(Math.max(0, sourceIndex - index), sourceIndex + 1).join(' / '),
+        nodePathId: ids.slice(0, index + 1).join('/'),
+        pcid: index > 0 ? ids[index - 1] : undefined,
+        isleaf: index === ids.slice(-3).length - 1 ? result.isleaf : false,
+        level: level + 1,
+      }
+      if (!existing) next[level].push(record)
+    })
+  }
+  return next
 }
 
 function humanCategoryError(caught: unknown) {
@@ -731,6 +1012,9 @@ function humanCategoryError(caught: unknown) {
 
 function humanReaderError(caught: unknown) {
   const message = caught instanceof Error ? caught.message : '真实草稿读取失败'
+  if (/at least 1|at most 100/i.test(message)) {
+    return `请选择 ${MIN_DRAFT_SELECTION}–${MAX_DRAFT_SELECTION} 件真实草稿商品。`
+  }
   if (/登录|会话|浏览器|店小秘/.test(message)) return message
   if (/fetch|network|failed/i.test(message)) return '本机 Reader 服务不可用；请确认后端已启动后刷新。'
   return message

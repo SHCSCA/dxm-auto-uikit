@@ -1,453 +1,321 @@
 > 由 OpenAI GPT（Codex）AI 生成/维护。
 
-# DXM MVP 竖切合同：草稿箱批量只保存
+# DXM 完整商品编辑主合同：草稿箱批量只保存
 
-**合同状态：E0 冻结基线（未宣称 `MVP_READY`，未宣称 `PROD_READY`）**
+E1–E4 的唯一产品主合同。
 
-**适用仓库：`D:\Desktop\py\dxm-auto-uikit`**
+**合同状态：2026-08-26 产品真相冻结；当前实现仍 `E3_OPEN / BLOCKED`。**
+**未宣称 `MVP_READY`，未宣称 `PROD_READY`。**
+**适用仓库：`D:\Desktop\py\dxm-auto-uikit`。**
+**上游只读：`D:\Desktop\py\DXM-TX`。**
 
-**上游只读：`D:\Desktop\py\DXM-TX`**
+本合同需要真实可见浏览器作为执行环境，draft ≥3 才能开始，只保存不发布。
 
-本文件是 DXM「草稿箱批量只保存」E1–E4 的唯一产品主合同。配套入口为
-[Gold 工作指令](CODEX-GOLD-工作指令-MVP批量只保存.md)、
-[AGENTS.md](../../AGENTS.md)、[CLAUDE.md](../../CLAUDE.md) 与
-[docs 索引](../README.md)。这些文件用于指向本合同或补充工程安全要求，不得建立第二套产品主叙事。
+本文件是产品、方案、Runner、安全和人工验收的唯一主合同。Gold、`AGENTS.md`、`CLAUDE.md`、docs 索引、架构和 runbook 只能指向或解释本合同，不得建立第二套 Path A-only、旧 `claim_only` 或 `single_save` 叙事。
 
 ---
 
-## 0. 合同裁决与用词
+## 0. 裁决与不可混淆的三层真相
 
 ### 0.1 冲突顺序
 
-发生冲突时必须按以下顺序让步：
+发生冲突时依次服从：最终零发布、数据正确和真实证据 → 当前代码/测试/运行事实 → 本合同 → 指定原型体验 → 功能完整 → 速度。
 
-1. **零发布与真实证据**；
-2. **当前代码、测试和运行事实**；
-3. **本 MVP 合同一致性**；
-4. **指定根原型的体验一致性**；
-5. **功能完整**；
-6. **速度**。
+### 0.2 三层真相
 
-安全要求只能收紧，不能被产品体验或交付速度放宽。拿不准是否会形成真实写入、重复写入或发布时，必须 fail-closed：拒绝执行、保留现场、进入人工核对。
+| 层 | 回答的问题 | 当前裁定 |
+|---|---|---|
+| 产品范围 | 完整可交付产品必须做什么 | 视频、翻译、批发、半托管、回滚全部 `REQUIRED_CAPABILITY / ALWAYS_ON` |
+| 运行时成熟度 | 当前代码实际接到哪里 | 未接线或证据不足的必需能力阻断产品放行，不得改称可选 |
+| 当次授权 | 当前允许执行什么真实动作 | 由快照、人工批准、JIT、lease、queue 和 ledger 精确限定 |
 
-### 0.2 规范词
+“产品必须具备”不等于“当前已经实现”。聚焦测试、空 executor、配置面板或历史 Path A canary 都不能把未完成能力写成已交付。
 
-| 词 | 约束 |
-|---|---|
-| **必须 / 只允许 / 不得 / 禁止** | 硬合同；违反即失败 |
-| **建议** | 可替换为更优实现，但交付记录必须写理由与等价证据 |
-| **真实** | 来自当次真实可见店小秘会话、当前任务、当前页面与可核对证据 |
-| **批次** | 一次任务中由人工确认的 `draft` 商品 id 队列，MVP 人工验收数量至少 1 |
-| **只保存** | 只触发店小秘文案精确为「保存」的 UI 动作；不发布、不移入待发布 |
+### 0.3 最新产品裁决
 
-### 0.3 当前冻结范围
-
-- 当前只冻结 E0–E4；一次只实施一个 Epic。
-- MVP 执行路径仅为 **Path A**：不参与半托管，草稿商品编辑后只保存。
-- Path B / `editFromSmt` 仅标记为**后续阶段 / 运行拒绝**，不得成为 E1–E4 的可执行任务、默认选项或成功分支。
-- `claim_only` 是历史受控能力，**claim_only 非前置**；本 MVP 的输入直接来自店小秘采集箱 `dxmState=draft`。
-- 现有 `single_save` 可被复用为实现原语，但其历史证据、授权和 READY 结论不得扩大为批次证据或批次授权。
+- 每件商品必须无条件执行：产品视频、一键翻译、批发配置、半托管双阶段和 rollback preparation。
+- 不允许由方案关闭，不允许 `SKIPPED_BY_FROZEN_PLAN`，不允许以继承原值、空操作或 Path A 降级冒充完整成功。
+- rollback preparation 指每件商品都持久化 preimage、建立恢复计划并验证可恢复性；真正 restore 只在保存派发前的安全失败时触发。
+- 完整产品成功路径固定为 **Path B**。Path A 只保留为底层诊断/canary，不得产生产品完成、`MVP_READY` 或 `PROD_READY`。
+- Path B 中精确识别的中间“继续发布”允许受控自动化；它必须是进入 `editFromSmt` 的特定中间动作，不得解除最终发布禁令。
+- 半托管资格不由本系统预判。点击顶部精确“保存”出现半托管提示后，再点击可见“编辑半托管信息”，由店小秘自身执行原生资格检查；系统不得主动调用 `verifyPopChoiceShop`，不得用店铺类型、类目、catalog、模板或历史结果推断资格。提示 Modal 不足以证明第一次 SAVE 已完成；当前不能断言哪个点击触发 SAVE1，因此两者均按可能写动作防护。实际 SAVE1 与门 outcome 必须各自验证并因果绑定同一握手，但不要求还原二者墙钟全序。
 
 ---
 
-## 1. 产品定义、用户与边界
+## 1. 产品定义与边界
 
 ### 1.1 一句话定义
 
-运营人员在 DXM 控制台连接一个**真实可见浏览器**会话，通过只读接口取得店铺与采集箱草稿，人工多选 **draft ≥1**，选择并确认方案快照，然后由同一受控 runner 串行执行 `batch_draft_save`：逐品在真实店小秘编辑页用 UI 填写并点击精确「保存」，通过 HVD 查看同源进度，并可开始、暂停、继续或停止；任何发布动作永久禁止。
+运营人员在中文工作台连接同一个真实可见店小秘会话，从当前 `pageList(dxmState=draft)` 选择至少 3 件商品，按动态叶子类目、真实 Schema 和模板配置完整方案并冻结；同一受控 Runner 逐件完成普通编辑、视频、批发、翻译、半托管两阶段填写和两次精确保存，通过 HVD 控制并收集每阶段三铁证，最终始终保持未发布。
 
-### 1.2 核心用户结果
+### 1.2 “只保存”与中间动作
 
-1. 用户看到的店铺、草稿、模板和执行状态都来自后端或真实会话，而非前端自造成功态。
-2. 用户在开始前能审阅商品范围、方案、差异字段、风险和不可变快照。
-3. 用户在执行中能看到当前商品、当前步骤、证据状态和剩余队列。
-4. 每个商品的成功或异常独立记录；批次汇总不能掩盖单品事实。
-5. 用户可以在 UNKNOWN 或其它异常后人工对账，而系统不会自动重复点击。
+本产品允许两次受控草稿保存：主编辑页的精确“保存”，以及 `editFromSmt` 半托管页的精确“保存”。最终“发布”“立即发布”“保存并发布”“保存并移入待发布”“上线”及任何 online/release 意图永久禁止。
 
-### 1.3 本 MVP 不做
+主保存意图之后的半托管入口包含两个不同动作，不得合并：
 
-- 不采集、不认领新商品；只处理已经出现在 `pageList(draft)` 的商品。
-- 不执行 Path B、`editFromSmt`、半托管页保存或任何「继续发布」动作。
-- 不执行发布、立即发布、保存并发布、保存并移入待发布、上线、release/online 等动作。
-- 不以 headless 或后台 HTTP 写接口替代可见浏览器 UI 写入。
-- 不做无人值守真实写入，不新建第三套 runner，不在 DXM-TX 建生产后端。
-- 不把 HTML 原型、mock、历史 `single_save`、离线测试或接口观察目录当作真实批量成功证据。
+1. `OPEN_SEMI_MANAGED_EDITOR`：精确点击当前主保存意图 Modal 中可见的“编辑半托管信息”。点击后由店小秘自身检查能否进入半托管界面；系统只观察平台裁决，不建立另一套资格判断器。该点击也可能位于实际 SAVE1 派发的因果链上，必须继续由 ledger/网络事实观察，不能按按钮文案猜测。
+2. `SEMI_MANAGED_CONTINUE_TRANSITION`：只有原生门放行、实际 SAVE1 三铁证已闭合且两者因果绑定同一入口握手后，若出现已实证的特定后续 Modal，才允许点击其中的“继续发布”以进入 `editFromSmt`。
 
----
+`FIRST_SAVE_INTENT` 与 `OPEN_SEMI_MANAGED_EDITOR` 都必须在 snapshot 中冻结 `MAY_DISPATCH_SAVE1` possible effect。前者在点击顶部“保存”前消费唯一 FIRST_SAVE lease 并开启 ledger；后者消费独立 action grant，同时事务化复核同一 `entry_handshake_id/FIRST_SAVE command`，其 phase 只允许 `IN_FLIGHT` 或 `SAVE_VERIFIED_AWAITING_GATE`。任一点击前未落 `MAY_HAVE_DISPATCHED`、任一点击后崩溃却恢复成写前失败、或为同一 FIRST_SAVE 再签第二张 lease，均属于安全违规。所有观察到的 SAVE mutation request 必须逐条绑定 request hash、causal action 与 ledger；未证明为平台幂等同一次保存时，物理请求数大于 1 必须 UNKNOWN，不得按相同 command id 静默合并。
 
-## 2. 权威来源与真相分层
+中间“继续发布”不是泛化白名单。只有同时满足以下条件才允许自动化：
 
-### 2.1 产品与工程来源
+- 当前路径冻结为 Path B；
+- 当前 Modal、主保存意图、商品、页面、任务、SAVE 授权因果链和 action grant 精确绑定；
+- 店小秘原生半托管门已明确放行；
+- 实际 SAVE1 三铁证已闭合，且与原生门 outcome 因果绑定同一入口握手；
+- action kind 为独立 `SEMI_MANAGED_CONTINUE_TRANSITION`；
+- 预期目标严格为正式 HTTPS `editFromSmt` 页面；
+- 请求范围与上游观察的中间转换相符；
+- 动作时重新经过 JIT 和 mutation ledger；
+- 未命中任何最终发布/上线状态。
 
-| 来源 | 角色 | 可否直接授权执行 |
-|---|---|---|
-| 本文件 | E1–E4 唯一产品主合同 | 否；仅定义范围与 DoD |
-| Gold 工作指令 | Epic 顺序、报告格式与硬禁止 | 否 |
-| `AGENTS.md` / `CLAUDE.md` | 仓库结构、安全门禁、runner 与命令 | 否 |
-| `DXM-TX/docs/01-产品与混合架构.md` | 读接口 / 写 UI 的架构真相 | 否 |
-| `DXM-TX/docs/02-编辑页执行与填写手册.md` | 编辑页 UI 写入与三铁证 | 否 |
-| `DXM-TX/docs/03-半托管全流程操作手册.md` | 字段和 Path A/B 观察参考 | 否；Path B 被本合同覆盖 |
-| `DXM-TX/docs/api/店小秘-*.md` | 当前只读接口、模板、草稿列表与缺口 | 否 |
-| DXM-TX 根原型 | 信息架构、布局、文案、组件和交互状态 | 否；其 mock/Path B 不进入运行 |
+任一条件不成立时 PublishGuard 拒绝。
 
-### 2.2 PASSIVE_ONLY 边界
+店小秘明确拒绝进入时必须按最终保存事实区分：已证明 SAVE1 未派发则 `outcome_code=semi_entry_rejected_main_not_saved`；SAVE1 三铁证已闭合则 `outcome_code=semi_entry_rejected_main_saved` 并保留部分保存事实、要求人工复核。SAVE1 最终事实、裁决结果或同一握手因果绑定不确定时 `execution_state=unknown`。三者都立即停批，不得自动再次点击、执行第二次 SAVE 或降级 Path A。
 
-DXM-TX 的四份 `DXM-*.md` 大文档是被动观察审计产物。即使其中目录为 `ready=true`、字段为 `VERIFIED` 或结构已经收敛，所有端点仍按 `PASSIVE_ONLY` 处理：
+### 1.3 本产品不做
 
-- `PASSIVE_ONLY` **不得自动升级为生产重放**；
-- `STRUCTURAL_CANDIDATE` 不等于已验证 UI 语义；
-- 被动观察到请求不等于获得主动调用、真实写入或批次授权；
-- E1 如需使用只读接口，仍须建立本仓显式白名单、请求键校验、响应漂移与失败降级合同。
-
-### 2.3 事实优先
-
-- 文档描述与当前代码/测试冲突时，记录冲突，不伪称已实现。
-- 历史 READY 仅对其 commit、包、证据范围和时间窗口有效。
-- 当前 P0 红基线（TS18048、批次测试循环导入）是 E1 前门禁，不在 E0 内修复。
+- 不采集、不认领新商品；`claim_only 非前置`。
+- 不以 headless、HTML mock、后台写 API 或历史抓包替代真实可见 UI。
+- 不直调店小秘写接口作为保存实现；写接口只可作为动作回包证据。
+- 不使用中文标签、动态 DOM 序号、隐藏字段或模糊按钮作为单一执行身份。
+- 不允许无人值守真实写入；不得存在第二个拥有队列、任务状态迁移、HVD 或写派发权的 Runner/Runtime。
+- 不把本地 catalog、原型数据、旧 package、单测或历史 READY 当当前页面真相。
 
 ---
 
-## 3. MVP 端到端竖切
+## 2. 权威来源与上游边界
 
-### 3.1 主链路
+| 来源 | 作用 |
+|---|---|
+| 本文件 | 唯一产品范围、顺序、安全和 DoD |
+| [DXM-TX 上游事实合同](../integration/DXM-TX-上游事实合同.md) | 接口、页面和证据分层 |
+| [类目节点与目录合同](../integration/DXM-TX-类目节点与目录合同.md) | 动态类目、叶子身份、catalog 和漂移 |
+| [当前运行时架构](../architecture/当前运行时架构.md) | 当前代码事实与成熟度 |
+| [操作与验收手册](../runbook/操作与验收手册.md) | 当前可执行命令和人工步骤 |
+| DXM-TX 根原型 | IA、布局、文案和交互参考；mock 不是运行事实 |
+
+上游私有接口、字段目录和抓包事实可能漂移。`PASSIVE_ONLY` 不得自动升级为生产重放；`SAMPLE_ONLY` 不得冒充通用 Schema。读接口必须有本仓白名单、请求合同、响应规范化、账号/会话作用域和漂移门禁。
+
+经 2026-08-25 授权，本仓只迁入 `DXM-TX/data/capture/categories` 中的纯类目结构，并生成脱敏 catalog。Cookie、sessions、storage state、账号、店铺、商品、模板内容和业务 raw 仍禁止迁移。
+
+---
+
+## 3. 完整端到端主流程
+
+### 3.1 批次流程
 
 ```text
-真实可见浏览器登录
-  → 【只读接口】读取真实店铺
-  → 【只读接口】pageList(dxmState=draft) 分页/按店过滤
-  → 控制台人工多选 draft（MVP 验收 ≥1）
-  → 选择 local_plan_template + dxm_template_ref
-  → 预览并确认不可变 plan snapshot
-  → 创建 mode=batch_draft_save 的单一批次任务
-  → runner 串行逐品执行 Path A
-      打开真实编辑页
-      → 模板优先，按规则补差
-      → 按中文字段映射写入英文自然语言内容并完成保存前校验
-      → PublishGuard 前置/保存前/动作时复核
-      → UI 点击精确「保存」
-      → 回包 + 页面成功态 + 独立未发布证明
-  → 结果页逐品显示事实与证据
+统一 RuntimeTruth
+  → 真实账号/店铺/Reader
+  → 动态类目目录与目标叶子
+  → pageList(draft) 当次多选 draft ≥3
+  → Schema/模板/能力同步
+  → 完整方案 preview
+  → 不可变 plan_snapshot + ordered item_snapshots
+  → 人工批准 batch_draft_save
+  → Runner 串行逐商品
+      页面/商品/源类目核验
+      → 持久化 preimage + rollback plan
+      → 必要时切换目标叶子并重读 Schema
+      → 普通编辑分区填写
+      → 产品视频（必经）
+      → 批发/SKU 商业规则（必经）
+      → 一键翻译（必经）
+      → 全字段精确读回
+      → 启用半托管
+      → 主保存意图 + 精确绑定半托管提示 Modal
+      → 精确点击“编辑半托管信息”
+      → 店小秘原生资格检查；按真实事件闭合实际第一次 SAVE + 三铁证
+      → 建立 SAVE1 verified + gate admitted + same-handshake causal join
+      → 必要时受控中间“继续发布”
+      → 精确进入 editFromSmt
+      → 仅在 entry-handshake joined + page bound 同时成立后继续
+      → 国家/货品/变种/物流填写与读回
+      → 半托管第二次受控保存 + 三铁证
+      → 独立未发布证明
+  → HVD、结果、审计和人工对账
 ```
 
 ### 3.2 读写分治
 
-- **读路径：只读接口优先。** 店铺、draft 列表、编辑页当前值、模板索引和类目 schema 应来自已登录会话内的受审阅只读接口；漂移或鉴权失败必须显式失败或标注降级置信度。
-- **写路径：UI 写。** 字段填写、模板引用和保存只通过真实可见页面的 UI 仿真完成。
-- **写接口仅作证据。** 可以观察保存回包判定结果，但不得把直调 `add.json` 作为主保存实现。
-- **模板优先补差。** 先引用店小秘已有模板，再对标题、SKU、货值、包装等差异字段按快照规则补齐；不得在运行中临时改变类目、品牌、是否发布或方案。
-- **语言边界。** 中文只用于操作界面、字段映射和人工说明；自动写入的自然语言内容只允许英文，且必须在点击「保存」前完成读回校验。
+- 店铺、draft、编辑快照、类目、Schema、模板和能力使用当前登录会话内的受审阅只读接口。
+- 类目 catalog 只用于搜索、展示、预览参考和漂移检测；当前可见页面类目和实时 Schema 才是写前执行权威。
+- 字段、模板、视频、翻译、批发、半托管和保存均通过真实可见 UI 写。
+- 分页面、分阶段完成全量零写预检：主编辑页首写前完成 11 区、ContentFinalize 和半托管启用控件预检；店小秘原生门放行并进入 `editFromSmt` 后，在半托管页首写前完成 S1–S3 全量预检。后置字段不合法时不得先写同一页面的前置字段；不得用第一次 SAVE 前的推测代替第二页真实检查。
+- 模板优先补差，运行时不得临时改变冻结目标值。
 
-### 3.3 批次粒度
+### 3.3 每件必经能力
 
-- 任务输入必须绑定当前用户确认的店铺范围、`productIds[]`、方案快照、会话和审批上下文。
-- `productIds[]` 必须来自当次 `pageList(draft)` 读回；不得由 mock、历史样例或手写真实业务 id 注入。
-- MVP 人工验收要求多选至少 1 个商品；实现与测试不得硬编码为恰好 1。
-- 批次默认逐品串行，单品完成并落证据后才推进下一品。
-- 单品失败的继续策略必须由错误分类预先定义；`UNKNOWN` 一律停批。
-
-### 3.4 中文界面、中文字段映射与英文写入
-
-**产品自身使用中文界面与中文字段映射；自动写入的自然语言内容必须为英文，并在保存前校验，未通过时不得点击「保存」。**
-
-- 产品导航、按钮、状态、错误、风险提示和人工验收说明使用中文；店小秘第三方页面的原始文案不由本产品改写。
-- 中文字段映射以可审阅表表达 `ui_label_zh → field_key → category_schema_path → UI binding`。中文标签只供操作者识别，不得单独充当执行主键或脆弱文本选择器。
-- 类目 Schema 必须标记哪些字段属于 `natural_language`。本产品自动写入这些字段时，快照固定 `expected_language=en`；标题、描述、卖点、自由文本属性等均适用，数字、枚举、标识符和不可翻译专名按 Schema 的非自然语言规则处理。
-- 保存前校验必须针对本次自动写入值做 UI 读回，至少验证必填非空、Schema 约束、`detected_language=en` 且不含 Unicode Han 字符；检测为 `UNKNOWN`、中英文混杂、读回不一致或约束失败时，按已知前置失败停止该商品，且不得派发保存动作。
-- 语言检测结果、字段映射版本/hash 和逐字段校验结果进入单品证据；运行时不得因页面标签、语言检测器或映射的新版本而静默改写已冻结任务。
+| 能力 | 必经结果 | 不可用时 |
+|---|---|---|
+| 视频 | 真实生成/选择、投放、视频身份和字段读回 | 首个 SAVE 前 fail-closed；生成派发后未知则 UNKNOWN |
+| 批发 | 真实控件、起订/折扣/扣减、价格货值库存关系和读回 | 首个 SAVE 前 fail-closed |
+| 翻译 | 所有允许自然语言字段翻译、before/after、英文和越界校验 | 首个 SAVE 前 fail-closed |
+| 半托管 | 主保存意图、`OPEN_SEMI_MANAGED_EDITOR`、店小秘原生门、实际主编辑 SAVE、必要的受控转换、`editFromSmt` 填写、第二次 SAVE | 不做本地资格预检；SAVE1 与门结果分别取证，平台拒绝按是否已保存分类，不确定均停批，不得降级 Path A |
+| 回滚 | preimage、恢复计划、可恢复性预检；失败时逆序恢复 | 不可证明恢复则停止；派发后未知不自动补偿 |
 
 ---
 
-## 4. 数据模型与不可变快照
+## 4. 类目、模板与方案
 
-### 4.1 模板模型必须分离
+### 4.1 动态类目
 
-禁止把本地方案模板和店小秘模板引用揉成一个含糊对象。
+- 类目树任意深度，不得固定三级。
+- 只有 `isleaf=1` 且 catalog `executableLeaf=true` 的节点可成为目标。
+- `categoryId` 是执行身份；`nodePath` 和中文名只显示。
+- 搜索结果必须通过 getById 和祖先链重建，并支持路径 ↔ 叶子 ID 双向映射。
+- snapshot 同时冻结源类目、目标类目、node identity、catalog hash、Schema hash 和 capability hash。
+- 切类目后、写任何字段前重新读取当前页面 `categoryId` 和 Schema；漂移立即停止。
 
-#### `local_plan_template`
+### 4.2 模板模型
 
-产品侧可编辑、可版本化的规则模板，至少包含：
+`local_plan_template` 与 `dxm_template_ref` 必须分离。本地模板持有运营规则、固定值、补差和必经能力配置；店小秘模板引用只持有稳定 id、店铺/类目作用域、来源时间和 hash。运行时不得重新读取“最新模板”后改变冻结目标值。
 
-- 本地模板 id、版本、名称与适用店铺/类目约束；
-- Path A 固定值；
-- 包装重量/尺寸、货值规则、英文内容策略等补差规则；
-- 对各 `dxm_template_ref` 的引用；
-- 缺失字段、校验策略和异常策略；
-- 创建/更新时间与来源说明。
+冻结解析优先级：明确 fixed → 明确 fill → 已批准 `dxm_template_ref` → 当前商品值 → unresolved（fail-closed）。“当前值已非空”不能吞掉人工补差。
 
-#### `dxm_template_ref`
+### 4.3 中文界面与英文内容
 
-对店小秘现有模板的只读引用，至少包含：
+产品自身使用中文界面与中文字段映射；自动写入的自然语言内容必须为英文，并在保存前校验，未通过时不得点击“保存”。
 
-- 稳定类型（产品、属性、变种、运费、服务、尺码等）；
-- 店小秘模板 id；
-- `shopId`、`categoryId` 等适用作用域；
-- 观察到的显示名仅用于人类确认，不作为执行主键；
-- 最近同步时间、来源接口、可用性/漂移状态。
+- `ui_label_zh → field_key → schema_path → stable binding` 必须可追溯。
+- 中文标签不能单独作为执行主键。
+- 翻译位于所有自然语言生成之后，只允许修改冻结白名单内的自然语言字段。
+- 标题、描述、无线描述和自由文本属性逐字段读回，校验非空、Schema、英文和内容边界。
+- ID、枚举、URL、SKU 结构和纯数字不得进入翻译目标。
 
-`dxm_template_ref` 不复制模板写接口，不等于允许程序修改店小秘模板。
+---
 
-### 4.2 `plan_snapshot`
+## 5. 不可变 plan snapshot
 
-开始批次前必须从当前 `local_plan_template` 和已解析的 `dxm_template_ref` 生成不可变 `plan_snapshot`。最低字段：
+每件商品的 `item_snapshot` 至少冻结：
 
 ```yaml
-schema: dxm_batch_draft_save_plan.v1
+schema: dxm.full_product_edit_plan.v1
 mode: batch_draft_save
-path: A
-shop_scope: "当前确认范围"
-product_ids: ["来自当次 draft 读回"]
-local_plan_template:
-  id: "..."
-  version: "..."
-dxm_template_refs:
-  - type: "freight|service|product|attribute|variation|size"
-    id: "..."
-    shop_id: "..."
-    category_id: "..."
-fill_rules: {}
-item_snapshots:
-  - product_id: "..."
-    shop_id: "..."
-    categoryId: "..."
-    category_schema:
-      normalized_schema: {}
-      schema_hash: "sha256"
-    field_mapping:
-      mapping_version: "..."
-      mapping_hash: "sha256"
-      entries:
-        - ui_label_zh: "中文字段名"
-          field_key: "stable_field_key"
-          category_schema_path: "$.properties..."
-          ui_binding: "reviewed_binding_id"
-    required_fields:
-      - field_key: "stable_field_key"
-        required_when: "normalized condition"
-        constraints: {}
-    resolution_result:
-      resolved_fields:
-        - field_key: "stable_field_key"
-          source: "current|local_plan_template|dxm_template_ref|derived"
-          source_ref: "id@version"
-          resolved_value: "..."
-          natural_language: true
-          expected_language: "en"
-      unresolved_fields: []
-      resolution_hash: "sha256"
-evidence_policy: three_proofs
-failure_policy:
-  unknown: stop_batch
-publish_allowed: false
-snapshot_hash: "sha256"
+executionPath: B
+mandatoryCapabilities:
+  video: true
+  translation: true
+  wholesale: true
+  semiManaged: true
+  rollbackPreparation: true
+accountContextHash: sha256
+sessionGeneration: "..."
+shopId: "..."
+productId: "..."
+queuePosition: 1
+sourceCategory:
+  categoryId: "..."
+  nodeIdentitySha256: sha256
+targetCategory:
+  categoryId: "..."
+  nodeIdentitySha256: sha256
+  catalogSha256: sha256
+targetSchema:
+  normalizedSchema: {}
+  schemaSha256: sha256
+targetCapabilities:
+  capabilitiesSha256: sha256
+requiredFields: []
+fieldMapping: {}
+resolutionResult: {}
+videoPlan: {}
+wholesalePlan: {}
+translationPlan: {}
+semiManagedPlan: {}
+rollbackPolicy: {}
+evidencePolicy: two_stage_three_proofs
+publishAllowed: false
+snapshotHash: sha256
 ```
 
-**`plan_snapshot` 必须为每件商品冻结 `categoryId`、类目 Schema/hash、必填字段及解析结果；多类目配置不得在执行时临时变化。**
+`plan_snapshot` 必须为每件商品冻结 `categoryId`、类目 Schema/hash、必填字段及解析结果；多类目配置不得在执行时临时变化。
 
-- `item_snapshots[]` 与 `product_ids[]` 必须一一对应；每件商品独立绑定 `product_id`、`shop_id`、`categoryId`，不得从同批另一类目借用配置。
-- `category_schema.normalized_schema` 保存创建任务时已规范化的完整类目 Schema；`schema_hash` 是对其确定性序列化结果计算的 SHA256。必填字段集合、条件必填规则、约束及依赖必须从这份 Schema 解析并冻结。
-- `field_mapping` 冻结该商品的中文字段映射版本、hash 和映射条目；`resolution_result` 冻结每个目标字段的最终解析值、来源及版本、语言策略、未解析字段和解析 hash。存在未解析必填字段时不得创建可执行任务。
-- 顶层 `snapshot_hash` 必须覆盖全部 `item_snapshots` 及其嵌套 Schema、映射、必填字段和解析结果，不得仅覆盖模板 id 或商品 id。
-- `plan_snapshot` 创建后不可原地修改；方案变更必须创建新版本和新批次。
-- runner、HVD、日志、结果与证据必须引用同一个任务 id、快照 hash、商品 id 和队列位置。
-- runner 开始每件商品前只允许读回当前 `product_id`、`shop_id`、`categoryId` 与类目 Schema 并同冻结值/hash 做一致性核验；不一致时必须在任何字段写入前 fail-closed，不得用当前“最新”配置修补快照。
-- 执行、暂停/继续和恢复均不得重新解析“最新方案”、最新模板、最新类目 Schema、最新必填字段或最新字段映射；只能继续使用任务创建时的逐商品解析结果。
-
-### 4.3 批次与单品状态
-
-建议状态必须至少表达：
-
-```text
-batch: DRAFT → APPROVED → RUNNING ↔ PAUSED → COMPLETED
-                              ├→ STOPPING → STOPPED
-                              ├→ FAILED
-                              └→ UNKNOWN_RECONCILIATION
-
-item: QUEUED → RUNNING → SAVED
-                    ├→ FAILED_KNOWN
-                    └→ UNKNOWN
-```
-
-状态转换必须后端持久化并与 worker ack 对齐；前端按钮状态不是执行事实。
+- 五项 mandatory capability 任一为 false、缺失或不可执行，不得创建可执行任务。
+- `product_ids[]`、`item_snapshots[]` 和 job 顺序必须完全一致。
+- snapshot 创建后不可修改；方案、目录、模板、Schema 或代码身份变化要创建新版本并重新批准。
+- Runner 只能消费冻结 `resolutionResult` 和 execution payload，不能临时重算。
 
 ---
 
-## 5. 安全、控制与证据合同
+## 6. 安全、证据与就绪
 
-### 5.1 PublishGuard
+### 6.1 MVP_READY
 
-`PublishGuard` 是不可移除、不可绕过的硬门禁，至少在任务开始前、每品保存前和实际点击时复核：
+`MVP_READY` 只表示真实用户在同一可见店小秘会话完成完整产品主流程：
 
-- 目标域、会话、精确页面与商品绑定；
-- 当前动作文本必须精确为「保存」；
-- 可见按钮、弹窗、URL、请求意图不得命中发布类信号；
-- `publish_allowed` 恒为 `false`；
-- 命中「发布 / 立即发布 / 继续发布 / 保存并移入待发布 / save_and_publish / release / online」等信号必须拒绝。
+- 当次 `pageList(draft)` 多选 `draft ≥3`；
+- 每件均完成目标叶子、完整配置和不可变 plan snapshot；
+- 每件均真实完成视频、批发、翻译、rollback preparation 和 Path B；
+- 每件均完成两次受控保存及对应证据；
+- HVD 与 runner 同源，并与 worker、ledger、报告同源；
+- 开始 / 暂停 / 继续 / 停止有真实 worker ack；
+- 全批次没有最终发布动作；
+- 任一 UNKNOWN 会停批且不得自动重试。
 
-禁止通过放宽断言、改阈值、跳过门禁、mock 被测对象或仅靠前端禁用来满足 DoD。
+Path A 成功、单商品成功、任一能力跳过、mock、空 executor、单测或文档通过都不等于 `MVP_READY`。
 
-### 5.2 三铁证
+### 6.2 PROD_READY
 
-每个商品只有同时具备以下事实才可标记 `SAVED`：
+`PROD_READY` 还要求固定源码、同源 portable、完整 L0、包级 smoke、崩溃恢复、对账、长期证据、权限和生产运维门禁。固定关系：**`MVP_READY ≠ PROD_READY`**。
 
-1. **保存回包成功**：与当次 UI 点击相关联的保存请求为允许的保存端点、方法正确、HTTP 成功、业务码成功；
-2. **页面成功态**：真实页面出现可核对的编辑保存成功态；
-3. **独立未发布证明**：通过独立读回/状态证明商品仍未发布；“没有观察到发布请求”不能替代本证据。
+### 6.3 三铁证与两阶段保存
 
-固定口径：**回包 + 页面成功态 + 独立未发布证明，三缺一不可。**
+每一次 SAVE 都必须具备：预期请求的业务成功回包、同一商品/动作的页面成功态、独立读回证明没有进入最终发布状态。主页面提示 Modal 只证明保存意图，不属于三铁证；实际 FIRST_SAVE 请求无论发生在“保存”点击后还是原生入口握手中，都必须归入同一 SAVE1 command/ledger/receipt，并在半托管页首写前完成三铁证。
 
-证据必须绑定任务 id、item id、plan snapshot hash、运行时/会话、时间、动作 id 和当前 Git 身份。HTML 模拟日志、原型结果表或历史单品报告均不满足。
+回包 + 页面成功态 + 独立未发布证明，三缺一不可。主编辑 SAVE 与半托管 SAVE 分别建立 command、JIT、lease、ledger、ActionResult 和 receipt，不得用第二次证据补第一次。
 
-### 5.3 UNKNOWN 停批
+### 6.4 UNKNOWN 停批
 
-- 发送保存动作后，如果无法确认是否成功，不得归类为普通失败，不得自动重试。
-- mutation ledger 中未闭合的派发、超时、断线、页面丢失或回包/页面/读回冲突必须进入 `UNKNOWN`。
-- 固定策略：**UNKNOWN 停批**，隔离当前商品，保留证据和页面现场，剩余队列不再派发，转人工对账。
-- 人工对账前禁止通过重启、换 runtime、继续按钮或重新创建相同动作来再次点击。
-
-### 5.4 开始 / 暂停 / 继续 / 停止
-
-四键必须作用于真实 batch runner，并由后端状态与 worker ack 证明：
-
-| 控制 | 合同 |
-|---|---|
-| 开始 | 完成审批、快照冻结和门禁后才创建/派发队列 |
-| 暂停 | 停止派发下一安全动作；等待 worker ack 后才显示已暂停 |
-| 继续 | 从已持久化安全点和原快照继续；不得重复已完成写动作 |
-| 停止 | 进入 STOPPING，安全收敛当前动作；不再派发新商品，最终 STOPPED 或 UNKNOWN |
-
-暂停/停止不能粗暴中断一个已派发但结果未知的保存；这种情况必须按 UNKNOWN 处理。
-
-### 5.5 HVD 同源
-
-HVD 与 runner 同源，至少投影以下后端事实：
-
-- 任务/批次 id、当前商品序号和总数；
-- 当前商品稳定标识（脱敏展示）；
-- 当前 runner step、状态和 worker ack；
-- plan snapshot hash；
-- 三铁证各自状态；
-- 暂停/继续/停止状态；
-- UNKNOWN / 人工接管提示。
-
-禁止用前端计时器、预制步骤或本地数组独立推进 HVD。
-
----
-
-## 6. 双就绪与发布口径
-
-### 6.1 `MVP_READY`
-
-`MVP_READY` 只表示本合同的最小竖切已经由人使用真实店小秘会话验收：
-
-- **最终人工验收必须从当次 `pageList(draft)` 读回并多选 `draft ≥3`；**开发切片可以先支持 ≥1，但不得用单品或 mock 结果替代三商品验收。
-- [ ] 真实可见浏览器登录成功，且身份/会话/当前 Git 可核对；
-- [ ] 只读接口拉取真实店铺与 `pageList(draft)`，人工多选 ≥1；
-- [ ] Path A 的 `local_plan_template` 与 `dxm_template_ref` 可审阅；
-- [ ] 任务携带不可变 plan snapshot 与 hash；
-- [ ] `batch_draft_save` 在同一受控 runner 中逐品串行；
-- [ ] HVD 与 runner/日志/证据同源；
-- [ ] 开始、暂停 ≥10 秒、继续、停止在真实任务上有 worker ack；
-- [ ] 至少 1 品各自具备三铁证，结果页可逐品核对；
-- [ ] UNKNOWN 样例或可执行合同证明会停批且不自动重试；
-- [ ] PublishGuard 全程有效，零发布动作，独立未发布证明齐全。
-
-只有人工完成 §11 并签字后，才可在对应验收记录中标注 `MVP_READY`。E0 文档完成、单测通过、mock 演示、单品成功或本清单存在，都不等于 `MVP_READY`。
-
-### 6.2 `PROD_READY`
-
-`PROD_READY` 是后置生产硬化口径，可能包括 portable 与当前 HEAD 同一构建、fresh L2/L3、审批租约、mutation ledger、状态一致性、包级 smoke、恢复/对账和更完整场景。
-
-固定关系：**`MVP_READY ≠ PROD_READY`**。
-
-- 未达到 `PROD_READY` 不应否定一个已经按本合同验收的 MVP 竖切；
-- 达到 `MVP_READY` 也不得宣称 production、全局 READY、无人值守、Path B 或发布可用；
-- 历史 `READY` / `controlled_single_save_only` 不得替代二者。
+保存、视频生成或受控中间转换派发后，若结果不确定、证据冲突、断线、超时、页面丢失或重启，必须令 `execution_state=unknown` 且 `manual_review_required=true`；UNKNOWN 停批且不得自动重试。
 
 ---
 
 ## 7. E0–E4 Definition of Done
 
-### 7.1 E0 · 合同、指针与防回退校验
+### 7.1 E0 · 主合同、指针、上游同步和防回退
 
-**交付**
+- 唯一主合同固定完整 Path B 和五项 ALWAYS_ON 能力；
+- Gold、AGENTS、CLAUDE、docs index 指向本文件；
+- DXM-TX 类目合同、catalog、manifest 和 hash 可复核；
+- 校验器能把“能力可选/可跳过/降级 Path A”“固定三级”“泛化允许继续发布”真实判红；
+- SelfTest 红→绿、链接、AI 标注、catalog check 和 `git diff --check` 通过。
 
-- 本主合同存在并覆盖 §6.1、§7、§8、§11；
-- Gold、`AGENTS.md`、`CLAUDE.md`、`docs/README.md` 四个指针可解析到本文件；
-- 校验器检查文件存在、必需章节/术语、悬空链接、AI 标注与旧叙事冲突；
-- `-SelfTest` 在内存删除 `PublishGuard` 后必须先判红并输出 `RED_EXPECTED`，再校验真实文件输出 `MVP_DOCS_OK`。
+### 7.2 E1 · RuntimeTruth、Reader、动态类目与多选
 
-**DoD**
+- 同一可见会话绑定账号、店铺、Reader 和 reason code；
+- 分页读取 `pageList(draft)`，支持人工多选 ≥3；
+- 动态任意深度类目 UI，只接受真实叶子；
+- 搜索/getById/祖先链、catalog/session/account 漂移 fail-closed；
+- 换会话、换账号、换店铺后旧选品、类目和确认输入全部失效。
 
-- 校验器真实红→绿且返回 0；
-- `git diff --check` 返回 0；
-- Gold/原型哈希不变，DXM-TX 与 `app/**` 零改动；
-- 只宣称 E0 完成，不宣称 `MVP_READY` / `PROD_READY`。
+### 7.3 E2 · 完整方案与不可变快照
 
-### 7.2 E1 · 只读 Reader 与 draft 多选
+- `local_plan_template` 与 `dxm_template_ref` 分离；
+- 每件冻结 source/target category、catalog/node/schema/capability hashes；
+- 每件冻结视频、批发、翻译、半托管和 rollback plan，全部 enabled；半托管只冻结 `RUNTIME_NATIVE_GATE_REQUIRED`、两个动作、目标页和拒绝/不确定处置，不冻结资格结果；
+- 任一可在 freeze 时判定的必经能力缺控件、稳定 binding、值或证据规划时不能冻结；半托管资格只能在执行期由店小秘原生门裁决，不得提前伪造 READY；
+- 多类目逐品隔离，运行时只消费冻结结果。
 
-**范围**
+### 7.4 E3 · 完整可见编辑与 Path B Runner
 
-- 在已登录真实会话内读取 `userInfo.shopMap`；
-- 分页读取 `pageList(dxmState=draft)`，支持全部店/按店过滤、刷新、加载与错误态；
-- 前端多选真实 draft id，至少能支持 ≥1，生成可审阅任务输入；
-- 明确 `claim_only` 不参与本链路。
+- 使用现有唯一 Runner/BrowserAgent/DxmWorkflowAdapter，不得新增或保留第二个拥有队列、状态迁移、HVD 或写派发权的 Runner/Runtime；
+- 每件先建立持久 preimage 和 rollback plan；
+- 完成普通编辑、视频、批发、翻译与全字段读回；
+- 完成主保存意图 Modal、`OPEN_SEMI_MANAGED_EDITOR`、店小秘原生门三类结果、实际主编辑 SAVE、必要的受控中间转换、`editFromSmt` 填写和第二次 SAVE；不得把 SAVE1 与门结果硬编码成未经实证的固定先后；
+- 两次 SAVE 分别满足三铁证；
+- 任一能力不可用不得降级 Path A；UNKNOWN 停批。
 
-**DoD**
+### 7.5 E4 · HVD、四键、结果与人工验收
 
-- API 与 UI 显示真实来源，fallback/mock 不得显示为真实；
-- 无会话、schema 漂移、分页不闭合、店铺/商品绑定冲突时 fail-closed；
-- 测试覆盖分页、过滤、去重、空列表、错误态、真实/降级来源标签；
-- 当前 P0 的 TS18048 与批次测试循环导入先修复并回归不劣化。
-
-### 7.3 E2 · 模板、方案与不可变快照
-
-**范围**
-
-- `local_plan_template` CRUD/versioning；
-- `dxm_template_ref` 只读同步与作用域校验；
-- 模板优先补差；
-- 启动前预览并冻结 `plan_snapshot`。
-
-**DoD**
-
-- 两模型在 schema、API 和 UI 上分离；
-- 创建 `batch_draft_save` 任务时 payload 含完整快照与 hash，并为每件商品冻结 `categoryId`、类目 Schema/hash、必填字段、字段映射和解析结果；
-- 方案修改不改变已创建任务；
-- 多类目批次逐品使用自己的 `item_snapshots[]`；执行时不借用其它类目配置，不临时重算；
-- 中文界面展示的字段名可追溯到冻结的中文字段映射；所有自动写入的自然语言字段在保存前通过英文校验；
-- 不复制根原型的真实样例、mock 数组或 localStorage 数据源；
-- 测试覆盖版本不可变、引用/Schema/hash 漂移、多类目隔离、作用域冲突、未解析或缺失必填字段 fail-closed。
-
-### 7.4 E3 · `batch_draft_save` Path A runner
-
-**范围**
-
-- 在现有 runner / Browser Agent / `batch_edit` 基础上增加明确 mode `batch_draft_save`；
-- 逐 id 串行打开真实编辑页，模板优先补差，只点精确「保存」；
-- 每品三铁证、mutation ledger、PublishGuard 和 UNKNOWN 停批；
-- 不新建第三套 runner，不把旧 `batch_save` 含糊语义直接当放行。
-
-**DoD**
-
-- 合约与测试覆盖 mode 门禁、队列、幂等、证据绑定、零发布、已知失败与 UNKNOWN；
-- 真实账号人工批准后，至少 1 个 draft Path A 各自三铁证；
-- 任何单品缺证据不得计入成功；
-- Path B 请求在任务创建和运行时均被拒绝。
-
-### 7.5 E4 · HVD 与四键
-
-**范围**
-
-- HVD 投影真实 runner/worker/ledger 状态；
-- 开始、暂停、继续、停止具备后端控制、持久化状态与 worker ack；
-- 结果页逐品展示证据与人工对账入口。
-
-**DoD**
-
-- 真实批次暂停 ≥10 秒后继续，不重复已完成保存，不丢队列；
-- 停止后不再派发新商品；在途不确定动作归 UNKNOWN；
-- HVD、日志、结果、API 与持久化状态在同一任务/快照/item 粒度一致；
-- 完成后仅提交 §11 给人验收，不由实现者自行勾选 `MVP_READY`。
+- HVD 投影真实 task/job/step/worker/ledger/receipt；
+- 开始、暂停、继续、停止使用持久状态和 worker ack；
+- 暂停 ≥10 秒不推进，继续不重做，停止不再派发；
+- 结果页逐件显示类目、五项能力、两阶段保存、三铁证、rollback/UNKNOWN；
+- 完成 §11 后仅由人工签署 `MVP_READY`。
 
 ---
 
@@ -455,165 +323,109 @@ HVD 与 runner 同源，至少投影以下后端事实：
 
 指定原型：`D:\Desktop\py\DXM-TX\DXM-半托管工作台-可交互原型.html`。
 
-本合同要求严格对齐其**信息架构、布局、文案、组件和交互状态**，但产品数据与运行事实必须来自正式后端/真实会话。
+固定体验：240px rail、56px topbar、`#4f46e5`、16px 圆角、明暗主题、1100px/860px 断点和 HVD 开始/暂停/继续/停止四键。
 
-### 8.1 固定视觉与布局
+当前七项主导航：工作台、连接店小秘、采集箱选品、铺货方案、开始批量保存、保存结果、设置。模板库可作为铺货方案内的子页，不得制造第二套主流程。
 
-- 左 rail：桌面宽度 **240px**；
-- topbar：高度 **56px**；
-- 主色：**`#4f46e5`**；
-- 卡片主圆角：**16px**；
-- 支持**明暗主题**；
-- 断点：**1100px** 时复杂多列/浏览器舞台收为单列，**860px** 时隐藏 rail 并切移动布局；
-- 真实浏览器可见窗内保留 HVD 信任面板；
-- HVD/浏览器控制固定四键：**开始 / 暂停 / 继续 / 停止**。
-
-### 8.2 固定 7 项导航
-
-导航名称与顺序固定为：
-
-1. 工作台；
-2. 连接店小秘；
-3. 采集箱选品；
-4. 铺货方案；
-5. 开始批量保存；
-6. 保存结果；
-7. 设置。
-
-允许为无障碍、响应式或错误态增加局部组件，但不得另造第二条主导航或把历史「认领 → 单品保存」放回主链路。
-
-### 8.3 必须替换的原型假数据
-
-实现时禁止复制或保留以下原型运行数据源：
-
-- `SHOPS`；
-- `PRODUCTS`；
-- `DXM_TPL`；
-- 原型中的真实店铺、商品、模板 id/名称与业务样例；
-- `localStorage` 作为正式店铺、商品、模板、方案、任务、HVD 或结果真相源。
-
-前端可使用明确标注的测试 fixture 做离线测试，但运行 UI 必须区分 `api` / `fallback` / `mock`，且 mock 永不产生真实成功态或 READY 结论。
-
-### 8.4 Path B 与模拟引擎裁决
-
-- 原型中的 Path B 选择、`editFromSmt` 演示与模拟 `popChoiceProduct/add` 成功不进入 E1–E4；
-- 正式 UI 对 Path B 只显示“后续阶段”或不可选择状态；若请求绕过 UI，后端运行时拒绝；
-- 原型 JavaScript 的队列、计时、预制日志、`dxm-fake` 与模拟结果页不得成为 runner、HVD 或证据实现；
-- 真实可见浏览器不是用 HTML 画出的假店小秘页面。
+禁止复制原型中的 `SHOPS`、`PRODUCTS`、`DXM_TPL`、localStorage 数据源、预制成功、假浏览器和 mock 业务值。原型 Path B 交互只能提供 IA 参考，正式执行以本合同、实时页面和安全证据为准。
 
 ---
 
-## 9. 只读接口与 UI 写合同
+## 9. PublishGuard 与受控中间动作
 
-### 9.1 E1 必需只读能力
+PublishGuard 在任务开始、每阶段写入前、每次保存前和实际动作时独立复核。
 
-| 能力 | 当前参考 | 运行要求 |
-|---|---|---|
-| 店铺 | `GET /api/userInfo.json` | 显式只读白名单；店铺 id/name 仅在授权 UI 展示 |
-| 草稿列表 | `POST /api/smtProduct/pageList.json` + `dxmState=draft` | 分页闭合、按店过滤、来源标注 |
-| 草稿数量 | `POST /api/smtProduct/getOfflineCounts.json` | 只作显示/交叉核对，不替代列表 |
-| 编辑快照 | `GET /api/smtProduct/edit.json` | 每品打开时刷新并核对 product/shop/category |
-| 模板/类目 | 受审阅的 list / category 只读接口 | 作用域与 schema 漂移 fail-closed |
+永久拒绝：最终发布、立即发布、保存并发布、保存并移入待发布、上线、online/release 及相应请求/URL。
 
-私有接口会变化；本表不是把 PASSIVE_ONLY 观察自动提升为重放授权。E1 必须在本仓明确实现允许的只读请求合同。
-
-### 9.2 写入动作
-
-- 字段值通过 UI 控件写入；
-- 模板通过 UI 引用或点选；
-- 中文字段映射必须解析到稳定 `field_key`、当前类目 Schema 路径和受审阅 UI binding；不得把中文显示文本直接当作跨类目执行配置；
-- 自动写入的自然语言内容必须为英文；每一目标字段都要在保存前完成非空/Schema/语言/精确读回校验，任一失败均不得点击「保存」；
-- 保存按钮规范化文本必须精确等于「保存」；
-- 保存回包只作为三铁证之一；
-- 发现发布类按钮/弹窗/URL/意图时 `PublishGuard` 拒绝。
+唯一含发布文字的允许动作是 `SEMI_MANAGED_CONTINUE_TRANSITION`。它只能在 §1.2 的精确 Path B 上下文中执行；不得通过文本白名单、正则排除或前端按钮放行。动作后必须到达预期 `editFromSmt` 页面，否则结果 UNKNOWN。
 
 ---
 
-## 10. 错误、恢复与对账
+## 10. 回滚与异常
 
-| 类别 | 示例 | 批次策略 |
-|---|---|---|
-| 前置已知失败 | 未登录、模板缺失、作用域冲突、表单校验失败且确认未派发保存 | 记录失败；是否继续须按快照预设 |
-| 保存明确失败 | 业务回包明确失败且可证明未写成功 | 记录失败；默认停现场，不自动重试 |
-| 证据不完整 | 缺页面成功态或独立未发布证明 | 不计成功；停批核对 |
-| UNKNOWN | 派发后断线、超时、结果冲突、ledger 未闭合 | 立即停批，人工对账，禁止自动重试 |
-| 发布信号 | 发布按钮/弹窗/URL/请求意图 | `PublishGuard` 拒绝并终止 |
+### 10.1 每件必经的 rollback preparation
 
-恢复必须从持久化状态、ledger、证据和真实页面共同判断，不得仅凭前端内存或 runtime 文本恢复。
+- 打开并核验商品后、首个页面修改前，持久化受影响字段、源类目、页面和 Schema preimage；
+- 生成严格逆序恢复计划和 preimage hash；
+- 验证所有 binding 可读、可写、唯一且当前页面未漂移；
+- 捕获期间不得保存、发布或触发外部 mutation。
+
+### 10.2 真正 restore 的边界
+
+- 首次 SAVE 和其它外部 mutation 派发前的已知失败：逆序恢复或 reload/discard，并逐字段读回；证明恢复后结束当前商品。
+- 视频生成、主编辑 SAVE、中间转换或半托管 SAVE 已派发：不得自动用另一次 SAVE 补偿；结果不确定即 UNKNOWN。
+- 恢复缺 preimage、字段不一致、页面漂移或进程重启丢状态时，不得报告 rollback 成功。
 
 ---
 
 ## 11. 人工验收
 
-本节由具备真实店小秘权限的人执行和签字。Codex 在没有真实会话、授权或三铁证时只能提供步骤，不能代签。
+### 11.1 前置门禁
 
-### 11.1 验收前门禁
+- [ ] Git、worktree、build、package、runtime 和 data identity 固定；
+- [ ] 完整 L0、frontend build、desktop、文档和 catalog 门禁全绿；
+- [ ] 同一真实可见会话的账号、店铺、Reader 就绪；
+- [ ] 当前类目目录无未裁决漂移，目标均为可执行叶子；
+- [ ] 视频、批发、翻译、半托管和 rollback 正式 Adapter/证据已接线；
+- [ ] 最终发布保护与受控中间动作反例通过；
+- [ ] 当次真实写入有明确人工授权。
 
-- [ ] 当前分支、HEAD、工作树、运行时与构建身份已记录；
-- [ ] 真实可见浏览器已登录，目标店铺/会话/页面绑定正确；
-- [ ] PublishGuard、审批租约、mutation ledger 与证据目录处于可用状态；
-- [ ] 选品、方案和批次测试已通过，P0 红基线已清零且未降低测试/断言；
-- [ ] 本次明确只验 Path A，Path B 运行请求会拒绝；
-- [ ] 已确认不会读取或提交 Cookie、密钥、raw 抓包或真实业务样例。
+### 11.2 正向流程
 
-### 11.2 主流程
+1. 从当前 `shopMap/pageList(draft)` 选择至少 3 件真实草稿。
+2. 为每件选择动态目标叶子，审阅 source/target category 和 catalog/node/schema/capability hashes。
+3. 配置普通编辑、视频、批发、翻译和半托管；确认五项均不可关闭，且半托管显示“店小秘运行时原生检查”，不显示预判资格 READY。
+4. preview/freeze，审阅 ordered items、最终值、rollback plan、两阶段 evidence policy 和 snapshot hash。
+5. 批准并开始；核对当前队列、JIT、lease 和 ledger。
+6. 每件核对 preimage、类目切换、普通编辑、视频、批发、翻译和全字段读回。
+7. 核对主保存意图 Modal 与“编辑半托管信息”入口，按真实 network/page/ledger 时间线分别核对店小秘原生门结果和实际第一次 SAVE 三铁证；不得预设两者先后。
+8. 若出现特定后续 Modal，核对中间“继续发布”动作上下文；在任何半托管字段首写前，确认 SAVE1 verified、native gate admitted 和正式 `editFromSmt` 页面身份同时成立。
+9. 核对半托管国家、货品、变种、物流填写和第二次 SAVE 三铁证。
+10. 核对独立未发布状态，确认没有最终发布/上线。
+11. 在真实任务验证暂停 ≥10 秒、继续不重做、停止不再派发。
+12. HVD、API、SQLite、ledger、日志、报告与 receipt 同源。
 
-1. 打开「连接店小秘」，核对真实会话状态与店铺读取来源。
-2. 进入「采集箱选品」，选择一个店铺或明确的全部店范围，刷新 `pageList(draft)`。
-3. 人工勾选至少 1 个真实 draft；核对每个 id 均来自本次读回。
-4. 进入「铺货方案」，审阅 `local_plan_template`、`dxm_template_ref`、模板优先补差规则、中文字段映射、自然语言英文策略和 Path A。
-5. 创建任务前审阅 `plan_snapshot`，逐品核对 `categoryId`、类目 Schema/hash、必填字段、中文字段映射和解析结果并记录 snapshot hash；至少包含两个不同类目时，确认两份配置互不借用。
-6. 任务创建后修改方案、模板、类目 Schema 或字段映射，确认已创建任务保持冻结；若真实页面的 `categoryId`/Schema hash 漂移，确认任何写入前 fail-closed，而不是临时重算。
-7. 点击「开始」，确认真实可见浏览器操作当前商品，HVD 与后端日志显示同一任务/商品/step。
-8. 在安全点点击「暂停」，等待至少 10 秒，确认 worker ack、没有推进下一写动作。
-9. 点击「继续」，确认从合理安全点恢复、没有重复保存或丢队列。
-10. 在独立验证任务或非破坏性验收场景中核对「停止」：停止后不派发新商品；若在途结果不确定则进入 UNKNOWN。
-11. 对至少 1 个成功商品逐一核对保存回包、页面成功态、独立未发布证明。
-12. 核对「保存结果」页、HVD、日志、ledger 与证据引用一致。
-13. 搜查本次动作与网络事实，确认没有发布、立即发布、继续发布、保存并移入待发布或其它发布写入。
+### 11.3 反向流程
 
-### 11.3 反向验收
+- [ ] 任一商品关闭/跳过视频、批发、翻译或半托管时，preview 或 freeze 判红；
+- [ ] 非叶第三层、祖先链冲突或旧 catalog 节点不得冻结；
+- [ ] 当前页面类目/Schema 漂移时，首个字段写入前拒绝；
+- [ ] 系统主动调用 `verifyPopChoiceShop` 或用店铺类型/类目/catalog/历史结果预判半托管资格时拒绝；
+- [ ] 原生门前将半托管资格写成 READY，或把 `OPEN_SEMI_MANAGED_EDITOR` 与 `SEMI_MANAGED_CONTINUE_TRANSITION` 合并时拒绝；
+- [ ] 只凭半托管提示 Modal 宣称 SAVE1 完成，或硬编码“先 SAVE1 三铁证、后原生门”而没有真实 network/page/ledger 证据时拒绝；
+- [ ] `FIRST_SAVE_INTENT` 或 `OPEN_SEMI_MANAGED_EDITOR` 未声明/处理 `MAY_DISPATCH_SAVE1`，点击前未持久化 `MAY_HAVE_DISPATCHED`，或同一 FIRST_SAVE 使用第二张 lease 时拒绝；
+- [ ] `entry_handshake_joined` 前派发中间“继续发布”时拒绝；SAVE1 与门事实均已验证且因果同源时，仅因墙钟全序不可还原就判 UNKNOWN 也拒绝；
+- [ ] 店小秘原生门明确拒绝后仍进入 S1–S3/第二次 SAVE，未按 SAVE1 是否真实派发区分结果，或结果不确定后自动重试时拒绝；
+- [ ] 中间“继续发布”脱离精确 Modal/主保存意图与实际 SAVE 因果链/目标页上下文时拒绝；
+- [ ] 最终发布类文本、URL 或请求始终拒绝；
+- [ ] 删除任一次 SAVE 三铁证任一项，不得成功；
+- [ ] 保存派发后制造断线，进入 UNKNOWN、停批且不得自动重试；
+- [ ] preimage 不完整或恢复读回不一致时，不得宣称 rollback 成功。
 
-- [ ] 伪造/删除三铁证任一项时，商品不得显示成功；
-- [ ] 提交 Path B / `editFromSmt` 请求时，UI 不可选且后端运行拒绝；
-- [ ] 人为制造保存结果不确定时，进入 UNKNOWN、停止剩余队列且不自动重试；
-- [ ] 篡改任一商品的 `categoryId`、类目 Schema/hash、必填字段或解析结果时，快照/执行前一致性校验判红；不得从同批其它类目借值或临时重算；
-- [ ] 前端 HVD 断线或刷新时，不得凭本地计时器继续推进；
-- [ ] 发布类文本或 URL 命中时，PublishGuard 拒绝；
-- [ ] 给任一自动写入的自然语言字段注入中文、混合语言、空值或 `detected_language=UNKNOWN` 时，保存前校验判红且不点击「保存」；
-- [ ] mock/HTML 原型只能显示演示来源，不得生成真实任务证据。
-
-### 11.4 签字结论
+### 11.4 签字
 
 ```text
 验收日期：
 验收人：
-Git HEAD / build identity：
+Git / worktree / package / runtime identity：
 任务 id：
 plan snapshot hash：
 draft 数量：
-三铁证完整成功数：
+完整 Path B 成功数：
+两阶段三铁证完整数：
 UNKNOWN / 已知失败：
-零发布复核：
+rollback 复核：
+最终零发布复核：
 结论：MVP_READY / BLOCKED
 备注：
 ```
 
-只有本节全部适用项通过且人工结论为 `MVP_READY` 时，才可作该范围声明；`PROD_READY` 必须另行验收。
+只有全部适用项通过且人工签署，才可声明本范围 `MVP_READY`；`PROD_READY` 另行验收。
 
 ---
 
-## 12. 后续阶段
+## 12. 当前实现裁定
 
-- E5 可另立合同研究 Path B，但必须重新定义包含「继续发布」字样的危险交互如何被永久零发布策略处理；在此之前一律运行拒绝。
-- E6 可扩展异常池、人工对账与恢复体验。
-- E7 可执行 `PROD_READY` 硬化、portable 同 HEAD、包级 smoke 与生产交付门禁。
-- 任何后续阶段不得倒写或弱化 E0–E4 的零发布、三铁证、UNKNOWN 停批和真实可见浏览器要求。
+截至 2026-08-28，当前工作树完整 backend L0 已达到 `2344 passed / 0 skipped`，但 0.3.0 仍主要只有 Path A 和基础 Runner 生产接线；视频、翻译、批发、Path B 完整生产接线、真实 rollback 和两阶段证据尚未闭环。Path B 配置/preview/freeze 可以存在，真实批准、启动和 Runner 派发仍以 `PLAN_PATH_EXECUTION_NOT_RELEASED` fail-closed。该事实意味着产品仍 `BLOCKED`，不意味着这些能力可从产品范围删除。
 
----
-
-## 13. E0 冻结记录
-
-- 本文件建立的是合同与 DoD，不是功能完成证据。
-- E0 完成后下一建议入口是 E1：先修复当前 P0 门禁，再实现只读 Reader 与真实 draft 多选。
-- E1–E4 未在本文件建立时完成；禁止据此宣称 `MVP_READY` 或 `PROD_READY`。
+下一实施入口：动态 CategoryCatalog 消费和 source/target 类目修复 → 五项 mandatory snapshot → 正式可见页面 executor → Path B 双阶段安全合同 → 全量门禁与真实三商品验收。

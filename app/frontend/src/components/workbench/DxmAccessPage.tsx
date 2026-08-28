@@ -1,5 +1,6 @@
 import type { FormEvent } from 'react'
 import type { RuntimeStatus } from '../../types'
+import { canContinueDxmLogin, dxmLoginContinueDisabledReason } from '../../dxmLoginUi'
 import { humanOperatorMessage } from './workbenchCopy'
 
 type DxmLoginDraft = {
@@ -21,10 +22,13 @@ type DxmAccessPageProps = {
   dxmLoginDraft: DxmLoginDraft
   dxmCredentialState: DxmCredentialState
   busy: boolean
+  loginRequestPending?: boolean
   onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
   onClearSavedDxmCredential: () => void
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
+  onLogoutDxm: () => void
+  onSwitchDxmAccount: () => void
   onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
   onShowConsole: () => void
 }
@@ -37,10 +41,13 @@ export function DxmAccessPage({
   dxmLoginDraft,
   dxmCredentialState,
   busy,
+  loginRequestPending = false,
   onDxmLoginDraftChange,
   onClearSavedDxmCredential,
   onOpenDxmLogin,
   onContinueDxmLogin,
+  onLogoutDxm,
+  onSwitchDxmAccount,
   onNavigateDxmTarget,
   onShowConsole,
 }: DxmAccessPageProps) {
@@ -55,9 +62,17 @@ export function DxmAccessPage({
     detail: '还没有拿到店小秘登录检测结果。',
     next: '先打开真实登录页，完成验证码后再检测登录状态。',
   }
+  const loginBrowserVisible = runtimeStatus?.dxmLogin?.browserVisible === true
+    || runtimeStatus?.realBrowser?.browserVisible === true
+  const canContinueLogin = canContinueDxmLogin({
+    status: runtimeStatus?.dxmLogin?.status,
+    browserVisible: loginBrowserVisible,
+    busy,
+    requestPending: loginRequestPending,
+  })
   return (
     <section className="module-layout dxm-access-layout" aria-label="登录店小秘">
-      <div className="module-card span-2 dxm-access-card">
+      <div className="module-card dxm-access-card">
         <ModuleHead title="登录真实店小秘" meta="只做登录，不保存、不发布" />
         <div className="dxm-access-steps" aria-label="登录步骤">
           <span className={dxmLoginDraft.username && dxmLoginDraft.password ? 'is-done' : 'is-current'}>
@@ -79,6 +94,13 @@ export function DxmAccessPage({
           runtimeStatus={runtimeStatus}
           runtimeStatusError={runtimeStatusError}
           busy={busy}
+          canContinueLogin={canContinueLogin}
+          loginContinueDisabledReason={dxmLoginContinueDisabledReason({
+            status: runtimeStatus?.dxmLogin?.status,
+            browserVisible: loginBrowserVisible,
+            busy,
+            requestPending: loginRequestPending,
+          })}
           onDraftChange={onDxmLoginDraftChange}
           onClearSavedCredential={onClearSavedDxmCredential}
           onSubmit={onOpenDxmLogin}
@@ -99,9 +121,19 @@ export function DxmAccessPage({
           </div>
         </div>
         <div className="dxm-access-status-card__actions">
-          <button className="button button--secondary" type="button" onClick={dxmLoggedIn ? onShowConsole : onOpenDxmLogin} disabled={busy}>
+          <button className="button button--secondary" type="button" onClick={dxmLoggedIn ? onShowConsole : onOpenDxmLogin} disabled={!dxmLoggedIn && busy}>
             {dxmLoggedIn ? '进入采集箱选品' : '打开真实登录页'}
           </button>
+          {dxmLoggedIn && (
+            <>
+              <button className="button button--quiet" type="button" onClick={onLogoutDxm} disabled={busy}>
+                退出登录
+              </button>
+              <button className="button button--quiet" type="button" onClick={onSwitchDxmAccount} disabled={busy}>
+                切换账号
+              </button>
+            </>
+          )}
         </div>
         <details className="inline-disclosure">
           <summary>可选：打开店小秘页面或日志</summary>
@@ -129,6 +161,8 @@ function DxmLoginInlineForm({
   runtimeStatus,
   runtimeStatusError,
   busy,
+  canContinueLogin,
+  loginContinueDisabledReason,
   onDraftChange,
   onClearSavedCredential,
   onSubmit,
@@ -139,6 +173,8 @@ function DxmLoginInlineForm({
   runtimeStatus?: RuntimeStatus | null
   runtimeStatusError?: string | null
   busy: boolean
+  canContinueLogin: boolean
+  loginContinueDisabledReason: string
   onDraftChange: (draft: DxmLoginDraft) => void
   onClearSavedCredential: () => void
   onSubmit: () => void
@@ -210,10 +246,16 @@ function DxmLoginInlineForm({
       <button className="button button--primary" type="submit" disabled={!canSubmit} title={!canSubmit ? loginSubmitDisabledReason : undefined}>
         打开真实登录页
       </button>
-      <button className="button button--quiet" type="button" onClick={onContinue} disabled={busy}>
+      <button
+        className="button button--quiet"
+        type="button"
+        onClick={onContinue}
+        disabled={!canContinueLogin}
+        title={!canContinueLogin ? loginContinueDisabledReason : undefined}
+      >
         验证码完成后检测登录状态
       </button>
-      <button className="button button--quiet" type="button" onClick={onClearSavedCredential} disabled={busy || !credentialState.loaded}>
+      <button className="button button--quiet" type="button" onClick={onClearSavedCredential} disabled={(busy && !canContinueLogin) || !credentialState.loaded}>
         清除已记住账号
       </button>
     </div>
@@ -311,6 +353,22 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       label: '登录还没完成，不是系统故障',
       detail: currentUrl ? `请保持真实浏览器打开并继续处理：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
       next: '完成验证码后点击“验证码完成后检测登录状态”。',
+    }
+  }
+  if (status === 'logged_out') {
+    return {
+      tone: 'warn',
+      label: '已退出登录',
+      detail: '当前可见店小秘会话已关闭，旧账号凭据不会继续用于登录。',
+      next: '填写新的店小秘账号和密码，再打开真实登录页。',
+    }
+  }
+  if (status === 'logout_failed') {
+    return {
+      tone: 'danger',
+      label: '退出登录未完全完成',
+      detail: '会话授权已撤销，但浏览器或本机凭据清理仍需人工确认。',
+      next: '确认真实浏览器窗口已关闭后，再重试退出登录或重新打开登录页。',
     }
   }
   if (status === 'login_failed' || status.includes('failed')) {

@@ -9,9 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import db
+from src.batch_edit.plan_contract import E2PlanService
 from src.execution.dxm_login_flow import DxmLoginFlow
 from src.main import app
 from src.repository import Repository
+from tests.test_e2_plan_snapshot_api import (
+    _plan_payload as _current_plan_payload,
+    _setup as _setup_current_plan_api,
+    _snapshot_request as _current_snapshot_request,
+    _sync_refs as _sync_current_refs,
+)
 
 
 _BATCH_REQUIRED_SECTIONS = [
@@ -321,6 +328,58 @@ def _create_draft_batch_via_api(
     return client, scope_snapshot, template, bundle_payload, response
 
 
+def _create_frozen_plan_batch_via_api(
+    tmp_path,
+    monkeypatch,
+    *,
+    version="1.0.0",
+    first_title="Car Phone Holder",
+):
+    """Create the current public plan_snapshot + batch_draft_save aggregate."""
+
+    client, repository, source = _setup_current_plan_api(tmp_path, monkeypatch)
+    refs = _sync_current_refs(client)
+    plan_payload = _current_plan_payload(
+        refs,
+        version=version,
+        first_title=first_title,
+    )
+    plan_response = client.post("/api/local-plan-templates", json=plan_payload)
+    assert plan_response.status_code == 201, plan_response.text
+    plan = plan_response.json()
+    preview_request = _current_snapshot_request(plan["id"])
+    preview_response = client.post(
+        "/api/plan-snapshots/preview",
+        json=preview_request,
+    )
+    assert preview_response.status_code == 200, preview_response.text
+    preview = preview_response.json()
+    freeze_response = client.post(
+        "/api/plan-snapshots",
+        json=_current_snapshot_request(
+            plan["id"],
+            expected_snapshot_hash=preview["snapshot_hash"],
+        ),
+    )
+    assert freeze_response.status_code == 201, freeze_response.text
+    frozen = freeze_response.json()
+    task_response = client.post(
+        f"/api/plan-snapshots/{frozen['id']}/tasks",
+    )
+    assert task_response.status_code == 201, task_response.text
+    return {
+        "client": client,
+        "repository": repository,
+        "source": source,
+        "refs": refs,
+        "plan_payload": plan_payload,
+        "plan": plan,
+        "preview": preview,
+        "frozen": frozen,
+        "task": task_response.json(),
+    }
+
+
 def test_operator_can_capture_and_persist_current_draft_box_scope(tmp_path, monkeypatch):
     db_path = tmp_path / "batch-edit.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)
@@ -531,193 +590,167 @@ def test_scope_capture_request_rejects_client_selected_scope(monkeypatch, inject
 
 
 def test_operator_can_create_immutable_draft_batch_from_scope_and_complete_bundle(tmp_path, monkeypatch):
-    _client, scope_snapshot, template, bundle_payload, response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-    )
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    snapshot = case["frozen"]
+    task = case["task"]
 
-    assert response.status_code == 201, response.text
-    batch = response.json()
-    assert batch["schema_version"] == "dxm_edit_batch.v1"
-    assert batch["status"] == "draft"
-    assert batch["scope_snapshot_id"] == scope_snapshot["id"]
-    assert batch["template_id"] == template["id"]
-    assert batch["template_snapshot"]["payload"] == {"version": bundle_payload["version"]}
-    assert "scope_snapshot_digest" not in batch
-    assert "template_snapshot_digest" not in batch
-    assert "policy_digest" not in batch
-    assert batch["policy"]["approval_mode"] == "batch_once"
-    assert batch["policy"]["dispatch_mode"] == "strict_sequential"
-    assert batch["policy"]["global_concurrency"] == 1
-    assert batch["policy"]["publish_allowed"] is False
-    assert batch["policy"]["unknown_result_policy"] == "stop_no_retry"
-    assert [item["ordinal"] for item in batch["items"]] == [1, 2]
-    assert [item["status"] for item in batch["items"]] == ["pending", "pending"]
+    assert snapshot["schema"] == "dxm_batch_draft_save_plan.v1"
+    assert snapshot["mode"] == "batch_draft_save"
+    assert snapshot["path"] == "A"
+    assert snapshot["local_plan_template"] == {
+        "id": case["plan"]["id"],
+        "version": case["plan"]["version"],
+    }
+    assert snapshot["approval_context"] == {
+        "state": "not_granted",
+        "runner_released": False,
+        "publish_allowed": False,
+    }
+    assert snapshot["failure_policy"] == {"unknown": "stop_batch"}
+    assert snapshot["evidence_policy"] == "three_proofs"
+    assert snapshot["publish_allowed"] is False
+    assert task["status"] == "draft"
+    assert task["mode"] == "batch_draft_save"
+    assert task["payload"]["product_ids"] == [70001, 70002, 70003]
+    assert [job["product_id"] for job in task["jobs"]] == [70001, 70002, 70003]
+    assert [job["status"] for job in task["jobs"]] == ["pending", "pending", "pending"]
 
-    import src.main as main
-
-    persisted = main.repo.get_edit_batch_private(batch["id"])
-    assert persisted is not None
-    assert persisted["scope_snapshot_digest"] == scope_snapshot["digest"]
-    assert persisted["template_snapshot"]["payload"] == bundle_payload
-    assert persisted["template_snapshot_digest"] == _canonical_sha256(
-        persisted["template_snapshot"]
-    )
-    assert [item["target_identity_sha256"] for item in persisted["items"]] == [
-        item["target_identity_sha256"] for item in scope_snapshot["items"]
+    private_task = case["repository"].get_task_private(task["id"])
+    assert private_task is not None
+    rebound = E2PlanService().assert_task_snapshot_binding(private_task)
+    assert rebound["snapshot_hash"] == snapshot["snapshot_hash"]
+    assert rebound["item_snapshots"] == snapshot["item_snapshots"]
+    assert [
+        item["target_identity"] for item in rebound["item_snapshots"]
+    ] == [
+        item["target_identity"] for item in case["preview"]["item_snapshots"]
     ]
+    public = json.dumps(task, ensure_ascii=False).lower()
+    assert "approvaltoken" not in public
+    assert "token_hash" not in public
+    assert "authorization_context" not in public
 
 
 def test_bundle_content_change_is_rejected_and_does_not_rewrite_frozen_draft_batch(
     tmp_path,
     monkeypatch,
 ):
-    client, scope_snapshot, template, original_payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-template-freeze.db",
-    )
-    assert create_response.status_code == 201
-    created_batch = create_response.json()
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    created_snapshot = copy.deepcopy(case["frozen"])
+    created_task = copy.deepcopy(case["task"])
 
-    changed_payload = _complete_bundle_payload()
+    changed_payload = copy.deepcopy(case["plan_payload"])
     changed_payload["version"] = "2.0.0"
-    changed_payload["sections"]["category"] = {
-        "category": {"category_keyword": "完全不同的新类目"}
+    changed_payload["fill_rules"]["100"]["title"] = {
+        "value": "Completely Different English Product Title"
     }
-    update_response = client.patch(
-        f"/api/templates/{template['id']}",
-        json={"template_name": "已修改模板", "payload": changed_payload},
+    in_place = client.patch(
+        f"/api/local-plan-templates/{case['plan']['id']}",
+        json={"name": "禁止原地修改"},
     )
-    assert update_response.status_code == 409
+    assert in_place.status_code == 409
+    assert in_place.json()["detail"]["reason_code"] == "LOCAL_PLAN_VERSION_IMMUTABLE"
+    next_version = client.post(
+        f"/api/local-plan-templates/{case['plan']['id']}/versions",
+        json=changed_payload,
+    )
+    assert next_version.status_code == 201, next_version.text
+    assert next_version.json()["id"] != case["plan"]["id"]
 
-    response = client.get(f"/api/edit-batches/{created_batch['id']}")
-
-    assert response.status_code == 200
-    frozen_batch = response.json()
-    assert frozen_batch == created_batch
-    assert frozen_batch["template_snapshot"]["template_name"] == "车载商品编辑包"
-    assert frozen_batch["template_snapshot"]["payload"] == {"version": "1.0.0"}
-    assert "template_snapshot_digest" not in frozen_batch
-    assert "scope_snapshot_digest" not in frozen_batch
-    assert "policy_digest" not in frozen_batch
-
-    import src.main as main
-
-    persisted = main.repo.get_edit_batch_private(created_batch["id"])
+    snapshot_response = client.get(f"/api/plan-snapshots/{created_snapshot['id']}")
+    task_response = client.get(f"/api/tasks/{created_task['id']}")
+    assert snapshot_response.status_code == 200
+    assert snapshot_response.json() == created_snapshot
+    assert task_response.status_code == 200
+    assert task_response.json()["payload"]["plan_snapshot"] == created_task["payload"]["plan_snapshot"]
+    assert task_response.json()["payload"]["plan_snapshot"]["local_plan_template"] == {
+        "id": case["plan"]["id"],
+        "version": "1.0.0",
+    }
+    persisted = case["repository"].get_task_private(created_task["id"])
     assert persisted is not None
-    assert persisted["template_snapshot"]["payload"] == original_payload
-    assert persisted["template_snapshot_digest"] == _canonical_sha256(
-        persisted["template_snapshot"]
-    )
-    assert persisted["scope_snapshot_digest"] == scope_snapshot["digest"]
-    assert persisted["policy_digest"] == _canonical_sha256(persisted["policy"])
+    assert E2PlanService().assert_task_snapshot_binding(persisted)["snapshot_hash"] == created_snapshot["snapshot_hash"]
 
 
 def test_edit_batch_rejects_bundle_bound_to_a_different_scope_store(tmp_path, monkeypatch):
-    client, scope_snapshot, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-bundle-store-conflict.db",
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    other_scope = client.post(
+        "/api/dxm-template-refs/sync",
+        json={"shop_id": "3002", "category_ids": ["100", "200"]},
     )
-    assert create_response.status_code == 201
-    import src.main as main
+    assert other_scope.status_code == 201, other_scope.text
+    payload = _current_plan_payload(other_scope.json()["refs"], version="2.0.0")
+    payload["shop_id"] = "3001"
 
-    payload = _complete_bundle_payload()
-    other_store = main.repo.create_store("Other Store", "AliExpress")
-    payload["binding"]["store_id"] = other_store["id"]
-    payload["binding"]["store_name"] = "Other Store"
-    mismatched = main.repo.create_template(
-        {
-            "template_type": "edit_batch_bundle",
-            "template_name": "other-store-bundle",
-            "binding_scope": "Other Store",
-            "payload": payload,
-            "is_enabled": True,
-        }
-    )
-
-    response = client.post(
-        "/api/edit-batches",
-        json={
-            "scope_snapshot_id": scope_snapshot["id"],
-            "template_id": mismatched["id"],
-        },
-    )
+    response = client.post("/api/local-plan-templates", json=payload)
 
     assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "TEMPLATE_SCOPE_STORE_MISMATCH"
+    assert response.json()["detail"]["reason_code"] == "DXM_TEMPLATE_REF_SCOPE_CONFLICT"
+    assert len(client.get("/api/tasks?mode=batch_draft_save").json()) == 1
 
 
 def test_edit_batch_freeze_revalidates_bundle_single_save_completeness(tmp_path, monkeypatch):
-    client, scope_snapshot, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-bundle-freeze-completeness.db",
-    )
-    assert create_response.status_code == 201
-    import src.main as main
-
-    payload = _complete_bundle_payload()
-    payload["sections"]["logistics"].pop("weight")
-    logistics_source = payload["source_templates"]["logistics"]
-    logistics_source["snapshot"]["payload"]["logistics"].pop("weight")
-    logistics_source["source_digest"] = _canonical_sha256(logistics_source["snapshot"])
-    incomplete = main.repo.create_template(
-        {
-            "template_type": "edit_batch_bundle",
-            "template_name": "incomplete-frozen-bundle",
-            "binding_scope": "store:1;category:车载用品",
-            "payload": payload,
-            "is_enabled": True,
-        }
-    )
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    payload = copy.deepcopy(case["plan_payload"])
+    payload["version"] = "2.0.0"
+    payload["field_mappings"]["100"]["entries"] = [
+        entry
+        for entry in payload["field_mappings"]["100"]["entries"]
+        if entry["field_key"] != "material"
+    ]
+    incomplete = client.post("/api/local-plan-templates", json=payload)
+    assert incomplete.status_code == 201, incomplete.text
+    before_tasks = client.get("/api/tasks?mode=batch_draft_save").json()
 
     response = client.post(
-        "/api/edit-batches",
+        "/api/plan-snapshots",
         json={
-            "scope_snapshot_id": scope_snapshot["id"],
-            "template_id": incomplete["id"],
+            **_current_snapshot_request(incomplete.json()["id"]),
+            "expected_snapshot_hash": "A" * 64,
+            "idempotency_key": "incomplete-plan-freeze-0001",
         },
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "TEMPLATE_BUNDLE_INCOMPLETE"
+    assert response.json()["detail"]["reason_code"] == "PLAN_REQUIRED_FIELD_MAPPING_MISSING"
+    assert client.get("/api/tasks?mode=batch_draft_save").json() == before_tasks
+    with db.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM plan_snapshots").fetchone()["count"] == 1
 
 
 def test_operator_can_list_draft_batches_without_loading_full_snapshots(tmp_path, monkeypatch):
-    client, scope_snapshot, template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-list.db",
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    created = case["task"]
+    monkeypatch.setattr(
+        case["repository"],
+        "list_tasks",
+        lambda: (_ for _ in ()).throw(AssertionError("summary must not load payload_json")),
     )
-    assert create_response.status_code == 201
-    created = create_response.json()
 
-    response = client.get("/api/edit-batches")
+    response = client.get("/api/tasks?mode=batch_draft_save&view=summary")
 
     assert response.status_code == 200
-    assert response.json() == [
-        {
-            "id": created["id"],
-            "schema_version": "dxm_edit_batch.v1",
-            "status": "draft",
-            "scope_snapshot_id": scope_snapshot["id"],
-            "template_id": template["id"],
-            "item_count": 2,
-            "store_identity": {
-                "store_name": scope_snapshot["store_identity"]["store_name"]
-            },
-            "template": {
-                "name": "车载商品编辑包",
-                "version": "1.0.0",
-            },
-            "created_at": created["created_at"],
-            "updated_at": created["updated_at"],
-            "execution": created["execution"],
-            "progress": created["progress"],
-        }
-    ]
+    assert response.json() == [{
+        "id": created["id"],
+        "name": created["name"],
+        "store_id": created["store_id"],
+        "status": "draft",
+        "mode": "batch_draft_save",
+        "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+        "item_count": 3,
+        "completed_jobs": 0,
+        "failed_jobs": 0,
+        "created_at": created["created_at"],
+        "updated_at": created["updated_at"],
+    }]
+    public = json.dumps(response.json(), ensure_ascii=False)
+    assert "payload" not in public
+    assert "plan_snapshot" not in public
+    assert "snapshot_hash" not in public
 
 
 @pytest.mark.parametrize(
@@ -791,8 +824,8 @@ def test_scope_snapshot_fails_closed_when_live_read_facts_are_unsafe(
 @pytest.mark.parametrize(
     ("candidate_kind", "reason_code"),
     [
-        ("section_template", "TEMPLATE_BUNDLE_REQUIRED"),
-        ("incomplete_bundle", "TEMPLATE_BUNDLE_INCOMPLETE"),
+        ("section_template", None),
+        ("incomplete_bundle", "PLAN_REQUIRED_FIELD_MAPPING_MISSING"),
     ],
 )
 def test_edit_batch_rejects_non_aggregate_or_incomplete_template(
@@ -801,108 +834,109 @@ def test_edit_batch_rejects_non_aggregate_or_incomplete_template(
     candidate_kind,
     reason_code,
 ):
-    client, scope_snapshot, _template, _payload, valid_batch_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name=f"batch-template-reject-{candidate_kind}.db",
-    )
-    assert valid_batch_response.status_code == 201
-
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
     if candidate_kind == "section_template":
-        template_type = "category"
-        payload = {"category": {"category_keyword": "单分区不是完整模板包"}}
+        response = client.post(
+            "/api/local-plan-templates",
+            json={
+                "name": "单分区不是完整铺货方案",
+                "version": "2.0.0",
+                "shop_id": "3001",
+                "category_ids": ["100"],
+                "path": "A",
+                "category": {"category_keyword": "单分区"},
+            },
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"]
     else:
-        template_type = "edit_batch_bundle"
-        payload = _complete_bundle_payload()
-        payload["sections"].pop("image")
-    template_data = {
-            "template_type": template_type,
-            "template_name": f"invalid-{candidate_kind}",
-            "binding_scope": "live-dxm-draft-box-scope",
-            "payload": payload,
-            "is_enabled": True,
-    }
-    if candidate_kind == "section_template":
-        template_response = client.post("/api/templates", json=template_data)
-        assert template_response.status_code == 200
-        invalid_template = template_response.json()
-    else:
-        import src.main as main
-
-        invalid_template = main.repo.create_template(template_data)
-
-    response = client.post(
-        "/api/edit-batches",
-        json={
-            "scope_snapshot_id": scope_snapshot["id"],
-            "template_id": invalid_template["id"],
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == reason_code
-    assert len(client.get("/api/edit-batches").json()) == 1
+        payload = copy.deepcopy(case["plan_payload"])
+        payload["version"] = "2.0.0"
+        payload["field_mappings"]["100"]["entries"] = [
+            entry
+            for entry in payload["field_mappings"]["100"]["entries"]
+            if entry["field_key"] != "material"
+        ]
+        invalid_plan = client.post("/api/local-plan-templates", json=payload)
+        assert invalid_plan.status_code == 201, invalid_plan.text
+        response = client.post(
+            "/api/plan-snapshots/preview",
+            json=_current_snapshot_request(invalid_plan.json()["id"]),
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["reason_code"] == reason_code
+    assert len(client.get("/api/tasks?mode=batch_draft_save&view=summary").json()) == 1
+    with db.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM plan_snapshots").fetchone()["count"] == 1
 
 
 def test_frozen_scope_order_template_and_policy_have_no_mutation_endpoint(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-immutable-api.db",
-    )
-    assert create_response.status_code == 201
-    before = create_response.json()
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    before_snapshot = copy.deepcopy(case["frozen"])
+    before_task = copy.deepcopy(case["task"])
 
     response = client.patch(
-        f"/api/edit-batches/{before['id']}",
+        f"/api/plan-snapshots/{before_snapshot['id']}",
         json={
-            "scope_snapshot_id": 999,
-            "template_id": 999,
-            "policy": {"publish_allowed": True},
-            "items": list(reversed(before["items"])),
+            "local_plan_template_id": 999,
+            "publish_allowed": True,
+            "product_ids": list(reversed(before_snapshot["product_ids"])),
         },
     )
 
     assert response.status_code == 405
-    assert client.get(f"/api/edit-batches/{before['id']}").json() == before
+    plan_mutation = client.patch(
+        f"/api/local-plan-templates/{case['plan']['id']}",
+        json={"fixed_values": {"publish_allowed": True}},
+    )
+    assert plan_mutation.status_code == 409
+    assert plan_mutation.json()["detail"]["reason_code"] == "LOCAL_PLAN_VERSION_IMMUTABLE"
+    override = client.patch(
+        f"/api/tasks/{before_task['id']}/config-overrides",
+        json={"section": "pricing", "values": {"retail_price": 999}},
+    )
+    assert override.status_code == 409
+    assert override.json()["detail"]["reason_code"] == "BATCH_PLAN_SNAPSHOT_IMMUTABLE"
+    assert client.get(f"/api/plan-snapshots/{before_snapshot['id']}").json() == before_snapshot
+    after_task = client.get(f"/api/tasks/{before_task['id']}").json()
+    assert after_task["payload"]["plan_snapshot"] == before_task["payload"]["plan_snapshot"]
+    assert "template_overrides" not in after_task["payload"]
 
 
 def test_edit_batch_read_api_is_newest_first_and_missing_detail_is_404(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, first_response = _create_draft_batch_via_api(
+    first = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    second = _create_frozen_plan_batch_via_api(
         tmp_path,
         monkeypatch,
-        db_name="batch-read-api.db",
-        captured_at="2026-07-21T08:00:00+00:00",
+        version="2.0.0",
+        first_title="Car Phone Holder",
     )
-    assert first_response.status_code == 201
-    _client, _scope, _template, _payload, second_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-read-api.db",
-        captured_at="2026-07-21T08:01:00+00:00",
-    )
-    assert second_response.status_code == 201
-
-    listed = client.get("/api/edit-batches")
+    client = second["client"]
+    listed = client.get("/api/tasks?mode=batch_draft_save&view=summary")
 
     assert listed.status_code == 200
     assert [batch["id"] for batch in listed.json()] == [
-        second_response.json()["id"],
-        first_response.json()["id"],
+        second["task"]["id"],
+        first["task"]["id"],
     ]
-    missing = client.get("/api/edit-batches/999999")
-    assert missing.status_code == 404
-    assert missing.json()["detail"] == "Edit batch not found"
+    missing_snapshot = client.get("/api/plan-snapshots/999999")
+    assert missing_snapshot.status_code == 404
+    assert missing_snapshot.json()["detail"]["reason_code"] == "PLAN_SNAPSHOT_NOT_FOUND"
+    missing_task = client.get("/api/tasks/999999")
+    assert missing_task.status_code == 404
+    assert missing_task.json()["detail"] == "Task not found"
 
 
 def _post_manual_approval(client, batch_id: int, **payload):
-    """Legacy split approval entry must stay permanently closed."""
+    """Split approval for the current batch_draft_save task stays closed."""
     body = {
         "approved_by": "operator@example.com",
-        "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
+        "confirmation": "CONFIRM_DXM_SAVE_ONLY",
     }
     body.update(payload)
-    return client.post(f"/api/edit-batches/{batch_id}/manual-approval", json=body)
+    return client.post(f"/api/tasks/{batch_id}/manual-approval", json=body)
 
 
 def _assert_manual_approval_requires_atomic_start(response) -> None:
@@ -914,30 +948,25 @@ def _assert_manual_approval_requires_atomic_start(response) -> None:
 
 def test_manual_approval_endpoint_requires_atomic_approve_and_start(tmp_path, monkeypatch):
     """L0-C06: split /manual-approval is intentionally closed; use approve-and-start."""
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-manual-approval-closed.db",
-    )
-    assert create_response.status_code == 201
-    batch = create_response.json()
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    batch = case["task"]
     response = _post_manual_approval(client, batch["id"])
     _assert_manual_approval_requires_atomic_start(response)
     # Batch must remain draft; no token issuance side effects via this path.
-    detail = client.get(f"/api/edit-batches/{batch['id']}").json()
+    detail = client.get(f"/api/tasks/{batch['id']}").json()
     assert detail["status"] == "draft"
-    public = __import__("json").dumps(detail, ensure_ascii=False)
+    assert [job["status"] for job in detail["jobs"]] == ["pending", "pending", "pending"]
+    public = json.dumps(detail, ensure_ascii=False)
     assert "approvalToken" not in public
     assert "approval_token" not in public
+    assert "manual_approval" not in detail["payload"]
 
 
 def test_manual_approval_closed_even_with_wrong_confirmation(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-manual-approval-wrong-confirm.db",
-    )
-    batch = create_response.json()
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    batch = case["task"]
     response = _post_manual_approval(
         client,
         batch["id"],
@@ -945,52 +974,46 @@ def test_manual_approval_closed_even_with_wrong_confirmation(tmp_path, monkeypat
     )
     # Endpoint short-circuits before phrase validation — atomic gate wins.
     _assert_manual_approval_requires_atomic_start(response)
+    assert client.get(f"/api/tasks/{batch['id']}").json()["status"] == "draft"
 
 
 def test_manual_approval_closed_rejects_client_supplied_scope_payload(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-manual-approval-extra-fields.db",
-    )
-    batch = create_response.json()
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    batch = case["task"]
     response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
+        f"/api/tasks/{batch['id']}/manual-approval",
         json={
             "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
             "scope_snapshot_json": "{}",
         },
     )
-    # Either atomic gate (if extra fields ignored) or 422 validation — never 200/token.
-    assert response.status_code in {409, 422}
-    if response.status_code == 409:
-        _assert_manual_approval_requires_atomic_start(response)
+    assert response.status_code == 422
+    assert response.json()["detail"]
+    detail = client.get(f"/api/tasks/{batch['id']}").json()
+    assert detail["status"] == "draft"
+    assert "manual_approval" not in detail["payload"]
 
 
 def test_manual_approval_closed_under_session_and_capture_drift_setups(tmp_path, monkeypatch):
     """Drift scenarios must not reopen split approval; gate fires first."""
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-manual-approval-drift-closed.db",
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    if hasattr(main, "workflow_adapter") and getattr(main.workflow_adapter, "capture", None):
-        main.workflow_adapter.capture.setdefault("evidence", {})["dom_sha256"] = "C" * 64
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    batch = case["task"]
+    case["source"].browser_session_id = "browser-e2-drifted"
+    case["source"].schemas[0]["properties"]["title"]["maxLength"] = 199
     response = _post_manual_approval(client, batch["id"])
     _assert_manual_approval_requires_atomic_start(response)
+    detail = client.get(f"/api/tasks/{batch['id']}").json()
+    assert detail["status"] == "draft"
+    assert "manual_approval" not in detail["payload"]
 
 
 def test_manual_approval_repeated_posts_never_issue_token(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-manual-approval-repeat-closed.db",
-    )
-    batch = create_response.json()
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    batch = case["task"]
     first = _post_manual_approval(client, batch["id"])
     second = _post_manual_approval(client, batch["id"])
     _assert_manual_approval_requires_atomic_start(first)
@@ -998,23 +1021,28 @@ def test_manual_approval_repeated_posts_never_issue_token(tmp_path, monkeypatch)
     body = first.json()
     assert "approvalToken" not in body
     assert "approval_token" not in str(body).lower()
+    detail = client.get(f"/api/tasks/{batch['id']}").json()
+    assert detail["status"] == "draft"
+    assert "manual_approval" not in detail["payload"]
 
 
 def test_batch_read_apis_never_leak_approval_token_without_split_approval(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-token-boundary-closed.db",
-    )
-    batch = create_response.json()
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    batch = case["task"]
     closed = _post_manual_approval(client, batch["id"])
     _assert_manual_approval_requires_atomic_start(closed)
-    detail = client.get(f"/api/edit-batches/{batch['id']}").json()
-    listed = client.get("/api/edit-batches").json()
-    public_json = __import__("json").dumps({"detail": detail, "listed": listed}, ensure_ascii=False)
+    detail = client.get(f"/api/tasks/{batch['id']}").json()
+    listed = client.get("/api/tasks?mode=batch_draft_save").json()
+    summaries = client.get("/api/tasks?mode=batch_draft_save&view=summary").json()
+    public_json = json.dumps(
+        {"detail": detail, "listed": listed, "summaries": summaries},
+        ensure_ascii=False,
+    )
     assert "approvalToken" not in public_json
     assert "token_hash" not in public_json
     assert "approval_token_hash" not in public_json
+    assert "authorization_context" not in public_json
 
 
 @pytest.mark.parametrize(
@@ -1035,12 +1063,57 @@ def test_manual_approval_remains_closed_for_legacy_security_scenarios(
     monkeypatch,
     db_suffix,
 ):
-    """Parametrized stand-in for former deep split-approval suites (L0-C06)."""
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name=f"batch-manual-approval-closed-{db_suffix}.db",
-    )
-    batch = create_response.json()
+    """Real drifted facts cannot reopen the permanently closed split approval API."""
+    case = _create_frozen_plan_batch_via_api(tmp_path, monkeypatch)
+    client = case["client"]
+    batch = case["task"]
+
+    if db_suffix == "max-items":
+        oversized = client.post(
+            "/api/plan-snapshots/preview",
+            json={
+                **_current_snapshot_request(case["plan"]["id"]),
+                "product_ids": [str(80000 + index) for index in range(101)],
+            },
+        )
+        assert oversized.status_code == 422
+    elif db_suffix == "runtime-drift":
+        case["source"].browser_session_id = "browser-runtime-drift"
+    elif db_suffix == "page-identity":
+        case["source"].products[0]["sourceUrl"] = "https://example.test/wrong-page"
+    elif db_suffix == "ordered-targets":
+        with db.connection() as conn:
+            row = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (batch["id"],)).fetchone()
+            payload = db.loads(row["payload_json"], {})
+            payload["product_ids"] = list(reversed(payload["product_ids"]))
+            conn.execute(
+                "UPDATE tasks SET payload_json=? WHERE id=?",
+                (db.dumps(payload), batch["id"]),
+            )
+    elif db_suffix == "dom-digest":
+        case["source"].schemas[0]["properties"]["title"]["maxLength"] = 177
+    elif db_suffix == "lease-context":
+        with db.connection() as conn:
+            row = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (batch["id"],)).fetchone()
+            payload = db.loads(row["payload_json"], {})
+            payload["manual_approval"] = {
+                "approved": True,
+                "source": "client",
+                "token_hash": "F" * 64,
+            }
+            conn.execute(
+                "UPDATE tasks SET payload_json=? WHERE id=?",
+                (db.dumps(payload), batch["id"]),
+            )
+    elif db_suffix == "cas-token":
+        with db.connection() as conn:
+            conn.execute("UPDATE tasks SET status='running' WHERE id=?", (batch["id"],))
+    else:
+        with db.connection() as conn:
+            conn.execute("UPDATE tasks SET store_id=999999 WHERE id=?", (batch["id"],))
+
     response = _post_manual_approval(client, batch["id"])
     _assert_manual_approval_requires_atomic_start(response)
+    public = client.get(f"/api/tasks/{batch['id']}").json()
+    assert "approvalToken" not in json.dumps(public, ensure_ascii=False)
+    assert "token_hash" not in json.dumps(public, ensure_ascii=False)

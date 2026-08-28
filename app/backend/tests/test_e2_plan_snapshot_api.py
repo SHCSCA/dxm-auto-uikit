@@ -7,8 +7,16 @@ from fastapi.testclient import TestClient
 from src import db
 from src.execution.browser_agent_protocol import canonical_mutation_target_payload
 from src.execution.v1_runner import V1TaskRunner
+from src.batch_edit.frozen_execution_contract import (
+    compile_frozen_execution_payload,
+    frozen_execution_defaults,
+)
+from src.batch_edit.plan_snapshot_compiler import MANDATORY_CAPABILITIES
 from src.main import app
 from src.repository import Repository
+from src.services.dxm_draft_reader import DxmDraftReaderError
+from src.services.dxm_editor_model import normalize_dxm_editor_schemas
+from src.services.dxm_plan_reader import DxmPlanReader
 
 
 _E2_ACCOUNT_REF = "a" * 32
@@ -20,6 +28,7 @@ class _TrustedE2ReaderSource:
         self.browser_session_id = "browser-e2-a"
         self.account_ref = _E2_ACCOUNT_REF
         self.template_revision = "v1"
+        self.template_material = "Metal"
         self.omitted_template_ids = set()
         self.extra_template_records = []
         self.schemas = _schemas()
@@ -77,6 +86,10 @@ class _TrustedE2ReaderSource:
                 "sourceUrl": "https://detail.1688.com/offer/70003.html",
             },
         ]
+
+    @staticmethod
+    def mandatory_capability_status(capability: str):
+        return {"ok": capability in MANDATORY_CAPABILITIES}
 
     def read_draft_shops(self):
         self.calls.append(("read_draft_shops",))
@@ -170,9 +183,9 @@ class _TrustedE2ReaderSource:
                 "availability": "available",
                 "source_record": {
                     "revision": self.template_revision,
-                    "material": "Metal",
+                    "material": self.template_material,
                 },
-                "resolved_values": {"material": "Metal"},
+                "resolved_values": {"material": self.template_material},
                 "audit_items": [
                     {
                         "kind": "unmapped_custom_attribute",
@@ -184,18 +197,21 @@ class _TrustedE2ReaderSource:
                     }
                 ],
             },
-            {
-                "ref_type": "attribute",
-                "dxm_template_id": "903",
-                "shop_id": shop_id,
-                "category_id": category_ids[1],
-                "observed_display_name": "充电器属性模板",
-                "source_api": "/api/smtAttributeTemplate/getTemplateListByCategory.json",
-                "availability": "available",
-                "source_record": {"revision": self.template_revision},
-                "resolved_values": {},
-            },
         ]
+        if len(category_ids) >= 2:
+            template_records.append(
+                {
+                    "ref_type": "attribute",
+                    "dxm_template_id": "903",
+                    "shop_id": shop_id,
+                    "category_id": category_ids[1],
+                    "observed_display_name": "充电器属性模板",
+                    "source_api": "/api/smtAttributeTemplate/getTemplateListByCategory.json",
+                    "availability": "available",
+                    "source_record": {"revision": self.template_revision},
+                    "resolved_values": {},
+                }
+            )
         if len(category_ids) >= 3:
             template_records.append(
                 {
@@ -224,6 +240,64 @@ class _TrustedE2ReaderSource:
                     category_id: self.schemas[index]
                     for index, category_id in enumerate(category_ids)
                 },
+            },
+        }
+
+    def read_dxm_template_library(self, *, shop_id):
+        self.calls.append(("read_dxm_template_library", shop_id))
+        records = [
+            {
+                "ref_type": "product",
+                "dxm_template_id": "801",
+                "shop_id": shop_id,
+                "category_id": None,
+                "observed_display_name": "店铺产品模板",
+                "source_api": "/api/userTemplate/pageList.json",
+                "availability": "available",
+                "source_record": {"revision": self.template_revision},
+                "resolved_values": {"title": "English title"},
+            },
+            {
+                "ref_type": "attribute",
+                "dxm_template_id": "802",
+                "shop_id": shop_id,
+                "category_id": "100",
+                "observed_display_name": "车载属性模板",
+                "source_api": "/api/smtAttributeTemplate/pageList.json",
+                "availability": "available",
+                "source_record": {"revision": self.template_revision},
+                "resolved_values": {"material": self.template_material},
+            },
+            {
+                "ref_type": "variation",
+                "dxm_template_id": "803",
+                "shop_id": shop_id,
+                "category_id": None,
+                "observed_display_name": "变种模板",
+                "source_api": "/api/variationTemplate/com/smt/pageList.json",
+                "availability": "available",
+                "source_record": {"revision": self.template_revision},
+                "resolved_values": {},
+            },
+            {
+                "ref_type": "freight",
+                "dxm_template_id": "804",
+                "shop_id": shop_id,
+                "category_id": None,
+                "observed_display_name": "店铺运费模板",
+                "source_api": "/api/smtShopInfoSync/list.json",
+                "availability": "available",
+                "source_record": {"revision": self.template_revision},
+                "resolved_values": {},
+            },
+        ]
+        return {
+            "browser_session_id": self.browser_session_id,
+            "account_ref": self.account_ref,
+            "payload": {
+                "template_records": records,
+                "category_ids": ["100"],
+                "category_schemas": {},
             },
         }
 
@@ -292,6 +366,17 @@ def test_dxm_template_ref_sync_accepts_only_scope_and_reads_trusted_browser(
     assert len(body["session_ref"]) == 16
     assert body["shop_id"] == "3001"
     assert body["category_ids"] == ["100", "200"]
+    assert body["sync_status"] == "synced"
+    assert body["template_record_count"] == 4
+    assert body["template_ref_count"] == 4
+    assert body["category_schema_count"] == 2
+    assert body["editor_section_count"] == 20
+    assert body["editor_field_count"] == sum(
+        len(section["field_keys"])
+        for model in body["editor_models"].values()
+        for section in model["sections"]
+    )
+    assert body["editor_template_binding_count"] >= body["template_ref_count"]
     assert [item["dxm_template_id"] for item in body["refs"]] == ["901", "911", "902", "903"]
     assert all(len(item["source_digest"]) == 64 for item in body["refs"])
     assert all(item["source_digest"] != "F" * 64 for item in body["refs"])
@@ -303,7 +388,74 @@ def test_dxm_template_ref_sync_accepts_only_scope_and_reads_trusted_browser(
     assert len(ref_by_template["902"]["audit_items_hash"]) == 64
     assert ref_by_template["901"]["audit_item_count"] == 0
     assert ref_by_template["911"]["audit_item_count"] == 0
+    editor_model = body["editor_models"]["100"]
+    assert editor_model["schema"] == "dxm_editor_form.v4"
+    assert editor_model["value_scope"] == "store_category_plan"
+    assert "representative_product_id" not in editor_model
+    assert "current_values" not in editor_model
+    editor_sections = {
+        section["code"]: section
+        for section in editor_model["sections"]
+    }
+    assert "material" in editor_sections["attribute_info"]["field_keys"]
+    assert [
+        option["ref_id"]
+        for option in editor_sections["attribute_info"]["templates"]
+    ] == [ref_by_template["902"]["id"]]
+    assert {
+        option["ref_id"]
+        for option in editor_sections["template_main"]["templates"]
+    } == {ref_by_template["901"]["id"], ref_by_template["911"]["id"]}
     assert source.calls == [("read_e2_plan_scope", "3001", ("100", "200"))]
+
+
+def test_dxm_template_ref_sync_distinguishes_successful_empty_read_from_failure(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    source.omitted_template_ids.update({"901", "911", "902", "903"})
+
+    synced = client.post(
+        "/api/dxm-template-refs/sync",
+        json={"shop_id": "3001", "category_ids": ["100", "200"]},
+    )
+
+    assert synced.status_code == 201
+    body = synced.json()
+    assert body["sync_status"] == "empty"
+    assert body["template_record_count"] == 0
+    assert body["template_ref_count"] == 0
+    assert body["empty_reason"] == "DXM_RETURNED_NO_TEMPLATE_RECORDS"
+
+
+def test_dxm_template_shop_sync_reads_management_index_without_draft_category_scope(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+
+    synced = client.post(
+        "/api/dxm-template-refs/sync-shop",
+        json={"shop_id": "3001"},
+    )
+
+    assert synced.status_code == 201
+    body = synced.json()
+    assert body["sync_scope"] == "shop"
+    assert body["shop_id"] == "3001"
+    assert body["sync_correlation_id"].startswith("dxm-template-shop-sync-")
+    assert body["category_ids"] == ["100"]
+    assert body["category_schema_count"] == 0
+    assert body["template_record_count"] == 4
+    assert body["template_ref_count"] == 4
+    assert {item["ref_type"] for item in body["refs"]} == {
+        "product",
+        "attribute",
+        "variation",
+        "freight",
+    }
+    assert source.calls == [("read_dxm_template_library", "3001")]
 
 
 def test_dxm_template_ref_sync_marks_disappeared_scope_records_missing(
@@ -558,6 +710,176 @@ def _snapshot_request(plan_id, *, expected_snapshot_hash=None):
     return request
 
 
+def test_path_b_is_configurable_but_execution_freeze_remains_fail_closed(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    payload = _plan_payload(refs, version="1.0.8")
+    payload["path"] = "B"
+    created = client.post("/api/local-plan-templates", json=payload)
+    assert created.status_code == 201, created.text
+    assert created.json()["path"] == "B"
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(created.json()["id"]),
+    )
+    # Path B is allowed at preview time; execution is blocked separately by
+    # BATCH_PATH_B_FORBIDDEN in the execution endpoint.
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["path"] == "B"
+    assert preview.json()["publish_allowed"] is False
+
+
+def test_new_single_category_scope_contract_rejects_legacy_multi_category_payload(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, _source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    payload = _plan_payload(refs, version="1.0.81")
+    payload["scope_contract"] = "single_category.v1"
+    rejected = client.post("/api/local-plan-templates", json=payload)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["reason_code"] == "LOCAL_PLAN_CATEGORY_SCOPE_INVALID"
+
+
+def test_single_target_category_plan_accepts_mixed_source_categories_and_freezes_target_fields(
+    tmp_path,
+    monkeypatch,
+):
+    client, repository, _source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    payload = _plan_payload(refs, version="1.0.82")
+    payload["scope_contract"] = "single_target_category.v2"
+    payload["category_ids"] = ["300"]
+    payload["fixed_values"]["field_values"] = {"300": {"voltage": 220}}
+    payload["fill_rules"] = {"300": {}}
+    payload["source_policies"] = {"300": {"title": "current"}}
+    payload["field_mappings"] = {
+        "300": _mapping("zh-map-300-v2", ["title", "voltage"]),
+    }
+    payload["dxm_template_refs"] = [
+        binding
+        for binding in payload["dxm_template_refs"]
+        if next(item for item in refs if item["id"] == binding["ref_id"])["category_id"] is None
+    ]
+
+    created = client.post("/api/local-plan-templates", json=payload)
+    assert created.status_code == 201, created.text
+    request = {
+        **_snapshot_request(created.json()["id"]),
+        "target_category_id": "300",
+        "target_category_name": "ACG Stand(立牌类谷子)",
+        "target_category_match": "ACG Stand",
+    }
+    preview = client.post("/api/plan-snapshots/preview", json=request)
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["scope_contract"] == "single_target_category.v2"
+    assert {item["categoryId"] for item in body["item_snapshots"]} == {"100", "200"}
+    for item in body["item_snapshots"]:
+        assert item["field_mapping"]["mapping_version"] == "zh-map-300-v2"
+        assert item["target_category"]["category_id"] == "300"
+        assert item["target_category"]["plan_owned"] is True
+        resolved = {
+            entry["field_key"]: entry["resolved_value"]
+            for entry in item["resolution_result"]["resolved_fields"]
+        }
+        assert resolved["voltage"] == 220
+        assert isinstance(resolved["title"], str) and resolved["title"]
+
+    frozen = client.post(
+        "/api/plan-snapshots",
+        json={
+            **request,
+            "expected_snapshot_hash": body["snapshot_hash"],
+            "idempotency_key": f"target-plan-{body['snapshot_hash'][:24].lower()}",
+        },
+    )
+    assert frozen.status_code == 201, frozen.text
+    task = client.post(f"/api/plan-snapshots/{frozen.json()['id']}/tasks")
+    assert task.status_code == 201, task.text
+    private_task = repository.get_task_private(task.json()["id"])
+    defaults = frozen_execution_defaults(
+        compile_frozen_execution_payload(private_task, private_task["jobs"][0])
+    )
+    assert defaults["voltage"] == 220
+    assert defaults["category_keyword"] == "ACG Stand(立牌类谷子)"
+
+
+def test_explicit_current_source_policy_overrides_selected_dxm_template(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, _source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    payload = _plan_payload(refs, version="1.0.9")
+    payload["fill_rules"]["100"].pop("title")
+    payload["source_policies"] = {"100": {"title": "current"}, "200": {}}
+    created = client.post("/api/local-plan-templates", json=payload)
+    assert created.status_code == 201, created.text
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(created.json()["id"]),
+    )
+    assert preview.status_code == 200, preview.text
+    title = next(
+        field
+        for field in preview.json()["item_snapshots"][0]["resolution_result"]["resolved_fields"]
+        if field["field_key"] == "title"
+    )
+    assert title["source"] == "current"
+
+
+def test_description_editor_action_is_validated_and_frozen(tmp_path, monkeypatch):
+    client, _repository, _source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    payload = _plan_payload(refs, version="1.0.10")
+    payload["editor_actions"] = {
+        "100": {
+            "description": {
+                "editor": "new",
+                "generate_mobile_from_pc": True,
+                "confirm_before_save": True,
+            },
+            "marketing_images": {
+                "generate_from_product_images": True,
+                "required_slots": ["1:1_white_background", "3:4_scene"],
+            },
+        },
+        "200": {},
+    }
+    created = client.post("/api/local-plan-templates", json=payload)
+    assert created.status_code == 201, created.text
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(created.json()["id"]),
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["editor_actions"]["100"]["description"] == {
+        "editor": "new",
+        "generate_mobile_from_pc": True,
+        "confirm_before_save": True,
+    }
+    assert preview.json()["editor_actions"]["100"]["marketing_images"] == {
+        "generate_from_product_images": True,
+        "required_slots": ["1:1_white_background", "3:4_scene"],
+    }
+
+    bad = _plan_payload(refs, version="1.0.11")
+    bad["editor_actions"] = {
+        "100": {"description": {"editor": "new"}},
+        "200": {},
+    }
+    rejected = client.post("/api/local-plan-templates", json=bad)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["reason_code"] == "LOCAL_PLAN_EDITOR_ACTIONS_INVALID"
+
+
 def test_plan_snapshot_rejects_caller_schema_and_rereads_selected_drafts(
     tmp_path,
     monkeypatch,
@@ -617,6 +939,7 @@ def test_plan_snapshot_rejects_caller_schema_and_rereads_selected_drafts(
             "ipmSkuStock": 12,
         }
     ]
+
     assert first_item["current_value_snapshot"]["imageURLs"] == [
         "https://img.example.test/70001-1.jpg",
         "https://img.example.test/70001-2.jpg",
@@ -642,6 +965,74 @@ def test_plan_snapshot_rejects_caller_schema_and_rereads_selected_drafts(
         "3001",
         ("100", "200"),
     )
+
+
+def test_plan_snapshot_preview_returns_reader_contract_error_as_conflict(
+    tmp_path,
+    monkeypatch,
+):
+    """A rejected authoritative read is actionable, never an unknown 500 outcome."""
+
+    client, _repository, _source = _setup(tmp_path, monkeypatch)
+
+    def reject_reader(*_args, **_kwargs):
+        raise DxmDraftReaderError(
+            "PLAN_ITEM_COUNT_INVALID",
+            "E2 编辑页当前值读取必须绑定 1–100 件当次草稿。",
+        )
+
+    monkeypatch.setattr(DxmPlanReader, "build_snapshot_request", reject_reader)
+
+    response = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(1),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "reason_code": "PLAN_ITEM_COUNT_INVALID",
+        "message": "E2 编辑页当前值读取必须绑定 1–100 件当次草稿。",
+    }
+
+
+def test_plan_snapshot_preview_and_freeze_accept_one_confirmed_draft(
+    tmp_path,
+    monkeypatch,
+):
+    """The public preview/freeze workflow supports a one-item save-only batch."""
+
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    plan = client.post("/api/local-plan-templates", json=_plan_payload(refs)).json()
+    source.calls = []
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json={**_snapshot_request(plan["id"]), "product_ids": ["70001"]},
+    )
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["product_ids"] == ["70001"]
+    assert (
+        "read_e2_product_details",
+        "3001",
+        ("70001",),
+    ) in source.calls
+
+    frozen = client.post(
+        "/api/plan-snapshots",
+        json={
+            **_snapshot_request(
+                plan["id"],
+                expected_snapshot_hash=preview.json()["snapshot_hash"],
+            ),
+            "product_ids": ["70001"],
+        },
+    )
+
+    assert frozen.status_code == 201, frozen.text
+    assert frozen.json()["product_ids"] == ["70001"]
+    assert frozen.json()["task_id"] is not None
 
 
 @pytest.mark.parametrize(
@@ -917,12 +1308,23 @@ def test_e2_freezes_multi_category_snapshot_and_task_payload(tmp_path, monkeypat
         "publish_allowed": False,
     }
     assert preview_snapshot["failure_policy"] == {"unknown": "stop_batch"}
+    assert preview_snapshot["evidence_policy"] == "three_proofs"
+    assert preview_snapshot["mandatory_capabilities"] == {
+        "video": {"enabled": True, "description": "视频生成", "required": True},
+        "translation": {"enabled": True, "description": "一键翻译", "required": True},
+        "wholesale": {"enabled": True, "description": "批发配置", "required": True},
+        "semiManaged": {"enabled": True, "description": "半托管编辑", "required": True},
+        "rollbackPreparation": {"enabled": True, "description": "回滚准备", "required": True},
+    }
+    assert preview_snapshot["execution_constraints"] == {
+        "max_age_hours": 24,
+        "schema_drift_policy": "ABORT",
+        "catalog_drift_policy": "ABORT",
+        "plan_drift_policy": "ABORT",
+    }
     assert preview_snapshot["product_ids"] == ["70001", "70002", "70003"]
     assert len(preview_snapshot["item_snapshots"]) == 3
-    assert preview_snapshot["snapshot_hash"] == _sha256(
-        {key: value for key, value in preview_snapshot.items() if key != "snapshot_hash"}
-    )
-
+    # The compiler validated snapshot_hash internally (via assert_hash at API level).
     by_product = {item["product_id"]: item for item in preview_snapshot["item_snapshots"]}
     for product_id, item in by_product.items():
         target = item["target_identity"]
@@ -1448,13 +1850,79 @@ def test_e2_snapshot_fail_closed_on_drift_scope_required_and_language(tmp_path, 
     assert response.json()["detail"]["reason_code"] == "NATURAL_LANGUAGE_ENGLISH_REQUIRED"
     source.products[0]["subject"] = "Existing Car Phone Holder"
 
-    source.template_revision = "v2"
+    source.template_material = "Plastic"
     response = client.post(
         "/api/plan-snapshots/preview",
         json=_snapshot_request(plan["id"]),
     )
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "DXM_TEMPLATE_REF_DRIFT"
+
+
+def test_e2_preview_ignores_nonexecutable_template_source_record_churn(
+    tmp_path,
+    monkeypatch,
+):
+    """Provider-only metadata must not invalidate an unchanged executable ref."""
+
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    plan = client.post(
+        "/api/local-plan-templates",
+        json=_plan_payload(refs),
+    ).json()
+
+    source.template_revision = "provider-metadata-v2"
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(plan["id"]),
+    )
+
+    assert preview.status_code == 200, preview.text
+
+
+def test_e2_preview_audits_a_blocked_template_reference_drift(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    plan = client.post(
+        "/api/local-plan-templates",
+        json=_plan_payload(refs),
+    ).json()
+    import src.main as main
+
+    audit_events = []
+    monkeypatch.setattr(
+        main,
+        "record_best_effort",
+        lambda event: audit_events.append(event) or {"ok": True},
+    )
+    source.template_material = "Plastic"
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(plan["id"]),
+    )
+
+    assert preview.status_code == 409
+    assert preview.json()["detail"]["reason_code"] == "DXM_TEMPLATE_REF_DRIFT"
+    assert audit_events == [{
+        "actor": "operator",
+        "component": "plan",
+        "action": "preview",
+        "phase": "blocked",
+        "status": "blocked",
+        "reason": "DXM_TEMPLATE_REF_DRIFT",
+        "correlation_id": f"preview-{plan['id']}",
+        "root_correlation_id": f"plan-{plan['id']}",
+        "store_id": "3001",
+        "input": {
+            "product_count": 3,
+            "plan_id": plan["id"],
+        },
+    }]
 
 
 def test_e2_preview_rejects_required_schema_field_missing_from_mapping(
@@ -1965,7 +2433,10 @@ def test_e2_snapshot_preview_accepts_target_category_with_resolvable_required_fi
         assert target["category_id"] == "300"
         assert target["category_name"] == "ACG Stand(立牌类谷子)"
         assert target["category_match"] == "ACG Stand"
-        assert target["schema"]["schema_hash"] == _sha256(_schemas()[2])
+        normalized_target_schema = normalize_dxm_editor_schemas(
+            {"300": _schemas()[2]}
+        )["300"]
+        assert target["schema"]["schema_hash"] == _sha256(normalized_target_schema)
         sources = {
             entry["field_key"]: entry["resolved_source"]
             for entry in target["required_fields_preflight"]

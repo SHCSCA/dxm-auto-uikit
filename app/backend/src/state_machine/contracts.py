@@ -58,6 +58,25 @@ class StateName(StrEnum):
     CAPTURE_EVIDENCE = "CAPTURE_EVIDENCE"
     WRITE_EXCEPTION = "WRITE_EXCEPTION"
     STOP_OR_NEXT_PRODUCT = "STOP_OR_NEXT_PRODUCT"
+    # 批量保存专属状态
+    BATCH_VIDEO_CHECK = "BATCH_VIDEO_CHECK"
+    BATCH_VIDEO_SELECT = "BATCH_VIDEO_SELECT"
+    BATCH_VIDEO_SUBMIT = "BATCH_VIDEO_SUBMIT"
+    BATCH_VIDEO_POLL = "BATCH_VIDEO_POLL"
+    BATCH_VIDEO_PLACE = "BATCH_VIDEO_PLACE"
+    BATCH_WHOLESALE_FILL = "BATCH_WHOLESALE_FILL"
+    BATCH_TRANSLATE_CHECK = "BATCH_TRANSLATE_CHECK"
+    BATCH_TRANSLATE_EXECUTE = "BATCH_TRANSLATE_EXECUTE"
+    BATCH_SEMI_CHECK = "BATCH_SEMI_CHECK"
+    BATCH_SEMI_MODAL = "BATCH_SEMI_MODAL"
+    BATCH_SEMI_COUNTRY = "BATCH_SEMI_COUNTRY"
+    BATCH_SEMI_BATCH_FILL = "BATCH_SEMI_BATCH_FILL"
+    BATCH_SEMI_SAVE = "BATCH_SEMI_SAVE"
+    BATCH_ROLLBACK = "BATCH_ROLLBACK"
+    # Path B 双保存合同专属状态：SAVE1 后由原生门裁决（"编辑半托管信息"）；
+    # 由此进入 /web/smt/editFromSmt 完成半托管并触发 SAVE2。
+    SAVE_INTENT_MODAL = "SAVE_INTENT_MODAL"
+    SAVE2_ONLY = "SAVE2_ONLY"
 
 
 @dataclass(frozen=True)
@@ -236,6 +255,91 @@ def build_v1_state_specs() -> dict[StateName, StateNodeSpec]:
             actions=("release local ownership lock",),
             failure_code="E202",
             publish_guard_required=False,
+        ),
+        # 批量保存专属状态规格
+        StateName.BATCH_VIDEO_CHECK: StateNodeSpec(
+            state_name=StateName.BATCH_VIDEO_CHECK,
+            preconditions=("batch product list is loaded",),
+            actions=("check video field status for batch products",),
+            failure_code="E601",
+        ),
+        StateName.BATCH_VIDEO_SELECT: StateNodeSpec(
+            state_name=StateName.BATCH_VIDEO_SELECT,
+            preconditions=("video check completed", "products without video identified"),
+            actions=("select video source for batch products",),
+            failure_code="E602",
+        ),
+        StateName.BATCH_VIDEO_SUBMIT: StateNodeSpec(
+            state_name=StateName.BATCH_VIDEO_SUBMIT,
+            preconditions=("video selections confirmed",),
+            actions=("submit video batch upload request",),
+            failure_code="E603",
+        ),
+        StateName.BATCH_VIDEO_POLL: StateNodeSpec(
+            state_name=StateName.BATCH_VIDEO_POLL,
+            preconditions=("video submit request sent",),
+            actions=("poll video upload status",),
+            failure_code="E604",
+        ),
+        StateName.BATCH_VIDEO_PLACE: StateNodeSpec(
+            state_name=StateName.BATCH_VIDEO_PLACE,
+            preconditions=("video upload completed",),
+            actions=("place video into product video fields",),
+            failure_code="E605",
+        ),
+        StateName.BATCH_WHOLESALE_FILL: StateNodeSpec(
+            state_name=StateName.BATCH_WHOLESALE_FILL,
+            preconditions=("batch products in edit context",),
+            actions=("fill wholesale price tiers for batch products",),
+            failure_code="E606",
+        ),
+        StateName.BATCH_TRANSLATE_CHECK: StateNodeSpec(
+            state_name=StateName.BATCH_TRANSLATE_CHECK,
+            preconditions=("batch products selected",),
+            actions=("check translation status for batch products",),
+            failure_code="E607",
+        ),
+        StateName.BATCH_TRANSLATE_EXECUTE: StateNodeSpec(
+            state_name=StateName.BATCH_TRANSLATE_EXECUTE,
+            preconditions=("translation check completed",),
+            actions=("execute batch translation",),
+            failure_code="E608",
+        ),
+        StateName.BATCH_SEMI_CHECK: StateNodeSpec(
+            state_name=StateName.BATCH_SEMI_CHECK,
+            preconditions=("batch products in semi-managed context",),
+            actions=("check semi-managed mode compatibility",),
+            failure_code="E609",
+        ),
+        StateName.BATCH_SEMI_MODAL: StateNodeSpec(
+            state_name=StateName.BATCH_SEMI_MODAL,
+            preconditions=("semi check passed",),
+            actions=("open semi-managed batch modal",),
+            failure_code="E610",
+        ),
+        StateName.BATCH_SEMI_COUNTRY: StateNodeSpec(
+            state_name=StateName.BATCH_SEMI_COUNTRY,
+            preconditions=("semi modal opened",),
+            actions=("select batch country settings",),
+            failure_code="E611",
+        ),
+        StateName.BATCH_SEMI_BATCH_FILL: StateNodeSpec(
+            state_name=StateName.BATCH_SEMI_BATCH_FILL,
+            preconditions=("country selected",),
+            actions=("fill semi-managed batch fields",),
+            failure_code="E612",
+        ),
+        StateName.BATCH_SEMI_SAVE: StateNodeSpec(
+            state_name=StateName.BATCH_SEMI_SAVE,
+            preconditions=("semi batch fields filled",),
+            actions=("save batch semi-managed changes",),
+            failure_code="E613",
+        ),
+        StateName.BATCH_ROLLBACK: StateNodeSpec(
+            state_name=StateName.BATCH_ROLLBACK,
+            preconditions=("batch operation failed",),
+            actions=("rollback batch changes",),
+            failure_code="E699",
         ),
     }
     for spec in specs.values():

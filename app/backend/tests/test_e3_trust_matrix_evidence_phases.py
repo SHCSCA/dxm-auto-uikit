@@ -59,6 +59,9 @@ class _LiveDomPreflightAdapter:
     def browser_session_id(self) -> str:
         return "e3-test-browser-session"
 
+    def refresh_account_context_hash(self) -> str:
+        return "A" * 64
+
     def current_mutation_identity(self) -> dict:
         return {
             "browser_session_id": self.browser_session_id(),

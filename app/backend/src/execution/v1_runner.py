@@ -16,6 +16,15 @@ from typing import Any
 
 from src.core.config import DATA_DIR, SCREENSHOT_DIR
 from src.batch_edit.plan_contract import E2PlanService, PlanContractError
+from src.batch_edit.plan_snapshot_compiler import (
+    PLAN_PATH_EXECUTION_NOT_RELEASED,
+    is_plan_execution_path_released,
+)
+from src.batch_edit.full_product_edit_orchestrator import (
+    EditPhase,
+    FullProductEditOrchestrator,
+    ProductEditContext,
+)
 from src.batch_edit.frozen_execution_contract import (
     FrozenExecutionContractError,
     compile_frozen_execution_payload,
@@ -149,7 +158,14 @@ SINGLE_SAVE_STEPS = [
     if step[0] not in {StateName.CLAIM_PRODUCT, StateName.VERIFY_LIST_OWNERSHIP}
 ]
 
-BATCH_DRAFT_SAVE_STEPS = [
+SEMI_MANAGED_STEPS = [
+    (StateName.ENABLE_SEMI_MANAGED, "选择半托管服务", "semi_managed"),
+    (StateName.OPEN_SEMI_MANAGED_PAGE, "进入半托管编辑页", "semi_managed"),
+    (StateName.FILL_SEMI_GOODS, "设置包装/物流/货品信息", "semi_goods"),
+    (StateName.FILL_SEMI_VARIANTS, "设置半托管 SKU / 库存", "semi_variants"),
+]
+
+SINGLE_SAVE_STEPS_WITHOUT_SEMI = [
     step
     for step in SINGLE_SAVE_STEPS
     if step[0]
@@ -158,8 +174,61 @@ BATCH_DRAFT_SAVE_STEPS = [
         StateName.OPEN_SEMI_MANAGED_PAGE,
         StateName.FILL_SEMI_GOODS,
         StateName.FILL_SEMI_VARIANTS,
+        StateName.PRE_SAVE_GUARD_CHECK,
+        StateName.SAVE_ONLY,
+        StateName.VERIFY_SAVE_RESULT,
+        StateName.VERIFY_NOT_PUBLISHED,
+        StateName.WRITE_REPORT,
+        StateName.RELEASE_LOCK,
     }
 ]
+
+# SAVE1 闭环：主编辑写完后由"原生门"（SAVE_INTENT_MODAL ＝"编辑半托管信息"点击）
+# 裁决。SAVE1 与原生门结果一旦因果绑定同一握手，不要求还原墙钟全序。
+SAVE1_TAIL = [
+    step
+    for step in SINGLE_SAVE_STEPS
+    if step[0]
+    in {
+        StateName.PRE_SAVE_GUARD_CHECK,
+        StateName.SAVE_ONLY,
+        StateName.VERIFY_SAVE_RESULT,
+        StateName.VERIFY_NOT_PUBLISHED,
+    }
+]
+
+# 原生门：触发保存意图 Modal，点击"编辑半托管信息"。
+# 当前尚未实证哪个入口点击触发 SAVE1，故两个点击均按 MAY_DISPATCH_SAVE1 防护。
+SAVE_INTENT_GATE = [
+    (StateName.SAVE_INTENT_MODAL, "原生保存意图 Modal 门", "modal"),
+]
+
+# SAVE2 闭环：半托管页填完后再次点击保存。
+SAVE2_TAIL = [
+    (StateName.PRE_SAVE_GUARD_CHECK, "半托管保存前发布隔离复核", "publish_guard"),
+    (StateName.SAVE2_ONLY, "二次保存半托管信息 (SAVE2)", "save"),
+    (StateName.VERIFY_SAVE_RESULT, "读回半托管保存成功提示", "result"),
+    (StateName.VERIFY_NOT_PUBLISHED, "确认半托管未发布", "result"),
+]
+
+REPORT_AND_RELEASE = [
+    step
+    for step in V1_STEPS
+    if step[0] in {StateName.WRITE_REPORT, StateName.RELEASE_LOCK}
+]
+
+BATCH_DRAFT_SAVE_STEPS = SINGLE_SAVE_STEPS_WITHOUT_SEMI + SAVE1_TAIL + REPORT_AND_RELEASE
+
+# Path B 合同：
+#   主编辑 → SAVE1 → 原生门 → 半托管页 → 半托管填字段 → SAVE2 → 报告 → 释放锁
+BATCH_PATH_B_STEPS = (
+    SINGLE_SAVE_STEPS_WITHOUT_SEMI
+    + SAVE1_TAIL
+    + SAVE_INTENT_GATE
+    + SEMI_MANAGED_STEPS
+    + SAVE2_TAIL
+    + REPORT_AND_RELEASE
+)
 
 CLAIM_ONLY_STEPS = [
     (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
@@ -663,6 +732,9 @@ class V1TaskRunner:
         product_id = job.get("product_id")
         product = None if mode == "batch_draft_save" else self._product(product_id)
         execution_defaults = self._execution_defaults(task, product, job=job)
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        plan = payload.get("plan_snapshot") if isinstance(payload.get("plan_snapshot"), Mapping) else {}
+        snapshot_path = str(plan.get("path") or payload.get("path") or "A").strip().upper()
         lock_token: str | None = None
         claim_mark = self._claim_mark(task)
         filled_fields: list[str] = []
@@ -690,10 +762,33 @@ class V1TaskRunner:
             }:
                 raise V1ExecutionError("E901", "缺少真实工作流适配器", f"{mode} requires workflow_adapter")
 
-            for state_name, step_name, field_domain in self._steps_for_mode(mode):
+            for state_name, step_name, field_domain in self._steps_for_mode(mode, snapshot_path):
                 current_state_name = state_name
                 current_step_name = step_name
                 current_field_domain = field_domain
+
+                # Path B: wire FullProductEditOrchestrator for per-product phase tracking.
+                # Orchestrator tracks phase boundaries (MAIN_EDIT → SAVE_MODAL → SEMI_EDIT)
+                # and records receipts for audit.  Phase transitions are non-blocking;
+                # failures in orchestrator calls do NOT abort the step loop.
+                product_edit_ctx: ProductEditContext | None = None
+                if snapshot_path == "B" and state_name == StateName.PRECHECK_CONFIG:
+                    try:
+                        product_orchestrator = FullProductEditOrchestrator()
+                        product_edit_ctx = product_orchestrator.create_context(
+                            product_id=str(product_id),
+                            shop_id=str(self._store_name(task) or "unknown"),
+                            snapshot_id=str(plan.get("snapshot_id", "")),
+                            snapshot_hash=str(plan.get("snapshot_hash", "")),
+                            session_context=dict(plan.get("session_context", {})),
+                        )
+                        product_orchestrator.enter_phase(product_edit_ctx, EditPhase.PHASE_MAIN_EDIT)
+                    except Exception as exc:
+                        self.repo.add_log(
+                            task_id, job_id, "warning",
+                            "Orchestrator 初始化失败，继续执行（不影响步骤）",
+                            {"error": str(exc)},
+                        )
                 self._guard_step(task, job, state_name, claim_mark, product)
                 self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
                 evidence_path = self._write_evidence(task_id, job_id, state_name)
@@ -761,6 +856,51 @@ class V1TaskRunner:
                     ("batch_draft_save", StateName.SAVE_ONLY),
                 }:
                     self._assert_real_mutation_authorized(task_id, mode, state_name)
+                # Path B phase transitions: advance through
+                #   MAIN_EDIT → SAVE_MODAL → SEMI_EDIT
+                # using FullProductEditOrchestrator for per-product phase tracking.
+                if (
+                    snapshot_path == "B"
+                    and product_edit_ctx is not None
+                    and state_name
+                    in {
+                        StateName.SAVE_ONLY,      # SAVE1 completed → enter SAVE_MODAL
+                        StateName.SAVE_INTENT_MODAL,  # modal shown → enter SEMI_EDIT
+                    }
+                ):
+                    try:
+                        # Record previous phase result, then advance
+                        prev_phase = product_edit_ctx.current_phase
+                        if state_name == StateName.SAVE_ONLY:
+                            product_edit_ctx.execution_state = "save1_completed"
+                        elif state_name == StateName.SAVE_INTENT_MODAL:
+                            product_edit_ctx.execution_state = "semi_entered"
+
+                        # advance_phase: enter next phase and execute it
+                        next_receipt = product_orchestrator.advance_phase(
+                            product_edit_ctx,
+                            section_results={
+                                prev_phase.value: {
+                                    "status": "completed",
+                                    "state": state_name.value,
+                                }
+                            },
+                        )
+                        self.repo.add_log(
+                            task_id, job_id, "info",
+                            f"Path B Phase 转换: {prev_phase.value} → {product_edit_ctx.current_phase.value}",
+                            {
+                                "receipt": next_receipt.phase.value if next_receipt else None,
+                                "status": next_receipt.status.value if next_receipt else None,
+                            },
+                        )
+                    except Exception as exc:
+                        self.repo.add_log(
+                            task_id, job_id, "warning",
+                            "Orchestrator phase 转换失败，继续执行",
+                            {"error": str(exc), "state": state_name.value},
+                        )
+
                 workflow_result = await self._run_workflow_action_async(
                     task,
                     job,
@@ -1055,12 +1195,14 @@ class V1TaskRunner:
             self.repo.add_log(task_id, job_id, "error", error.title, {"error_code": error.error_code, "detail": error.detail})
             return False
 
-    def _steps_for_mode(self, mode: str):
+    def _steps_for_mode(self, mode: str, snapshot_path: str = "A"):
         if mode == "dry_run":
             return [V1_STEPS[0]]
         if mode == "claim_only":
             return CLAIM_ONLY_STEPS
         if mode == "batch_draft_save":
+            if snapshot_path == "B":
+                return BATCH_PATH_B_STEPS
             return BATCH_DRAFT_SAVE_STEPS
         if mode == "single_save":
             return SINGLE_SAVE_STEPS
@@ -1596,17 +1738,23 @@ class V1TaskRunner:
         plan = payload.get("plan_snapshot") if isinstance(payload.get("plan_snapshot"), Mapping) else {}
         payload_path = str(payload.get("path") or "").strip().upper()
         snapshot_path = str(plan.get("path") or "").strip().upper()
-        if "B" in {payload_path, snapshot_path}:
+        if payload_path not in ("A", "B") or snapshot_path not in ("A", "B"):
             raise V1ExecutionError(
                 "E999",
-                "Path B 已拒绝",
-                "batch_draft_save Path B (editFromSmt) is forbidden",
+                "路径参数无效",
+                "batch_draft_save requires path=A or path=B",
             )
-        if payload_path != "A" or snapshot_path != "A":
+        if payload_path != snapshot_path:
             raise V1ExecutionError(
-                "E999",
-                "Path A 必填",
-                "batch_draft_save requires path=A",
+                "BATCH_PATH_MISMATCH",
+                "任务路径与冻结方案不一致",
+                "batch_draft_save payload path must match the frozen snapshot path",
+            )
+        if not is_plan_execution_path_released(snapshot_path):
+            raise V1ExecutionError(
+                PLAN_PATH_EXECUTION_NOT_RELEASED,
+                "Path B 真实执行尚未释放",
+                "Path B authorization, dual-save dispatch, ledger and evidence contracts are not complete",
             )
         task_id = task.get("id")
         current_task = (
@@ -4151,7 +4299,12 @@ class V1TaskRunner:
                     else None
                 )
                 plan_mapping = plan if isinstance(plan, Mapping) else None
-                category_id = str(execution_payload.get("category_id") or "")
+                target_category = execution_payload.get("target_category")
+                category_id = str(
+                    target_category.get("category_id")
+                    if isinstance(target_category, Mapping) and target_category.get("plan_owned") is True
+                    else execution_payload.get("category_id") or ""
+                )
                 reject_if_path_a_section_templates_missing(plan_mapping, category_id)
                 defaults = frozen_execution_defaults(execution_payload)
                 if plan_mapping is not None and "dxm_template_refs" in plan_mapping:

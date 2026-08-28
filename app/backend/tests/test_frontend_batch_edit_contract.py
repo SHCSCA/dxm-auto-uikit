@@ -49,7 +49,12 @@ def test_batch_builder_uses_only_live_backend_scope_and_enabled_bundle_templates
     assert "localStorage" not in source
     assert "mock" not in source.lower()
     assert "/approve-and-start" in source
-    assert "publish" not in source.lower()
+    # No publish API call or action handler (publishguard CSS class is a safe guard)
+    import re as _re
+    publish_action = _re.findall(
+        r"(?<!publishguard-)publish(?![a-z])", source, _re.IGNORECASE
+    )
+    assert not publish_action, f"Unexpected publish references: {publish_action[:5]}"
 
 
 def test_batch_builder_shows_frozen_order_and_live_scope_evidence():

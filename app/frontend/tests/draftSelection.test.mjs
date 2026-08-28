@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   DraftProductIdentityConflictError,
+  MAX_DRAFT_SELECTION,
   MIN_DRAFT_SELECTION,
   ReaderSessionChangedError,
   assertRealDraftPageResponse,
@@ -173,6 +174,7 @@ test('changing visible browser session clears cross-session selection', () => {
 
 test('task input requires at least one product and a positive plan id', () => {
   assert.equal(MIN_DRAFT_SELECTION, 1)
+  assert.equal(MAX_DRAFT_SELECTION, 100)
   assert.throws(
     () => buildDraftTaskInput({
       shopId: '101',
@@ -188,6 +190,18 @@ test('task input requires at least one product and a positive plan id', () => {
       planId: null,
     }),
     /plan/,
+  )
+})
+
+
+test('task input rejects more than one hundred products before preview', () => {
+  assert.throws(
+    () => buildDraftTaskInput({
+      shopId: '101',
+      productIds: Array.from({ length: MAX_DRAFT_SELECTION + 1 }, (_, index) => String(index + 1000)),
+      planId: 9,
+    }),
+    /at most 100/,
   )
 })
 

@@ -240,6 +240,16 @@ def test_page_list_is_bound_to_requested_shop_and_draft_state() -> None:
     ]
 
 
+def test_page_list_accepts_the_console_maximum_of_200_rows() -> None:
+    page = _page_response(page_size=200, total_page=0, total_size=0, items=[])
+    source = FakeDraftSource(_shop_response(), page)
+
+    result = DxmDraftReader(source).list_products(shop_id="101", page_no=1, page_size=200)
+
+    assert source.page_calls == [{"shop_id": "101", "page_no": 1, "page_size": 200}]
+    assert result["pagination"]["page_size"] == 200
+
+
 def test_page_list_accepts_pdd_goods1_source_url() -> None:
     page = _page_response(
         page_size=1,
@@ -728,8 +738,15 @@ def test_reader_allowlist_has_only_two_read_contracts() -> None:
 def test_e2_plan_reader_allowlist_contains_only_documented_read_contracts() -> None:
     assert DXM_E2_PLAN_READ_ALLOWLIST == {
         ("GET", "https://www.dianxiaomi.com/api/smtProduct/edit.json"),
+        ("GET", "https://www.dianxiaomi.com/api/smtCommLogisticAttribute/getLogisticAttributeList.json"),
+        ("GET", "https://www.dianxiaomi.com/api/smtCommProduct/supportNewSizeAttribute.json"),
         ("POST", "https://www.dianxiaomi.com/api/userTemplate/pageList.json"),
         ("POST", "https://www.dianxiaomi.com/api/smtAttributeTemplate/pageList.json"),
+        (
+            "POST",
+            "https://www.dianxiaomi.com/api/smtAttributeTemplate/getTemplateListByCategory.json",
+        ),
+        ("POST", "https://www.dianxiaomi.com/api/variationTemplate/com/smt/pageList.json"),
         ("POST", "https://www.dianxiaomi.com/api/smtShopInfoSync/list.json"),
         (
             "POST",
@@ -744,6 +761,13 @@ def test_e2_plan_reader_allowlist_contains_only_documented_read_contracts() -> N
         ("POST", "https://www.dianxiaomi.com/api/smtCategory/list.json"),
         ("POST", "https://www.dianxiaomi.com/api/smtCategory/searchCategory.json"),
         ("POST", "https://www.dianxiaomi.com/api/smtCategory/getByCategoryId.json"),
+        ("POST", "https://www.dianxiaomi.com/api/userTemplate/templateListForModule.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtAdjustPrice/pageList.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtCommMsr/list.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtCommManufacture/list.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtCategory/syncQualification.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtProduct/getSmtCommission.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtProduct/verifyPopChoiceShop.json"),
     }
     assert all("save" not in url.casefold() and "publish" not in url.casefold() for _method, url in DXM_E2_PLAN_READ_ALLOWLIST)
 
@@ -815,6 +839,60 @@ def test_visible_session_e2_product_details_read_current_editor_values(
             "GET",
             "https://www.dianxiaomi.com/api/smtProduct/edit.json",
             {"id": "70003"},
+            15_000,
+        ),
+        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
+    ]
+
+
+def test_visible_session_e2_product_details_accepts_one_confirmed_draft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator may preview/save a confirmed batch containing one draft."""
+
+    flow, api_request = _visible_flow(monkeypatch)
+    api_request.calls = []
+
+    def get(
+        url: str,
+        *,
+        timeout: int,
+        params: dict[str, str] | None = None,
+    ) -> FakeApiResponse:
+        if url.endswith("/api/userInfo.json"):
+            api_request.calls.append(("GET", url, timeout))
+            return FakeApiResponse(_shop_response())
+        product_id = str((params or {}).get("id") or "")
+        api_request.calls.append(("GET", url, dict(params or {}), timeout))
+        return FakeApiResponse(
+            {
+                "code": 0,
+                "data": {
+                    "product": {
+                        "idStr": product_id,
+                        "shopId": "101",
+                        "categoryId": "301",
+                        "dxmState": "draft",
+                        "subject": f"Current title {product_id}",
+                    }
+                },
+            }
+        )
+
+    monkeypatch.setattr(api_request, "get", get)
+
+    result = flow.read_e2_product_details(
+        shop_id="101",
+        product_ids=["70001"],
+    )
+
+    assert [item["idStr"] for item in result["payload"]["products"]] == ["70001"]
+    assert api_request.calls == [
+        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
+        (
+            "GET",
+            "https://www.dianxiaomi.com/api/smtProduct/edit.json",
+            {"id": "70001"},
             15_000,
         ),
         ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
@@ -963,8 +1041,98 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
     flow, api_request = _visible_flow(monkeypatch)
     api_request.calls = []
 
+    def get(
+        url: str,
+        *,
+        timeout: int,
+        params: dict[str, str] | None = None,
+    ) -> FakeApiResponse:
+        if url.endswith("/api/userInfo.json"):
+            api_request.calls.append(("GET", url, timeout))
+            return FakeApiResponse(_shop_response())
+        api_request.calls.append(("GET", url, dict(params or {}), timeout))
+        category_id = str((params or {}).get("categoryId") or "")
+        if url.endswith("/api/smtCommLogisticAttribute/getLogisticAttributeList.json"):
+            return FakeApiResponse({
+                "code": 0,
+                "data": {
+                    "categoryId": category_id,
+                    "dataSourceJson": json.dumps([
+                        {"value_id": "1983471271", "label": "普货", "children": None},
+                        {
+                            "value_id": "1983471275",
+                            "label": "纯电",
+                            "children": [
+                                {"value_id": "796", "label": "干电池"},
+                            ],
+                        },
+                    ]),
+                },
+            })
+        if url.endswith("/api/smtCommProduct/supportNewSizeAttribute.json"):
+            return FakeApiResponse({"code": 0, "data": 1 if category_id == "301" else 0})
+        raise AssertionError(f"unexpected E2 GET endpoint: {url}")
+
     def post(url: str, *, form: dict[str, str], timeout: int) -> FakeApiResponse:
         api_request.calls.append(("POST", url, dict(form), timeout))
+        if url.endswith("/api/userTemplate/templateListForModule.json"):
+            return FakeApiResponse({"code": 0, "data": {"propertyList": [], "templateList": [], "packageList": []}})
+        if url.endswith("/api/smtCommMsr/list.json"):
+            return FakeApiResponse({"code": 0, "data": {"101": []}})
+        if url.endswith("/api/smtCommManufacture/list.json"):
+            return FakeApiResponse({"code": 0, "data": {"101": []}})
+        if url.endswith("/api/smtAdjustPrice/pageList.json"):
+            return FakeApiResponse({"code": 0, "data": ""})
+        if url.endswith("/api/smtProduct/getSmtCommission.json"):
+            return FakeApiResponse({"code": 0, "data": 5.0})
+        if url.endswith("/api/smtProduct/verifyPopChoiceShop.json"):
+            return FakeApiResponse({
+                "code": 0,
+                "data": [{"shopId": "101", "isPopChoice": True, "popChoiceShopId": "901"}],
+            })
+        if url.endswith("/api/smtCategory/getByCategoryId.json"):
+            return FakeApiResponse({"code": 0, "data": {"categoryId": form["categoryId"]}})
+        if url.endswith("/api/smtCategory/syncQualification.json"):
+            return FakeApiResponse({"code": 0, "data": []})
+        if url.endswith("/api/smtAttributeTemplate/getTemplateListByCategory.json"):
+            category_id = form["categoryId"]
+            return FakeApiResponse({
+                "code": 0,
+                "data": {
+                    "attributeTemplateList": [{
+                        "id": f"9{category_id}",
+                        "templateName": f"属性模板 {category_id}",
+                        "shopId": "101",
+                        "categoryId": category_id,
+                        "productPropertys": json.dumps(
+                            [
+                                {
+                                    "attrNameId": f"5{category_id}",
+                                    "attrValueId": (
+                                        "7303" if category_id == "302" else f"7{category_id}"
+                                    ),
+                                },
+                                *(
+                                    [
+                                        {
+                                            "attrNameId": "5301",
+                                            "attrValueId": "7302",
+                                        },
+                                        {
+                                            "attrNameId": "",
+                                            "attrValueId": "",
+                                            "attrName": "自定义表面处理",
+                                            "attrValue": "Brushed",
+                                        },
+                                    ]
+                                    if category_id == "301"
+                                    else []
+                                ),
+                            ]
+                        ),
+                    }],
+                },
+            })
         if url.endswith("/api/userTemplate/pageList.json"):
             return FakeApiResponse(
                 {
@@ -1149,6 +1317,7 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
             )
         raise AssertionError(f"unexpected E2 read endpoint: {url}")
 
+    monkeypatch.setattr(api_request, "get", get)
     monkeypatch.setattr(api_request, "post", post)
 
     result = flow.read_e2_plan_scope(
@@ -1176,7 +1345,9 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
     }
     schemas = result["payload"]["category_schemas"]
     assert set(schemas) == {"301", "302"}
-    assert schemas["301"]["required"] == ["title", "attr_5301"]
+    # Shared plans do not require a product-specific title; the target
+    # category is the immutable required scope value.
+    assert schemas["301"]["required"] == ["attr_5301", "categoryId"]
     assert schemas["301"]["properties"]["title"]["natural_language"] is True
     assert schemas["301"]["properties"]["grossWeight"]["type"] == "number"
     assert schemas["301"]["properties"]["freightTemplateId"]["type"] == "string"
@@ -1209,12 +1380,44 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
         "cargoPrice": "SKU 货值",
         "ipmSkuStock": "SKU 库存",
         "aeopSKUProperty": "SKU 属性组合",
+        "logisticAttrList": "SKU 物流属性",
     }
     assert schemas["301"]["price_policy"] == {
         "sku_cargo_not_above_sale": True,
         "sku_prices_within_range": True,
     }
     assert sku_schema["properties"]["aeopSKUProperty"]["type"] == "array"
+    assert sku_schema["properties"]["logisticAttrList"]["source_api"] == (
+        "/api/smtCommLogisticAttribute/getLogisticAttributeList.json"
+    )
+    assert sku_schema["properties"]["logisticAttrList"]["items"]["properties"]["value"]["values"] == [
+        {"id": "1983471271", "name": "普货"},
+        {"id": "1983471275", "name": "纯电"},
+        {"id": "796", "name": "干电池"},
+    ]
+    assert result["payload"]["category_capabilities"]["301"] == {
+        "logistics_attribute_options": [
+            {"value_id": "1983471271", "label": "普货", "children": None},
+            {
+                "value_id": "1983471275",
+                "label": "纯电",
+                "children": [{"value_id": "796", "label": "干电池"}],
+            },
+        ],
+        "support_new_size_attribute": True,
+        "commission_rate": 5.0,
+        "pop_choice_shop": {
+            "shopId": "101",
+            "isPopChoice": True,
+            "popChoiceShopId": "901",
+        },
+        "source_apis": [
+            "/api/smtCommLogisticAttribute/getLogisticAttributeList.json",
+            "/api/smtCommProduct/supportNewSizeAttribute.json",
+            "/api/smtProduct/getSmtCommission.json",
+            "/api/smtProduct/verifyPopChoiceShop.json",
+        ],
+    }
     assert schemas["301"]["properties"]["attr_5301"]["ui_label_zh"] == "类目 301 材质"
     assert schemas["301"]["properties"]["title"]["ui_binding"] == (
         "dxm_editor:title"
@@ -1271,7 +1474,9 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
         for record in records
         if record["ref_type"] == "attribute" and record["category_id"] == "301"
     )
-    assert attribute_ref["source_api"] == "/api/smtAttributeTemplate/pageList.json"
+    assert attribute_ref["source_api"] == (
+        "/api/smtAttributeTemplate/getTemplateListByCategory.json"
+    )
     assert attribute_ref["resolved_values"] == {
         "attr_5301": ["7301", "7302"]
     }
@@ -1317,7 +1522,36 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
         },
         15_000,
     ) in api_request.calls
-    assert len(api_request.calls) == 12
+    # The category availability response already carries productPropertys in
+    # this fixture, so the account-wide management index is intentionally not
+    # called for a normal one-scope plan sync.
+    assert len(api_request.calls) == 27
+    request_trace = result["payload"]["request_trace"]
+    assert len(request_trace) == 25
+    assert all(
+        set(entry) >= {"label", "path", "status", "outcome", "elapsed_ms"}
+        and entry["outcome"] == "ok"
+        and entry["status"] == 200
+        and isinstance(entry["elapsed_ms"], float)
+        for entry in request_trace
+    )
+
+
+def test_e2_response_json_payload_decodes_gbk_template_names_without_replacement() -> None:
+    class BytesResponse:
+        ok = True
+        status = 200
+        headers = {"content-type": "application/json; charset=gbk"}
+
+        def body(self) -> bytes:
+            return json.dumps({"code": 0, "data": {"name": "撕膜"}}, ensure_ascii=False).encode("gbk")
+
+        def json(self) -> dict[str, Any]:
+            raise AssertionError("the byte decoder must run before response.json()")
+
+    payload = DxmLoginFlow._response_json_payload(BytesResponse())
+    assert payload["data"]["name"] == "撕膜"
+    assert "\ufffd" not in payload["data"]["name"]
 
 
 def test_e2_attribute_template_raw_wire_parses_all_fifty_multivalue_records() -> None:

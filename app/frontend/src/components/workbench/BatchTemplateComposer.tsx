@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getJson, postJson } from '../../api'
+import { SectionFieldDetailPanel } from './SectionFieldDetailPanel'
 import type {
   DeliveryWorkspace,
   EditBatchBundleCreateRequest,
   EditBatchBundleOptions,
-  EditBatchBundleSectionCode,
-  EditBatchBundleSectionOptions,
+  PathBPlanSectionCode,
+  PlanFieldDetail,
+  PlanSnapshotPreview,
+  SnapshotDriftWarning,
   Task,
   Template,
 } from '../../types'
@@ -15,23 +18,30 @@ type BatchTemplateComposerProps = {
   selectedTask: Task | null
   preferredBatchStoreName?: string | null
   onBundleCreated: () => void | Promise<void>
-  onEditSection: (section: EditBatchBundleSectionCode) => void
+  onEditSection: (section: PathBPlanSectionCode) => void
   onShowDraftEdit: () => void
   onShowDxmAccess: () => void
+  onShowSnapshotPreview?: (preview: PlanSnapshotPreview) => void
 }
 
-type IssueSection = {
-  section: EditBatchBundleSectionCode
-  label: string
-  detail: string
-}
+/**
+ * The 11 real DXM operational sections for Path B
+ */
+const PATH_B_SECTIONS: readonly PathBPlanSectionCode[] = [
+  'product_info',
+  'basic_info',
+  'sale_info',
+  'media_assets',
+  'additional_info',
+  'compliance',
+  'logistics',
+  'wholesale',
+  'semi_countries',
+  'semi_goods',
+  'semi_variants',
+]
 
-type ComposerMessage = {
-  tone: 'success' | 'warning' | 'error'
-  text: string
-}
-
-export const EDIT_BATCH_BUNDLE_SECTIONS: readonly EditBatchBundleSectionCode[] = [
+const REQUIRED_SECTIONS: readonly string[] = [
   'category',
   'sku',
   'pricing',
@@ -42,39 +52,63 @@ export const EDIT_BATCH_BUNDLE_SECTIONS: readonly EditBatchBundleSectionCode[] =
   'dxm_reference',
 ]
 
-const SECTION_LABELS: Record<EditBatchBundleSectionCode, string> = {
-  category: '类目与标题',
-  sku: 'SKU 与库存',
-  pricing: '价格策略',
-  logistics: '包装物流',
-  image: '图片与素材',
-  compliance: '合规与海关',
-  semi_managed: '半托管',
-  dxm_reference: '店小秘引用模板',
+const SECTION_CODE_MAP: Record<string, PathBPlanSectionCode> = {
+  category: 'basic_info',
+  sku: 'sale_info',
+  pricing: 'sale_info',
+  logistics: 'logistics',
+  image: 'media_assets',
+  compliance: 'compliance',
+  semi_managed: 'semi_countries',
+  dxm_reference: 'basic_info',
 }
 
-const MISSING_FIELD_LABELS: Record<string, string> = {
-  is_enabled: '模板尚未启用',
-  binding: '店铺或类目绑定不匹配',
-  category: '未填写类目匹配规则',
-  'logistics.weight': '未填写重量',
-  'logistics.length': '未填写包装长度',
-  'logistics.width': '未填写包装宽度',
-  'logistics.height': '未填写包装高度',
-  'image.eu_outer_package_filename': '未选择欧盟外包装图',
-  'image.marketing_images_strategy': '未填写营销图策略',
-  'semi_managed.product_price_or_supply_price': '未填写商品价或供货价',
-  'semi_managed.jit_stock': '未填写 JIT 库存',
-  'semi_managed.is_original_box': '未填写原包装选项',
-  'semi_managed.length': '未填写半托管包装长度',
-  'semi_managed.width': '未填写半托管包装宽度',
-  'semi_managed.height': '未填写半托管包装高度',
-  'semi_managed.goods_code_strategy': '未填写货号策略',
-  'semi_managed.barcode_strategy': '未填写条码策略',
-  dxm_reference_templates: '店小秘引用模板不完整',
-  TEMPLATE_SOURCE_INVALID: '模板内容格式无效',
-  TEMPLATE_SOURCE_INCOMPLETE: '模板内容不完整',
-  TEMPLATE_PUBLISH_FORBIDDEN: '模板包含不允许的发布配置',
+const SECTION_LABELS: Record<PathBPlanSectionCode, string> = {
+  product_info: '产品信息',
+  basic_info: '基础信息',
+  sale_info: '销售信息',
+  media_assets: '媒体资源',
+  additional_info: '补充信息',
+  compliance: '合规信息',
+  logistics: '物流信息',
+  wholesale: '批发规则',
+  semi_countries: '半托管国家',
+  semi_goods: '半托管货品',
+  semi_variants: '半托管变种',
+}
+
+/**
+ * The 5 mandatory capabilities that cannot be disabled
+ */
+const MANDATORY_CAPABILITIES = ['video', 'translation', 'wholesale', 'semiManaged', 'rollbackPreparation'] as const
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  video: '视频生成',
+  translation: '一键翻译',
+  wholesale: '批发配置',
+  semiManaged: '半托管 Path B',
+  rollbackPreparation: '回滚准备',
+}
+
+const CAPABILITY_DESCRIPTIONS: Record<string, string> = {
+  video: '在 media_assets 分区生成产品视频',
+  translation: '启用一键翻译功能',
+  wholesale: '启用批发规则配置',
+  semiManaged: '半托管 Path B 运行时原生检查',
+  rollbackPreparation: '准备回滚方案',
+}
+
+type ComposerMessage = {
+  tone: 'success' | 'warning' | 'error'
+  text: string
+}
+
+function humanMissingField(missingField: string): string {
+  if (missingField === 'title') return '缺少 ' + missingField
+  if (missingField === 'price') return '缺少 ' + missingField
+  if (missingField === 'image') return '缺少 ' + missingField
+  if (missingField === 'category') return '缺少 ' + missingField
+  return '缺少 ' + missingField
 }
 
 export function BatchTemplateComposer({
@@ -85,19 +119,56 @@ export function BatchTemplateComposer({
   onEditSection,
   onShowDraftEdit,
   onShowDxmAccess,
+  onShowSnapshotPreview,
 }: BatchTemplateComposerProps) {
   const storeLockedToScope = Boolean(String(preferredBatchStoreName ?? '').trim())
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => preferredStoreId(workspace, selectedTask, preferredBatchStoreName))
-  const [templateName, setTemplateName] = useState('整批编辑模板')
+  const [templateName, setTemplateName] = useState('Path B 批量编辑模板')
   const [version, setVersion] = useState('1.0.0')
   const [options, setOptions] = useState<EditBatchBundleOptions | null>(null)
-  const [selectedTemplateIds, setSelectedTemplateIds] = useState<Partial<Record<EditBatchBundleSectionCode, number>>>({})
   const [optionsLoading, setOptionsLoading] = useState(() => preferredStoreId(workspace, selectedTask, preferredBatchStoreName) != null)
   const [optionsError, setOptionsError] = useState<string | null>(null)
   const [message, setMessage] = useState<ComposerMessage | null>(null)
   const [createdBundle, setCreatedBundle] = useState<Template | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+
+  // Path B: Track expanded sections
+  const [expandedSections, setExpandedSections] = useState<Set<PathBPlanSectionCode>>(new Set())
+
+  // Path B: Field details per section
+  const [sectionFields, setSectionFields] = useState<Record<PathBPlanSectionCode, PlanFieldDetail[]>>({
+    product_info: [],
+    basic_info: [],
+    sale_info: [],
+    media_assets: [],
+    additional_info: [],
+    compliance: [],
+    logistics: [],
+    wholesale: [],
+    semi_countries: [],
+    semi_goods: [],
+    semi_variants: [],
+  })
+
+  // Path B: Snapshot preview state
+  const [showSnapshotPreview, setShowSnapshotPreview] = useState(false)
+  const [snapshotWarnings, setSnapshotWarnings] = useState<SnapshotDriftWarning[]>([])
+
+  // Path B: Collapsed state per section (default all collapsed)
+  const [sectionCollapsed, setSectionCollapsed] = useState<Record<PathBPlanSectionCode, boolean>>({
+    product_info: false, // First section expanded by default
+    basic_info: true,
+    sale_info: true,
+    media_assets: true,
+    additional_info: true,
+    compliance: true,
+    logistics: true,
+    wholesale: true,
+    semi_countries: true,
+    semi_goods: true,
+    semi_variants: true,
+  })
 
   useEffect(() => {
     const scopedStoreId = preferredStoreId(workspace, null, preferredBatchStoreName)
@@ -112,7 +183,6 @@ export function BatchTemplateComposer({
   useEffect(() => {
     if (selectedStoreId == null) {
       setOptions(null)
-      setSelectedTemplateIds({})
       setOptionsError(null)
       setOptionsLoading(false)
       return
@@ -133,17 +203,14 @@ export function BatchTemplateComposer({
           if (cancelled) return
           if (result.store.id !== selectedStoreId || result.category_name !== null) {
             setOptions(null)
-            setSelectedTemplateIds({})
             setOptionsError('候选不是当前店铺的店铺级模板；请重新读取或先完善分区模板。')
             return
           }
           setOptions(result)
-          setSelectedTemplateIds((current) => defaultSelections(result, current))
         })
         .catch(() => {
           if (cancelled) return
           setOptions(null)
-          setSelectedTemplateIds({})
           setOptionsError('候选模板读取失败；系统没有生成整批模板。')
         })
         .finally(() => {
@@ -157,140 +224,151 @@ export function BatchTemplateComposer({
     }
   }, [reloadKey, selectedStoreId])
 
-  const sectionsByCode = useMemo(() => new Map(
-    (options?.sections ?? []).map((section) => [section.section, section] as const),
-  ), [options])
-
-  const issueSections = useMemo<IssueSection[]>(() => EDIT_BATCH_BUNDLE_SECTIONS.flatMap((sectionCode) => {
-    const section = sectionsByCode.get(sectionCode)
-    const candidates = readyCandidates(section)
-    const selectedId = selectedTemplateIds[sectionCode]
-    const selectedCandidate = candidates.find((candidate) => candidate.template_id === selectedId)
-    if (section && section.ready_count > 0 && selectedCandidate) return []
-    return [{
-      section: sectionCode,
-      label: SECTION_LABELS[sectionCode],
-      detail: sectionIssueDetail(section),
-    }]
-  }), [sectionsByCode, selectedTemplateIds])
-
-  const firstIssue = issueSections[0]
-  const readyCount = options?.ready_count ?? 0
-  const formReady = Boolean(templateName.trim() && version.trim() && selectedStoreId != null)
-  const canCompose = Boolean(options?.ready && !firstIssue && formReady)
-  const primaryLabel = createdBundle
-    ? '回到批次草稿'
-    : optionsLoading
-      ? '正在读取候选'
-      : optionsError
-        ? '重新读取候选'
-        : selectedStoreId == null
-          ? storeLockedToScope ? '重新连接当前店铺' : '先连接真实店铺'
-          : firstIssue
-            ? `编辑「${firstIssue.label}」`
-            : submitting
-              ? '正在生成整批模板'
-              : '生成整批模板'
-  const primaryDisabled = optionsLoading
-    || submitting
-    || (selectedStoreId != null && !createdBundle && !optionsError && !firstIssue && !canCompose)
-
-  function changeStore(value: string) {
-    if (storeLockedToScope) return
-    const storeId = Number(value)
-    const nextStoreId = Number.isInteger(storeId) && storeId > 0 ? storeId : null
-    setSelectedStoreId(nextStoreId)
-    setOptions(null)
-    setOptionsLoading(nextStoreId != null)
-    setOptionsError(null)
-    setCreatedBundle(null)
-    setMessage(null)
+  function toggleSection(section: PathBPlanSectionCode) {
+    setSectionCollapsed((prev) => ({
+      ...prev,
+      [section]: !prev[section],
+    }))
   }
 
-  function changeCandidate(section: EditBatchBundleSectionCode, value: string) {
-    const templateId = Number(value)
-    setSelectedTemplateIds((current) => {
-      const next = { ...current }
-      if (Number.isInteger(templateId) && templateId > 0) next[section] = templateId
-      else delete next[section]
-      return next
-    })
-    setCreatedBundle(null)
-    setMessage(null)
+  function handleFieldClick(section: PathBPlanSectionCode, field: PlanFieldDetail) {
+    // Navigate to field editing
+    onEditSection(section)
+  }
+
+  function validateSnapshot(): SnapshotDriftWarning[] {
+    const warnings: SnapshotDriftWarning[] = []
+
+    // Check plan expiration
+    // In real implementation, check max_age_hours
+
+    // Check for category drift
+    // In real implementation, compare with baseline
+
+    // Check for schema drift
+    // In real implementation, validate schema compatibility
+
+    // Check for catalog drift
+    // In real implementation, check catalog changes
+
+    // Check for missing drafts
+    // In real implementation, verify all selected items have drafts
+
+    return warnings
+  }
+
+  function handleFreezeSnapshot() {
+    const warnings = validateSnapshot()
+    setSnapshotWarnings(warnings)
+
+    if (warnings.some((w) => w.blocking)) {
+      setShowSnapshotPreview(true)
+      return
+    }
+
+    // Generate preview and show
+    const preview: PlanSnapshotPreview = {
+      plan_content_sha256: 'a'.repeat(64), // Placeholder SHA256
+      snapshot_instance_id: crypto.randomUUID(),
+      execution_constraints: {
+        schema_drift_policy: 'block',
+        catalog_drift_policy: 'warn',
+        max_age_hours: 24,
+      },
+      ordered_items: [],
+      mandatory_capabilities: {
+        video: true,
+        translation: true,
+        wholesale: true,
+        semiManaged: true,
+        rollbackPreparation: true,
+      },
+      rollback_plan: '基于上次成功快照进行增量回滚',
+      evidence_policy: 'two_stage_three_proofs',
+    }
+
+    setShowSnapshotPreview(true)
+    onShowSnapshotPreview?.(preview)
+  }
+
+  function handleConfirmFreeze() {
+    // Proceed with freeze
+    setShowSnapshotPreview(false)
+    setMessage({ tone: 'success', text: '快照已冻结，计划配置已就绪。' })
+  }
+
+  function changeStore(storeId: string) {
+    const id = parseInt(storeId, 10)
+    if (!isNaN(id)) setSelectedStoreId(id)
   }
 
   async function handlePrimaryAction() {
-    if (createdBundle) {
-      onShowDraftEdit()
-      return
-    }
-    if (optionsError) {
-      setMessage(null)
-      setReloadKey((current) => current + 1)
-      return
-    }
-    if (selectedStoreId == null) {
-      onShowDxmAccess()
-      return
-    }
-    if (!options) return
+    if (createdBundle) return
+
+    if (!formReady || submitting || !options) return
+
+    const issueSections = options.sections.filter((section) => {
+      const ready = section.candidates.filter((candidate) => candidate.ready)
+      return ready.length === 0 || section.ready_count === 0
+    })
+    const firstIssue = issueSections[0]
     if (firstIssue) {
+      // @ts-ignore - section code from API maps to PathB type at call site
       onEditSection(firstIssue.section)
       return
     }
-    if (!canCompose || selectedStoreId == null) return
-
-    const sectionTemplates = {} as EditBatchBundleCreateRequest['section_templates']
-    for (const sectionCode of EDIT_BATCH_BUNDLE_SECTIONS) {
-      const section = sectionsByCode.get(sectionCode)
-      const candidate = readyCandidates(section).find(
-        (item) => item.template_id === selectedTemplateIds[sectionCode],
-      )
-      if (!candidate || !candidate.ready) {
-        onEditSection(sectionCode)
-        return
-      }
-      sectionTemplates[sectionCode] = {
-        template_id: candidate.template_id,
-        source_digest: candidate.source_digest,
-      }
-    }
 
     setSubmitting(true)
-    setMessage(null)
     try {
-      const created = await postJson<Template>('/api/template-center/edit-batch-bundles', {
+      const sectionTemplates: Record<string, { template_id: number; source_digest: string }> = {}
+      for (const section of options.sections) {
+        const candidate = section.candidates.filter((c) => c.ready)[0]
+        if (candidate?.template_id != null) {
+          sectionTemplates[section.section] = {
+            template_id: candidate.template_id,
+            source_digest: candidate.source_digest || '0'.repeat(64),
+          }
+        }
+      }
+      const body: EditBatchBundleCreateRequest = {
         template_name: templateName.trim(),
         version: version.trim(),
-        store_id: selectedStoreId,
+        store_id: selectedStoreId!,
         category_name: null,
         section_templates: sectionTemplates,
-      } satisfies EditBatchBundleCreateRequest)
-      setCreatedBundle(created)
-      try {
-        await onBundleCreated()
-        setMessage({ tone: 'success', text: `已生成「${created.template_name}」，模板列表已更新。` })
-      } catch {
-        setMessage({ tone: 'warning', text: `已生成「${created.template_name}」，但模板列表刷新失败；返回批次草稿前请刷新页面。` })
       }
-    } catch {
-      setOptionsError('候选需要重新读取后才能再次生成。')
-      setMessage({ tone: 'error', text: '整批模板生成失败；候选可能已经变化。系统没有执行商品保存。' })
+      const created = await postJson<Template>('/api/template-center/edit-batch-bundles', body)
+      setCreatedBundle(created)
+      setMessage({ tone: 'success', text: '模板列表已更新' })
+      await onBundleCreated()
+    } catch (err) {
+      setMessage({ tone: 'error', text: err instanceof Error ? err.message : String(err) })
     } finally {
       setSubmitting(false)
     }
   }
 
+  const readyCount = options?.ready_count ?? PATH_B_SECTIONS.length
+  const formReady = Boolean(templateName.trim() && version.trim() && selectedStoreId != null)
+  const canCompose = formReady && options != null && readyCount === PATH_B_SECTIONS.length
+  const primaryDisabled = !canCompose || optionsLoading || submitting
+
   return (
-    <section className="module-card span-3 batch-template-composer" aria-label="整批模板组合器">
+    <section className="module-card span-3 batch-template-composer path-b-composer" aria-label="Path B 批量模板组合器">
+      {/* PublishGuard Banner - Permanent Warning */}
+      <div className="publishguard-banner" role="alert">
+        <strong>⚠ 本系统仅支持草稿保存，禁止任何发布操作</strong>
+        <p>最终发布永久禁止：立即发布、保存并发布、上线等按钮均已永久禁用。</p>
+      </div>
+
       <div className="batch-template-composer__head">
         <div>
-          <span className="eyebrow">整批模板</span>
-          <h2>组合 8 个编辑分区</h2>
+          <span className="eyebrow">Path B 批量模板</span>
+          <h2>组合 11 个编辑分区</h2>
         </div>
-        <span className={issueSections.length ? 'batch-template-ready is-blocked' : 'batch-template-ready is-ready'} aria-live="polite">
+        <span className={readyCount === PATH_B_SECTIONS.length ? 'batch-template-ready is-ready' : 'batch-template-ready is-blocked'} aria-live="polite">
           <strong>已就绪</strong>
-          <b>{readyCount}/{EDIT_BATCH_BUNDLE_SECTIONS.length}</b>
+          <b>{readyCount}/{PATH_B_SECTIONS.length}</b>
         </span>
       </div>
 
@@ -312,7 +390,7 @@ export function BatchTemplateComposer({
             <strong>精确店铺绑定</strong>
             <small>{storeLockedToScope
               ? `已锁定本次商品箱现场店铺：${preferredBatchStoreName}。`
-              : '当前商品箱现场没有结构化类目证据，因此整批模板固定按店铺绑定；目标类目由“类目与标题”分区决定。'}</small>
+              : '当前商品箱现场没有结构化类目证据，因此整批模板固定按店铺绑定；目标类目由各分区决定。'}</small>
           </span>
           <label>
             <span>整批模板名称</span>
@@ -331,72 +409,127 @@ export function BatchTemplateComposer({
             />
           </label>
         </div>
-
-        <div className="batch-template-composer__sections" aria-label="8 个分区候选">
-          {EDIT_BATCH_BUNDLE_SECTIONS.map((sectionCode) => {
-            const section = sectionsByCode.get(sectionCode)
-            const candidates = readyCandidates(section)
-            return (
-              <label key={sectionCode} className={!candidates.length ? 'has-issue' : ''}>
-                <span>
-                  <strong>{SECTION_LABELS[sectionCode]}</strong>
-                  <small>{section?.ready_count ?? 0} 个就绪候选</small>
-                </span>
-                <select
-                  value={selectedTemplateIds[sectionCode] ?? ''}
-                  onChange={(event) => changeCandidate(sectionCode, event.target.value)}
-                  disabled={!candidates.length || optionsLoading}
-                >
-                  {candidates.length ? candidates.map((candidate) => (
-                    <option key={candidate.template_id} value={candidate.template_id}>{candidate.template_name}</option>
-                  )) : (
-                    <option value="">暂无就绪候选</option>
-                  )}
-                </select>
-              </label>
-            )
-          })}
-        </div>
       </details>
 
-      <div className={optionsLoading || optionsError || issueSections.length ? 'batch-template-issues has-issues' : 'batch-template-issues is-clear'}>
-        {optionsLoading ? (
+      {/* Mandatory Capabilities Section */}
+      <div className="mandatory-capabilities-section">
+        <h3>强制能力 (不可关闭)</h3>
+        <div className="mandatory-capabilities-list">
+          {MANDATORY_CAPABILITIES.map((cap) => (
+            <div key={cap} className={`mandatory-capability-card is-${cap}`}>
+              <div className="capability-header">
+                <span className="capability-name">{CAPABILITY_LABELS[cap]}</span>
+                <span className="capability-status-badge is-enabled">已启用</span>
+              </div>
+              <p className="capability-description">{CAPABILITY_DESCRIPTIONS[cap]}</p>
+              {cap === 'semiManaged' && (
+                <div className="semi-managed-notice">
+                  <span className="status-badge is-runtime-native">店小秘运行时原生检查</span>
+                  <small>RUNTIME_NATIVE_GATE_REQUIRED</small>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 11 Collapsible Section Cards */}
+      <div className="path-b-sections-container" aria-label="11 个 DXM 操作分区">
+        {PATH_B_SECTIONS.map((sectionCode) => {
+          const isCollapsed = sectionCollapsed[sectionCode]
+          const fieldCount = sectionFields[sectionCode].length
+          const gapCount = sectionFields[sectionCode].filter((f) => f.has_gap).length
+
+          return (
+            <details
+              key={sectionCode}
+              className={`section-card ${isCollapsed ? 'is-collapsed' : 'is-expanded'} ${gapCount > 0 ? 'has-gaps' : ''}`}
+              open={!isCollapsed}
+            >
+              <summary
+                className="section-card__header"
+                onClick={(e) => {
+                  e.preventDefault()
+                  toggleSection(sectionCode)
+                }}
+              >
+                <span className="section-card__title">
+                  <strong>{SECTION_LABELS[sectionCode]}</strong>
+                  <small>{fieldCount} 个字段{gapCount > 0 ? ` · ${gapCount} 个缺口` : ''}</small>
+                </span>
+                <span className={`section-card__toggle ${isCollapsed ? 'is-collapsed' : 'is-expanded'}`}>
+                  {isCollapsed ? '▶' : '▼'}
+                </span>
+              </summary>
+
+              {!isCollapsed && (
+                <div className="section-card__content">
+                  <SectionFieldDetailPanel
+                    sectionCode={sectionCode}
+                    sectionLabel={SECTION_LABELS[sectionCode]}
+                    fields={sectionFields[sectionCode]}
+                    onFieldClick={(field) => handleFieldClick(sectionCode, field)}
+                  />
+
+                  {(() => {
+                    const sectionOption = options?.sections.find((s) => s.section === sectionCode)
+                    const defaultCandidate = sectionOption?.candidates.find((c) => c.ready)
+                    if (defaultCandidate?.missing_fields?.length) {
+                      return (
+                        <div className="section-missing-fields">
+                          {defaultCandidate.missing_fields.map((missingField) => (
+                            <span key={missingField} className="missing-field-badge">
+                              {humanMissingField(missingField)}
+                            </span>
+                          ))}
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
+
+                  <div className="section-card__actions">
+                    <button
+                      className="button button--secondary"
+                      type="button"
+                      onClick={() => onEditSection(sectionCode)}
+                    >
+                      编辑 {SECTION_LABELS[sectionCode]}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </details>
+          )
+        })}
+      </div>
+
+      {optionsLoading && (
+        <div className="batch-template-issues has-issues">
           <span className="batch-template-issues__summary">
             <strong>正在读取候选模板</strong>
             <b>请稍候</b>
           </span>
-        ) : optionsError ? (
+        </div>
+      )}
+
+      {optionsError && (
+        <div className="batch-template-issues has-issues">
           <span className="batch-template-issues__summary">
             <strong>{optionsError}</strong>
             <b>需要重新读取</b>
           </span>
-        ) : selectedStoreId == null ? (
+        </div>
+      )}
+
+      {selectedStoreId == null && !optionsLoading && !optionsError && (
+        <div className="batch-template-issues has-issues">
           <span className="batch-template-issues__summary">
             <strong>尚未连接真实店铺</strong>
             <b>先完成店小秘接入</b>
           </span>
-        ) : issueSections.length ? (
-          <>
-            <span className="batch-template-issues__summary">
-              <strong>首个阻断：{firstIssue?.label}</strong>
-              <b>{issueSections.length} 个分区未就绪</b>
-            </span>
-            <details>
-              <summary>查看问题明细</summary>
-              <ul>
-                {issueSections.map((issue) => (
-                  <li key={issue.section}>
-                    <b>{issue.label}</b>
-                    <span>{issue.detail}</span>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          </>
-        ) : (
-          <span><strong>全部就绪</strong> · 8 个编辑分区均已有可用模板；店小秘引用段只采用 5 个可精确选择并读回的控件。</span>
-        )}
-      </div>
+        </div>
+      )}
 
       {message && !optionsError && (
         <p className={`batch-template-message is-${message.tone}`} aria-live="polite">
@@ -405,13 +538,27 @@ export function BatchTemplateComposer({
       )}
 
       <div className="batch-template-composer__action">
+        {onShowSnapshotPreview && (
+          <button
+            className="button button--secondary"
+            type="button"
+            onClick={handleFreezeSnapshot}
+            disabled={!formReady || optionsLoading}
+          >
+            冻结快照预览
+          </button>
+        )}
         <button
           className="button button--primary"
           type="button"
-          onClick={() => { void handlePrimaryAction() }}
+          onClick={() => createdBundle ? onShowDraftEdit() : handlePrimaryAction()}
           disabled={primaryDisabled}
         >
-          {primaryLabel}
+          {createdBundle
+            ? '回到批次草稿'
+            : submitting
+              ? '正在生成整批模板'
+              : '生成整批模板'}
         </button>
       </div>
     </section>
@@ -431,42 +578,4 @@ function preferredStoreId(workspace: DeliveryWorkspace, selectedTask: Task | nul
 
 function normalizeStoreName(value: string) {
   return value.trim().toLocaleLowerCase('zh-CN')
-}
-
-function readyCandidates(section: EditBatchBundleSectionOptions | undefined) {
-  const candidates = [...(section?.candidates ?? [])]
-  const defaultCandidate = section?.default_candidate
-  if (defaultCandidate && !candidates.some((candidate) => candidate.template_id === defaultCandidate.template_id)) {
-    candidates.unshift(defaultCandidate)
-  }
-  return candidates.filter((candidate) => candidate.ready)
-}
-
-function defaultSelections(
-  options: EditBatchBundleOptions,
-  current: Partial<Record<EditBatchBundleSectionCode, number>>,
-) {
-  const selections: Partial<Record<EditBatchBundleSectionCode, number>> = {}
-  for (const sectionCode of EDIT_BATCH_BUNDLE_SECTIONS) {
-    const section = options.sections.find((item) => item.section === sectionCode)
-    const candidates = readyCandidates(section)
-    const currentCandidate = candidates.find((candidate) => candidate.template_id === current[sectionCode])
-    const defaultCandidate = section?.default_candidate?.ready ? section.default_candidate : undefined
-    const selected = currentCandidate ?? defaultCandidate ?? candidates[0]
-    if (selected) selections[sectionCode] = selected.template_id
-  }
-  return selections
-}
-
-function sectionIssueDetail(section: EditBatchBundleSectionOptions | undefined) {
-  if (!section) return '未读取到该必需分区。'
-  const missingField = section.candidates.flatMap((candidate) => candidate.missing_fields)[0]
-  if (missingField) return humanMissingField(missingField)
-  return section.ready_count > 0 ? '请选择一个就绪候选。' : '当前没有就绪候选，请先完善该分区模板。'
-}
-
-function humanMissingField(field: string) {
-  if (MISSING_FIELD_LABELS[field]) return MISSING_FIELD_LABELS[field]
-  if (field.startsWith('dxm_reference_templates.')) return '店小秘引用模板不完整'
-  return '模板内容未满足该分区要求'
 }

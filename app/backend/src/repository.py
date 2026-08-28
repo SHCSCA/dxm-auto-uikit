@@ -17,6 +17,7 @@ from src.db import (
     disable_unexecutable_edit_batch_bundles,
     dumps,
     loads,
+    migrate_canonical_receipts,
     recover_interrupted_edit_batches as recover_edit_batches_in_db,
 )
 from src.batch_edit.execution_state import (
@@ -2303,6 +2304,24 @@ class Repository:
                 row['payload'] = self._public_task_payload(loads(row.pop('payload_json'), {}))
             return rows
 
+    def list_task_summaries(self, *, mode: str | None = None):
+        """List task metadata without reading or decoding frozen task payloads."""
+
+        normalized_mode = str(mode or '').strip()
+        sql = """
+            SELECT id, name, store_id, status, mode, publish_scene,
+                   total_jobs AS item_count, completed_jobs, failed_jobs,
+                   created_at, updated_at
+              FROM tasks
+        """
+        params: tuple[Any, ...] = ()
+        if normalized_mode:
+            sql += " WHERE mode=?"
+            params = (normalized_mode,)
+        sql += " ORDER BY id DESC"
+        with connection() as conn:
+            return conn.execute(sql, params).fetchall()
+
     def get_task(self, task_id: int, *, include_private: bool = False):
         with connection() as conn:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -4047,6 +4066,77 @@ class Repository:
             for row in rows:
                 row['meta'] = loads(row.pop('meta_json'), {})
             return rows
+
+    def add_receipt(self, receipt: dict[str, Any]) -> int:
+        """
+        Persist a CanonicalReceipt dict to the canonical_receipts table.
+        Returns the inserted row id.
+        """
+        now = now_iso()
+        with connection() as conn:
+            migrate_canonical_receipts(conn)
+            cursor = conn.execute(
+                """
+                INSERT INTO canonical_receipts (
+                    task_id, job_id, product_id, mode, claim_mark,
+                    canonical_receipt_sha256, started_at, completed_at,
+                    job_status, error_code, error_detail, needs_manual_review,
+                    receipt_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt.get("task_id"),
+                    receipt.get("job_id"),
+                    receipt.get("product_id"),
+                    receipt.get("mode"),
+                    receipt.get("claim_mark"),
+                    receipt.get("canonical_receipt_sha256"),
+                    receipt.get("started_at"),
+                    receipt.get("completed_at"),
+                    receipt.get("job_status"),
+                    receipt.get("error_code"),
+                    receipt.get("error_detail"),
+                    1 if receipt.get("needs_manual_review") else 0,
+                    dumps(receipt),
+                    now,
+                    now,
+                ),
+            )
+            return cursor.lastrowid or 0
+
+    def get_receipt(self, task_id: int, job_id: int) -> dict[str, Any] | None:
+        """Retrieve the canonical receipt for a specific job, if it exists."""
+        with connection() as conn:
+            row = conn.execute(
+                """
+                SELECT receipt_json FROM canonical_receipts
+                WHERE task_id=? AND job_id=?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (task_id, job_id),
+            ).fetchone()
+            if row:
+                return loads(row["receipt_json"], {})
+            return None
+
+    def list_receipts(self, task_id: int) -> list[dict[str, Any]]:
+        """List all canonical receipts for a task."""
+        with connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM canonical_receipts
+                WHERE task_id=?
+                ORDER BY id DESC
+                """,
+                (task_id,),
+            ).fetchall()
+            results = []
+            for row in rows:
+                r = dict(row)
+                r["receipt"] = loads(r.pop("receipt_json"), {})
+                r["needs_manual_review"] = bool(r["needs_manual_review"])
+                results.append(r)
+            return results
 
     def add_exception(self, task_id: int, job_id: int | None, error_code: str, field_domain: str, title: str, detail: str, suggestion: str):
         now = now_iso()

@@ -1,10 +1,13 @@
 import json
+import re
+import tomllib
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DESKTOP_DIR = REPO_ROOT / "app" / "desktop"
 DESKTOP_PACKAGE = DESKTOP_DIR / "package.json"
+DESKTOP_PACKAGE_LOCK = DESKTOP_DIR / "package-lock.json"
 DESKTOP_PORTABLE_PATCH = DESKTOP_DIR / "scripts" / "patch-electron-builder-portable.cjs"
 DESKTOP_BUILD_MANIFEST = DESKTOP_DIR / "scripts" / "generate-build-manifest.cjs"
 DESKTOP_RUNTIME_IDENTITY = DESKTOP_DIR / "src" / "runtime-identity.cjs"
@@ -31,6 +34,37 @@ APP_TSX = REPO_ROOT / "app" / "frontend" / "src" / "App.tsx"
 SAFETY_STATUS_BAR = REPO_ROOT / "app" / "frontend" / "src" / "components" / "SafetyStatusBar.tsx"
 WORKBENCH_MODULES_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 TYPES_TS = REPO_ROOT / "app" / "frontend" / "src" / "types.ts"
+BACKEND_PYPROJECT = REPO_ROOT / "app" / "backend" / "pyproject.toml"
+BACKEND_MAIN = REPO_ROOT / "app" / "backend" / "src" / "main.py"
+FRONTEND_PACKAGE = REPO_ROOT / "app" / "frontend" / "package.json"
+FRONTEND_PACKAGE_LOCK = REPO_ROOT / "app" / "frontend" / "package-lock.json"
+
+
+def test_public_package_versions_are_exactly_aligned():
+    desktop_version = json.loads(DESKTOP_PACKAGE.read_text(encoding="utf-8"))["version"]
+    desktop_lock = json.loads(DESKTOP_PACKAGE_LOCK.read_text(encoding="utf-8"))
+    frontend_version = json.loads(FRONTEND_PACKAGE.read_text(encoding="utf-8"))["version"]
+    frontend_lock = json.loads(FRONTEND_PACKAGE_LOCK.read_text(encoding="utf-8"))
+    backend_project_version = tomllib.loads(
+        BACKEND_PYPROJECT.read_text(encoding="utf-8")
+    )["project"]["version"]
+    backend_main_match = re.search(
+        r"^APP_VERSION = ['\"]([^'\"]+)['\"]$",
+        BACKEND_MAIN.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+
+    assert backend_main_match is not None
+    assert {
+        desktop_version,
+        desktop_lock["version"],
+        desktop_lock["packages"][""]["version"],
+        frontend_version,
+        frontend_lock["version"],
+        frontend_lock["packages"][""]["version"],
+        backend_project_version,
+        backend_main_match.group(1),
+    } == {desktop_version}
 
 
 def test_desktop_package_declares_electron_entrypoints_and_build_scripts():

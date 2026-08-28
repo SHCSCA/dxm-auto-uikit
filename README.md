@@ -1,62 +1,51 @@
+> 由 OpenAI GPT（Codex）AI 生成/维护。
+
 # dxm-auto-uikit
 
-> 由 OpenAI GPT（Codex）AI 参与生成/维护；运行与验收结论仍以同一源码、包和现场证据为准。
+DXM 完整商品编辑工作台：从店小秘真实 draft 列表选择商品，按冻结方案在真实可见浏览器中逐件完成普通编辑、视频、批发、翻译、半托管双阶段与安全恢复，只保存草稿，不发布，最终发布永久禁止。
 
-DXM 半托管自动化工作台：用真实可见浏览器处理店小秘已有商品，受控完成“待认领商品入箱 → 商品箱编辑 → 只保存不发布”。
+## 当前状态
 
-## 当前状态（2026-08-19）
+**0.3.0 开发中，`E3_OPEN / BLOCKED`。不是 `MVP_READY`，不是 `PROD_READY`。**
 
-当前产品主合同是 [MVP 竖切：草稿箱批量只保存](docs/product/MVP-竖切-草稿箱批量只保存.md)：从店小秘草稿箱只读选择多件商品，以本地方案和只读店小秘模板形成不可变 `plan_snapshot`，后续仅允许 `batch_draft_save`；发布、保存并发布和移入待发布始终禁止。旧 `claim_only` / `single_save` 只保留为历史兼容能力，不是 MVP 前置或当前产品主叙事。
+- backend、frontend、desktop 与根 `package.json` 均为 `0.3.0`；源码 manifest 版本已统一，但尚无同源 0.3.0 portable。
+- 当前没有 `DXM-Agent-Console-Portable-0.3.0.exe`；本地最新历史 portable 为 `0.2.3`，不能代表当前源码。
+- Reader、方案、快照、Path A Runner、BrowserAgent 和四键已有大量代码；当前工作树的完整 backend L0 已达到 `2344 passed / 0 skipped`，但固定提交、同源 portable 与真实三商品证据尚未形成一组放行证据。
+- 视频、翻译、批发、半托管和回滚是每件商品无条件执行的必需能力；当前生产接线未闭合，因此它们是产品放行阻断，不能写成可选扩展或已完成功能。
+- 完整产品成功路径是 Path B。点击“编辑半托管信息”后由店小秘执行原生半托管门，本系统不做资格预检；精确中间“继续发布”仅允许作为进入 `editFromSmt` 的受控转换，最终发布仍永久禁止。
 
-**历史固定点曾登记 `E2_DEFERRED` / `E3_READY_FOR_CANARY`，但当前工作树与桌面交付状态必须重新按 `E3_OPEN / BLOCKED` 管理；E4 与操作审计代码控制面已落地，但生产交付仍为 `BLOCKED`。** 这不是 `E2_ACCEPTED`、`E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。当前真实 Path A 还缺按类目配置完整的产品属性、运费和服务模板；E4 还缺真实批次暂停/继续/停止与 HVD 同源验收。
+最新工程事实见 [PROGRESS](PROGRESS.md)，未关闭门禁见 [BLOCKED](BLOCKED.md)。
 
-固定提交 `717ae3c5618ced19467d528e41aac784e896c810` 曾取得独立 clean worktree backend `2168 passed / 0 failed / 0 skipped` 及当时的 frontend/desktop/文档门禁，但它不是当前工作树新增 E4/模板改动的同源交付证据。后续单商品诊断任务 `#192–#206` 只证明可打开编辑页并部分填写字段，**成功保存为 0、发布为 0**；三商品任务 `#191` 从未启动，继续保持 `draft` 且不得复用旧快照。
-
-当前 backend/frontend/desktop manifest 版本均为 `0.1.4`，但仓内不存在 `outputs\desktop-build`，因此**当前没有可交付的 `0.1.4` 免安装 EXE**。操作审计与桌面控制面专项测试已通过；完整 L0、同 HEAD portable smoke、真实登录和真实保存仍未完成。下一步是形成可复验提交、构建并验收 portable，再让用户在同源桌面版内录入真实模板并创建新快照。开发任务书见 [免安装桌面版与全链路操作日志](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md)，当前事实见 [PROGRESS](PROGRESS.md) 与 [BLOCKED](BLOCKED.md)。
-
-真实用户主路径从草稿箱只读 Reader 开始：选择至少 3 件草稿、审阅本地方案与只读模板、预览并冻结逐商品计划。E2 到此停止，不触发 Runner、保存或发布；任何事实缺失、身份/Schema/模板漂移或语言结果为 `UNKNOWN` 都必须失败关闭并转人工复核。
-
-## 真实用户快速开始
-
-> 正式用户入口必须是当前源码同源的免安装桌面 EXE，不是网页，也不要求用户打开后端/前端命令窗口。当前包尚未生成；在任务书完成前，本节只说明目标入口，不能据此开始真实保存。
-
-### 推荐入口：DXM Agent Console 桌面版
-
-目标交付物由当前 manifest 动态命名；以当前 `0.1.4` 基线为例，预期路径是：
+## 产品主路径
 
 ```text
-outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.4.exe
+真实可见浏览器登录
+  → 只读读取当前账号店铺
+  → pageList(dxmState=draft) 分页
+  → 人工选择 draft ≥3
+  → 动态类目目录选择无冲突目标叶子
+  → 选择 local_plan_template + dxm_template_ref
+  → preview / freeze 五项 ALWAYS_ON 的不可变 plan_snapshot
+  → 人工批准 batch_draft_save
+  → Runner 串行逐件：preimage → 普通编辑 → 视频 → 批发 → 翻译
+  → 主保存意图 Modal → 编辑半托管信息/店小秘原生门
+  → 按真实事件闭合主编辑 SAVE（不预设与原生门先后）
+  → 必要的受控中间转换 → editFromSmt → 半托管保存
+  → 两次保存分别具备：回包 + 页面成功态 + 独立未发布证明
+  → UNKNOWN 停批且不自动重试
 ```
 
-上面两个文件当前都不存在，不能向用户声称已交付。最终 portable 必须双击即用，内置前端和后端运行时；首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB。真实店小秘操作仍在独立可见浏览器窗口中进行。
+读路径优先使用已登录会话内的受审阅接口；写路径只通过真实可见 UI。中文用于产品界面和字段映射，自动写入的自然语言内容必须英文并在保存前逐字段读回校验。
 
-源码开发态可用下面命令启动桌面壳：
+## 启动
 
-```bat
-scripts\start-desktop.bat
-```
-
-桌面版会隐藏启动本机后端，并在 Agent 控制台窗口内加载前端页面。桌面运行日志位于：
+权威 checkout：
 
 ```text
-%APPDATA%\DXM Agent Console\data\desktop-main.log
-%APPDATA%\DXM Agent Console\data\backend.log
+D:\Desktop\py\dxm-auto-uikit
 ```
 
-常见展开路径是 `C:\Users\<用户名>\AppData\Roaming\DXM Agent Console\data\desktop-main.log`。
-
-开发者打包验收命令（当前验证脚本仍需先修复旧版本硬编码）：
-
-```bat
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-package.ps1
-```
-
-完成任务书后，该命令必须从 manifest 解析实际 portable 文件名，启动目录包和免安装包，并核对 `desktop-main.log` 中的 `Starting backend`、`Loaded frontend`、运行身份和诊断日志导出结果。
-
-### 源码备用入口：单窗口启动器
-
-1. 在 Windows PowerShell 或 CMD 中进入项目根目录。
+先检查，再启动：
 
 ```bat
 cd /d D:\Desktop\py\dxm-auto-uikit
@@ -64,270 +53,99 @@ scripts\start-mvp.bat --check
 scripts\start-mvp.bat
 ```
 
-2. 保留启动器窗口。启动器会托管后端和前端，并把后端/前端新日志实时转发到这一个窗口；关闭该窗口或按 `Ctrl+C` 会停止服务。
-3. 等启动器显示 `STARTED_OK` 后，使用自动打开的工作台页面；如果 5173 被占用，启动器会选择附近空闲端口并在日志中写出实际 URL。
-4. 进入工作台的“店小秘登录”，点击“打开真实登录页”。系统会打开可见的独立店小秘浏览器窗口，用户可直接输入验证码、查看错误并手动调整；桌面版可勾选“记住账号密码”，账号密码只做本机加密保存。
-5. 回到“模板中心”，按店小秘编辑页分区补齐：店铺与任务基础、类目与标题、SKU/价格/库存、价格策略、图片与素材、包装物流、合规/海关、半托管、店小秘引用模板。保存时可选“仅本次任务使用”或“保存为店铺模板”。
-6. 进入“待认领商品”，选择真实店铺和店小秘已有待认领商品，先把商品放进商品箱，再到“商品箱编辑保存”选择已进入商品箱的商品。
-7. 只有真实只读检查通过、配置检查通过且人工批准完成后，才能在页面内填写批准人标识并点击“申请并启动单商品只保存”。
-8. 进入“真实浏览器”观察真实浏览器会话状态、页面左上角黑色中文任务进度窗、网络响应和实时日志。真实店小秘浏览器是独立窗口；控制台默认只显示主操作和关键日志，账号密码、会话管理、高级浏览器控制、运行维护和自动操作轨迹按需展开。控制台不把本地截图渲染成实时画面，截图只作为报告证据路径保存。
-9. 任务完成后，到“结果与问题”核对保存响应、未发布证明、截图和结构化报告；如有失败或阻断，也在“结果与问题”查看原因和下一步。验收结论必须是保存成功且 `published=false`。
-
-不要用开发自检批次代替真实保存结果；真实用户只按上面的单商品只保存路径执行。
-
-## 当前已完成
-
-### 文档层
-- `docs/product/店小秘自动刊登助手-PRD.md`
-- `docs/product/店小秘真实流程补充-2026-04-20.md`
-- `docs/tech/全量字段矩阵.md`
-- `docs/tech/技术实现图.md`
-- `docs/api/数据库表结构与API草案.md`
-- `docs/research/Browser-Use-vs-Playwright-选型对比与技术路线建议.md`
-- `.hermes/plans/2026-04-20_133500-dxm-auto-uikit-mvp-implementation-plan.md`
-
-### 工程层
-- `app/backend/`：FastAPI + SQLite + WebSocket + 真实浏览器任务执行引擎与受控门禁
-- `app/frontend/`：React + Vite 控制台
-- `app/desktop/`：Electron 桌面壳
-- `data/`：数据库、证据、截图、日志目录
-- `scripts/`：启动脚本
-
----
-
-## 当前产品能力
-
-### 已实现：DXM 半托管自动化工作台
-- 店铺与商品队列展示
-- 编辑页配置与店铺模板管理
-- 商品导入
-- 真实只读检查 / 单商品只保存任务创建
-- Task/Job 状态流转
-- WebSocket 实时执行事件
-- 真实浏览器页、执行浏览器会话状态、页面内中文进度 HUD、折叠式页面内操控和日志中心
-- 证据面板
-- 结果与问题页（真实失败按问题卡展示，技术诊断默认折叠）
-- Playwright 主引擎骨架
-- POP 保存待发布链路（真实单商品只保存已具备受控证据；批量、无人值守和发布仍不放行）
-
-### 当前源码是“受控两段式加固版”
-说明：
-- 右侧实时执行区已经能看到任务状态、步骤流、日志和证据
-- 工作台会显示真实只读检查、人工确认、证据等级和真实保存阻断原因
-- 前置条件不满足时，真实认领、单商品只保存和批量保存会被后端与前端双重阻断
-- Stage A `claim_only` 与 Stage B `single_save` 已进入源码级契约加固；这不等同于当前生产放行
-- 历史可用状态不是永久授权；每次真实启动前都必须看当前工作台状态，源码包交付前必须重新运行最新 `final-delivery-check`
-
----
-
-## 启动方式
-
-当前仓库默认面向 Windows 本地交付；推荐先运行检查模式，确认 Python、npm、后端依赖和前端依赖都就绪。
-
-前置条件：
-- Windows 10/11 + PowerShell
-- Python 3.11+
-- Node.js/npm
-- Git
-- 首次安装前端依赖时需要可访问 npm registry 的网络
-
-### 0. DXM Agent Console 桌面版
-
-推荐给真实用户的唯一控制台入口是免安装桌面版。当前 `0.1.4` 基线的目标产物如下，但尚未构建、验收或交付：
-
-```bat
-outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.4.exe
-```
-
-文件名必须由 manifest 版本生成，不能在脚本或说明中固定写死。portable 需要 `%TEMP%` 所在磁盘至少约 1GB 可用空间用于解包；目录版仅供开发验收，若使用则必须保留整个文件夹和 `resources` 目录。
-
-源码开发态启动桌面版：
+桌面开发入口：
 
 ```bat
 scripts\start-desktop.bat
 ```
 
-packaged smoke 验收：
+若出现 `DXM_SAME_DATA_RUNTIME`，说明旧实例仍持有同一数据目录。回到原窗口确认没有真实任务后正常退出；不要让新实例自动接管或误杀旧进程。详见 [操作与验收手册](docs/runbook/操作与验收手册.md)。
 
-```bat
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-package.ps1
+## 文档入口
+
+只从 [docs/README.md](docs/README.md) 进入当前文档。
+
+- [MVP 唯一主合同](docs/product/MVP-竖切-草稿箱批量只保存.md)
+- [普货方案配置与执行架构](docs/product/普货方案配置与执行架构.md)
+- [当前运行时架构](docs/architecture/当前运行时架构.md)
+- [工作台与分区自动化统一开发方案](docs/architecture/DXM-工作台与分区自动化统一开发方案.md)
+- [DXM-TX 上游事实合同](docs/integration/DXM-TX-上游事实合同.md)
+- [DXM-TX 类目节点与目录合同](docs/integration/DXM-TX-类目节点与目录合同.md)
+- [运营操作详细文档](docs/runbook/运营操作详细文档.md)
+- [操作与验收手册](docs/runbook/操作与验收手册.md)
+- [免安装桌面版说明](docs/user/免安装桌面版.md)
+
+DXM-TX 保持只读。上游文档按来源 hash 和允许用途提炼；经明确授权，只把 `data/capture/categories` 的纯类目结构规范化到 `resources/dxm/category-catalog`。Cookie、sessions、raw 业务抓包、真实账号/店铺/商品/模板和原型 mock 仍不迁移。
+
+## 代码结构
+
+```text
+app/backend/    FastAPI、SQLite、Reader、方案/快照、Runner、BrowserAgent、安全与证据
+app/frontend/   React 工作台、七项导航、方案编辑、批次控制与结果
+app/desktop/    Electron 桌面壳、单实例/数据目录、构建身份
+scripts/        启动、文档、QA、package 与交付门禁
+docs/           当前合同、架构、上游事实与 runbook
+prototypes/     原型与原型 QA；不是运行事实
+data/           本机运行数据；敏感且不得提交
+outputs/        构建/验收产物；必须核对来源身份
 ```
 
-正式交付还必须完成 [免安装桌面版与全链路操作日志任务书](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md) 中的日志完整性、脱敏诊断包、隔离 user-data 重启读回与同源 SHA256 门禁；旧 `0.1.0` 包只属于历史记录，不能复用。
+## 开发验证
 
-桌面版日志：
+文档：
 
-```bat
-%APPDATA%\DXM Agent Console\data\desktop-main.log
-%APPDATA%\DXM Agent Console\data\backend.log
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-mvp-docs.ps1 -SelfTest
+git diff --check
 ```
 
-常见展开路径：`C:\Users\<用户名>\AppData\Roaming\DXM Agent Console\data\desktop-main.log`。
+Backend 完整门禁：
 
-### 1. Windows 单窗口启动器（源码备用）
-
-```bat
-scripts\start-mvp.bat --check
+```powershell
+cd app\backend
+$env:DXM_DATA_DIR = Join-Path $env:TEMP ("dxm-pytest-" + [guid]::NewGuid().ToString("N"))
+.venv\Scripts\python.exe -m pytest -p no:cacheprovider -q -ra
 ```
 
-检查通过后再启动完整工作台：
+Frontend 标准构建：
 
-```bat
-scripts\start-mvp.bat
+```powershell
+cd app\frontend
+npm run build
 ```
 
-启动后只保留当前启动器控制台窗口。后端和前端会作为同一启动器窗口托管的子进程运行，后端/前端新日志会带 `[backend]`、`[frontend]` 前缀实时显示在这个窗口里；完整日志仍保存在 `data\backend.log` 和 `data\frontend.log`。只有后端 `/health` 与前端页面健康检查都通过时，才会自动打开前端页面。若 5173 被占用，启动器会自动使用附近空闲端口；若启动日志出现 warning，脚本不会自动开页，请先查看日志并等健康检查恢复后再手动访问启动器打印的前端 URL。
+Desktop：
 
-启动器会自动接管 8000 端口上由本项目旧版本启动的 `uvicorn src.main:app` 后端，以避免继续连接旧代码；若 8000 被未知进程占用则会失败退出。不要在真实任务正在运行时重复启动新的 `start-mvp.bat`，否则会中断旧后端会话；先在工作台确认没有 running/paused 任务，或先正常关闭旧启动器窗口。
-
-- 后端：`http://127.0.0.1:8000`
-- 前端：默认 `http://127.0.0.1:5173`，端口占用时以启动器输出为准
-- 日志：`data\start-mvp.log`、`data\backend.log`、`data\frontend.log`
-
-停止方式：关闭当前启动器窗口，或在启动器窗口按 `Ctrl+C`。脚本退出时会尽力停止后端和前端子进程树。
-
-登录凭据边界：桌面版可勾选“记住账号密码”，凭据保存到 `%APPDATA%\DXM Agent Console\data` 下的本机加密保存文件，并由 Electron `safeStorage` 加密；取消勾选或点击“清除已记住账号”会清除本机保存的密码。凭据不写入编辑页配置、不上传云端。源码浏览器模式没有桌面安全存储时不会保存密码。
-
-### 2. 类 Unix / Git Bash 启动后端（开发备用）
-```bash
-bash scripts/start-backend.sh
+```powershell
+cd app\desktop
+npm test
 ```
 
-后端地址：
-- `http://127.0.0.1:8000`
-
-### 3. 类 Unix / Git Bash 启动前端（开发备用）
-```bash
-bash scripts/start-frontend.sh
-```
-
-前端地址：
-- `http://127.0.0.1:5173`
-
-### 4. 类 Unix / Git Bash 一键启动（开发备用）
-```bash
-bash scripts/start-mvp.sh
-```
-
-日志输出：
-- `data/backend.log`
-- `data/frontend.log`
-
----
-
-## 后端测试
-
-```bash
-cd app/backend
-python3 -m pytest tests -q
-```
-
-建议门禁：
-- 后端：`cd app/backend && .venv\Scripts\python.exe -m pytest -q`
-- 前端：`cd app/frontend && npm run build`
-- L1：`python tools/probes/l1_selector_replay.py --output-dir data/l1_selector_replay`
-- L2：需要真实店小秘登录态，已有待认领列表与商品箱两个目标必须使用同一个 `--run-id` 完成保存前安全检查，并共享同一 session fingerprint、脚本 hash 与 git head；全部通过后才允许 L3。探针内部参数仍使用 `data_acquisition` / `draft_box`，这是店小秘页面适配名，不代表系统会采集或创建商品。
-- 浏览器 QA：前后端启动后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa-browser-check.ps1`，输出 `outputs/browser-checks/qa-browser-check.json`、桌面/移动页面截图、`qa-console.jsonl`、`qa-network.json` 和 `qa-blocked-actions.json`；JSON 会记录浏览器/OS/git/script hash，并断言无 console error、无网络失败、无 4xx/5xx、无非 GET、无外部 origin，且本地启动与直接 DXM 写入端点均被 403 阻断
-
-DXM 半托管自动化工作台交付自检（推荐给验收人）：
-
-```bat
-scripts\final-delivery-check.bat
-```
-
-它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
-
-2026-07-04 的 clean-worktree 检查、测试计数、L2 run-id 和 `READY` 结论只属于历史验收记录。2026-07-17 当前分支必须重新产生自己的测试、构建、portable smoke、L2 和两段式现场证据；在此之前，预期状态是 `BLOCKED` / `pending_live_dxm_validation`。
-
-自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed`、`realDxmMutationScope` 与当次验收记录。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论只支持保存阶段可按门禁启动；两段式生产交付还必须额外具备已有待认领商品进入商品箱的真实验收记录。
-
-启动工作台后，结果与问题页会显示交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
-
-开发自检入口只在 `?dev=1` 或显式启用 `VITE_DXM_ENABLE_DEMO=1` 时可用；它只创建本地 `dry_run` 自检任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是两段式：先完成待认领入箱，再执行同商品编辑保存；每个阶段只有在当次上游门禁、专属人工审批租约、实时身份复核和 mutation ledger 共同允许时才可执行。`batch_save`、批量无人值守和发布仍保持阻断。
-
-发布源码包前可加 clean worktree 门禁：
+交付自检：
 
 ```bat
 scripts\final-delivery-check.bat -RequireCleanWorktree
 ```
 
-当前开发态有未提交改动时，该模式会把 `Source package check` 标为 `FAIL`；自动化工作台自检结果会单独保留。
+聚焦测试、单独 Vite build、旧 clean commit、历史 portable 或 HTML 演示都不能替代当前完整门禁与真实人工验收。
 
-查看自检参数：
+## 永久安全边界
 
-```bat
-scripts\final-delivery-check.bat --help
-```
+- 禁止最终发布、立即发布、保存并发布、保存并移入待发布和任何 release/online 意图。中间“继续发布”只有在 Path B 的 `SEMI_MANAGED_CONTINUE_TRANSITION` 精确合同下允许。
+- 真实写入前必须绑定当前账号、会话、店铺、页面、商品、快照、审批、lease、队列和 mutation ledger。
+- 保存派发后证据不确定必须进入 `UNKNOWN` 并停止，不得自动重试。
+- 中文标签不能单独作为执行主键；隐藏字段、额外匹配或 Schema 漂移必须在写入前拒绝。
+- 不提交账号密码、Cookie、token、真实抓包、真实业务样例、SQLite、会话或未脱敏日志。
+- 不用 mock/fallback/原型/旧 `claim_only` 或 `single_save` 证据宣称批量已放行。
+- 不从旧 C: 镜像、旧后端、旧包或不同数据目录拼接 READY 证据。
 
-正式验收不要使用 `-SkipBrowserQA`。
+## 项目判断
 
----
+视频、翻译、批发、半托管和回滚不是新增装饰，而是完整商品编辑产品的必需 Module。当前核心工作是把它们接入同一条深链并收口：
 
-## 当前技术路线
+1. Reader 与上游私有接口形成一个版本化、可漂移检测的 Read Contract；
+2. 方案 preview/freeze 到 Runner 只消费同一份不可变 execution payload；
+3. 视频/批发/翻译/rollback preparation 形成每品一致的 ContentPreparation；
+4. Path B 两次 SAVE/VERIFY/三铁证/UNKNOWN 形成 Canonical Save Receipt。
 
-- 正式产品主路线：**本地版 + 自建 Playwright 主引擎**
-- Browser Use：作为后续增强执行器预留，不作为当前底座
-- MVP 范围：**速卖通 POP + 保存待发布**
-
----
-
-## 下一步重点
-
-1. 先按 [免安装桌面版与全链路操作日志任务书](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md) 建立持久化审计时间线、脱敏诊断包和双击即用 portable；每个用户配置动作、Runner/浏览器步骤和证据结果必须可关联复盘。
-2. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；Schema 查询即使使用 POST 也只能进入明确只读审计白名单，未知请求一律失败关闭。日志写入失败时，真实 mutation 必须零点击；点击后证据不确定必须转 `UNKNOWN` 并停批。
-3. 在新的免安装桌面版内，由用户配置真实店铺、类目以及产品属性/运费/服务等店小秘模板，重新预览并冻结至少 3 件商品；不得启动或克隆旧任务 `#191`。
-4. 保持同一固定源码/包身份的 backend 全量、frontend 标准 build、desktop 测试、文档 SelfTest、portable smoke、范围/秘密/哈希门禁全绿。没有 clean 固定点授权时只能标内部 canary 包，不得标发布包。
-5. 当前 `E3_READY_FOR_CANARY` 仍不是 `E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。获得另行授权后的可见浏览器 canary 才可按新 snapshot 串行只保存，并逐件取得“回包 + 页面成功态 + 独立未发布”三铁证；任何 `UNKNOWN` 立即停批。批量、无人值守和发布不得从本次受控三件 canary 推导授权。
-
-免安装版快速使用说明与 2026-06-22/2026-07-04 验收记录均为历史资料。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree、同 HEAD portable 和新鲜门禁；不得复用旧 `single_save` 结论扩大解释。
-
----
-
-## 目录结构
-
-```text
-app/
-├── backend/
-├── desktop/
-└── frontend/
-
-docs/
-├── api/
-├── product/
-├── research/
-└── tech/
-
-tools/
-└── probes/
-    ├── draft-box/
-    ├── editor/
-    ├── login/
-    └── navigation/
-
-data/
-├── ai/
-├── evidences/
-├── screenshots/
-├── sessions/
-└── sqlite/
-
-outputs/
-├── reports/
-└── spreadsheets/
-
-scripts/
-├── start-backend.sh
-├── start-frontend.sh
-├── start-mvp.sh
-├── start-mvp.bat
-├── start-mvp.ps1
-├── final-delivery-check.bat
-└── final-delivery-check.ps1
-```
-
----
-
-## 一句话状态
-
-**历史固定点曾达到 `E3_READY_FOR_CANARY`，当前工作树按 `E3_OPEN / BLOCKED` 管理：`0.1.4` portable 与统一操作审计尚未交付，类目分区模板、E4 真机 DoD 和真实三商品 canary 均未关闭。**
+在这些链和当前 package identity 闭合前，应停止把配置面板或 executor 数量当作版本进度，也不得用 Path A canary 替代完整产品验收。

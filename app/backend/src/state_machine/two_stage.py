@@ -6,6 +6,7 @@ import ipaddress
 import json
 import re
 from collections.abc import Iterable, Mapping
+from enum import Enum
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -1219,7 +1220,6 @@ def verify_exact_stage_task_facts(
     return _check(True)
 
 
-def _authorization_context_unsigned(context: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(context, Mapping):
         raise TwoStageContractError(
             "AUTH_CONTEXT_SHAPE_MISMATCH",
@@ -1291,6 +1291,38 @@ def _authorization_context_unsigned(context: Mapping[str, Any]) -> dict[str, Any
             git_head=git_head,
         )
     return unsigned
+
+
+def _authorization_context_unsigned(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract canonical fields from an authorization context as a dict (no fingerprint).
+
+    Used by build_authorization_context (which spreads the result) and by
+    authorization_context_fingerprint (which JSON-serializes the result separately).
+    """
+    facts = context.get("stage_task_facts")
+    schema = context.get("schema", AUTHORIZATION_CONTEXT_SCHEMA)
+    runtime_instance_id = str(context.get("runtime_instance_id", ""))
+    browser_session_id = str(context.get("browser_session_id", ""))
+    git_head = str(context.get("git_head", ""))
+    l2_fp = str(context.get("l2_evidence_fingerprint", ""))
+    approved_by = str(context.get("approved_by", ""))
+    worktree_identity = context.get("worktree_identity")
+
+    canonical: dict[str, Any] = {
+        "schema": schema,
+        "stage_task_facts": _json_clone(dict(facts)) if facts else {},
+        "runtime_instance_id": runtime_instance_id,
+        "browser_session_id": browser_session_id,
+        "git_head": git_head,
+        "l2_evidence_fingerprint": l2_fp,
+        "approved_by": approved_by,
+    }
+    if worktree_identity is not None:
+        if isinstance(worktree_identity, Mapping):
+            canonical["worktree_identity"] = dict(worktree_identity)
+        else:
+            canonical["worktree_identity"] = worktree_identity
+    return canonical
 
 
 def authorization_context_fingerprint(context: Mapping[str, Any]) -> str:
@@ -1365,6 +1397,146 @@ def verify_authorization_context(
         return _check(False, "AUTH_CONTEXT_FINGERPRINT_MISMATCH")
     return _check(True)
 
+
+class PathBPhase(Enum):
+    """Path B two-stage execution phases."""
+
+    PHASE_1_READY = "phase_1_ready"
+    PHASE_1_PENDING = "phase_1_pending"
+    PHASE_1_COMPLETED = "phase_1_completed"
+    PHASE_1_FAILED = "phase_1_failed"
+    PHASE_2_READY = "phase_2_ready"
+    PHASE_2_PENDING = "phase_2_pending"
+    PHASE_2_COMPLETED = "phase_2_completed"
+    PHASE_2_FAILED = "phase_2_failed"
+    COMMITTED = "committed"
+    ROLLED_BACK = "rolled_back"
+
+
+class PathBStateMachine:
+    """Two-stage state machine for Path B (semi-managed product editing).
+
+    Phase 1: Pre-write snapshot, field resolution, content finalize (wholesale→video→translation)
+    Phase 2: Controlled mutation dispatch, semi-managed save, final commitment
+
+    State transitions:
+      PHASE_1_READY → PHASE_1_PENDING → PHASE_1_COMPLETED/FAILED
+      PHASE_1_COMPLETED → PHASE_2_READY → PHASE_2_PENDING → PHASE_2_COMPLETED/FAILED
+      PHASE_2_COMPLETED → COMMITTED
+      Any phase failed → ROLLED_BACK
+    """
+
+    VALID_TRANSITIONS: dict[PathBPhase, frozenset[PathBPhase]] = {
+        PathBPhase.PHASE_1_READY: frozenset({PathBPhase.PHASE_1_PENDING}),
+        PathBPhase.PHASE_1_PENDING: frozenset({PathBPhase.PHASE_1_COMPLETED, PathBPhase.PHASE_1_FAILED}),
+        PathBPhase.PHASE_1_COMPLETED: frozenset({PathBPhase.PHASE_2_READY}),
+        PathBPhase.PHASE_1_FAILED: frozenset({PathBPhase.ROLLED_BACK}),
+        PathBPhase.PHASE_2_READY: frozenset({PathBPhase.PHASE_2_PENDING}),
+        PathBPhase.PHASE_2_PENDING: frozenset({PathBPhase.PHASE_2_COMPLETED, PathBPhase.PHASE_2_FAILED}),
+        PathBPhase.PHASE_2_COMPLETED: frozenset({PathBPhase.COMMITTED}),
+        PathBPhase.PHASE_2_FAILED: frozenset({PathBPhase.ROLLED_BACK}),
+        PathBPhase.COMMITTED: frozenset(),
+        PathBPhase.ROLLED_BACK: frozenset(),
+    }
+
+    PHASE1_STEPS = frozenset({"snapshot_freeze", "field_resolution", "wholesale", "video", "translation"})
+    PHASE2_STEPS = frozenset({"mutation_dispatch", "semi_save", "commit"})
+
+    def __init__(self) -> None:
+        self._phase: PathBPhase = PathBPhase.PHASE_1_READY
+        self._phase1_results: dict[str, Any] = {}
+        self._phase2_results: dict[str, Any] = {}
+        self._failed_step: str | None = None
+        self._failure_reason: str | None = None
+
+    @property
+    def phase(self) -> PathBPhase:
+        return self._phase
+
+    def is_terminal(self) -> bool:
+        return self._phase in {PathBPhase.COMMITTED, PathBPhase.ROLLED_BACK}
+
+    def can_transition_to(self, target: PathBPhase) -> bool:
+        return target in self.VALID_TRANSITIONS.get(self._phase, frozenset())
+
+    def transition(self, target: PathBPhase) -> None:
+        if not self.can_transition_to(target):
+            raise ValueError(
+                f"Invalid transition: {self._phase.value} → {target.value}"
+            )
+        self._phase = target
+
+    def record_phase1_step(
+        self,
+        step: str,
+        result: dict[str, Any],
+    ) -> None:
+        """Record result of a Phase 1 step."""
+        if step not in self.PHASE1_STEPS:
+            raise ValueError(f"Unknown Phase 1 step: {step}")
+        if result.get("status") == "failed" or result.get("success") is False:
+            self._failed_step = step
+            self._failure_reason = result.get("error") or result.get("error_message") or "unknown"
+            if self._phase == PathBPhase.PHASE_1_PENDING:
+                self.transition(PathBPhase.PHASE_1_FAILED)
+        elif self._phase == PathBPhase.PHASE_1_PENDING:
+            self._phase1_results[step] = result
+            if all(step in self._phase1_results for step in self.PHASE1_STEPS):
+                self.transition(PathBPhase.PHASE_1_COMPLETED)
+
+    def record_phase2_step(
+        self,
+        step: str,
+        result: dict[str, Any],
+    ) -> None:
+        """Record result of a Phase 2 step."""
+        if step not in self.PHASE2_STEPS:
+            raise ValueError(f"Unknown Phase 2 step: {step}")
+        if result.get("status") == "failed" or result.get("success") is False:
+            self._failed_step = step
+            self._failure_reason = result.get("error") or result.get("error_message") or "unknown"
+            if self._phase == PathBPhase.PHASE_2_PENDING:
+                self.transition(PathBPhase.PHASE_2_FAILED)
+        elif self._phase == PathBPhase.PHASE_2_PENDING:
+            self._phase2_results[step] = result
+            if all(step in self._phase2_results for step in self.PHASE2_STEPS):
+                self.transition(PathBPhase.PHASE_2_COMPLETED)
+
+    def begin_phase1(self) -> None:
+        """Begin Phase 1."""
+        if self._phase != PathBPhase.PHASE_1_READY:
+            raise ValueError(f"Cannot begin Phase 1 from state: {self._phase.value}")
+        self.transition(PathBPhase.PHASE_1_PENDING)
+
+    def begin_phase2(self) -> None:
+        """Begin Phase 2 (only valid after Phase 1 completed)."""
+        if self._phase != PathBPhase.PHASE_1_COMPLETED:
+            raise ValueError(f"Cannot begin Phase 2 from state: {self._phase.value}")
+        self.transition(PathBPhase.PHASE_2_READY)
+        self.transition(PathBPhase.PHASE_2_PENDING)
+
+    def commit(self) -> None:
+        """Commit the execution."""
+        if self._phase != PathBPhase.PHASE_2_COMPLETED:
+            raise ValueError(f"Cannot commit from state: {self._phase.value}")
+        self.transition(PathBPhase.COMMITTED)
+
+    def rollback(self) -> None:
+        """Trigger rollback."""
+        self._phase = PathBPhase.ROLLED_BACK
+
+    def get_summary(self) -> dict[str, Any]:
+        """Get a summary of the current state machine state."""
+        return {
+            "phase": self._phase.value,
+            "is_terminal": self.is_terminal(),
+            "phase1_results": dict(self._phase1_results),
+            "phase2_results": dict(self._phase2_results),
+            "failed_step": self._failed_step,
+            "failure_reason": self._failure_reason,
+            "all_phase1_complete": all(step in self._phase1_results for step in self.PHASE1_STEPS),
+            "all_phase2_complete": all(step in self._phase2_results for step in self.PHASE2_STEPS),
+        }
 
 def compare_authorization_context(
     expected: Mapping[str, Any],

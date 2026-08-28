@@ -5,6 +5,7 @@ import type {
 } from './types'
 
 export const MIN_DRAFT_SELECTION = 1
+export const MAX_DRAFT_SELECTION = 100
 
 export type DraftTaskInput = {
   shopId: string
@@ -180,6 +181,9 @@ export function buildDraftTaskInput(candidate: DraftTaskInputCandidate): DraftTa
   const productIds = mergeDraftSelection([], candidate.productIds)
   if (productIds.length < MIN_DRAFT_SELECTION) {
     throw new Error(`at least ${MIN_DRAFT_SELECTION} draft products are required`)
+  }
+  if (productIds.length > MAX_DRAFT_SELECTION) {
+    throw new Error(`at most ${MAX_DRAFT_SELECTION} draft products are allowed`)
   }
   if (
     candidate.planId === null

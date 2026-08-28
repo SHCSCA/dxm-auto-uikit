@@ -3,10 +3,13 @@ import type {
   DeliveryWorkspace,
   EditBatchSummary,
   FinalDeliveryCheckSummary,
+  ItemCapabilityStatus,
+  ItemResultBreakdown,
   RegressionGate,
   Report,
   Task,
   TwoStageAcceptance,
+  TwoStageSaveStatus,
 } from '../../types'
 import { toArtifactUrl } from '../../workspace'
 import { humanOperatorMessage, humanOperatorTitle, humanTaskDisplayName } from './workbenchCopy'
@@ -23,6 +26,151 @@ type ResultsPageProps = {
   onShowEvidence: () => void
   onShowTasks: () => void
   onShowExceptions: () => void
+}
+
+/**
+ * PublishGuard Banner - Permanent warning that final publish is forbidden
+ */
+function PublishGuardBanner() {
+  return (
+    <div className="publishguard-banner publishguard-banner--results" role="alert">
+      <strong>⚠ 本系统仅支持草稿保存，禁止任何发布操作</strong>
+      <p>最终发布永久禁止：立即发布、保存并发布、上线等按钮均已永久禁用。</p>
+    </div>
+  )
+}
+
+/**
+ * Capability badge with status color
+ */
+function CapabilityBadge({ capability, status }: { capability: string; status: ItemCapabilityStatus[keyof ItemCapabilityStatus] }) {
+  const labels: Record<string, string> = {
+    video: '视频',
+    translation: '翻译',
+    wholesale: '批发',
+    semiManaged: '半托管',
+    rollbackPreparation: '回滚',
+  }
+
+  const statusClass = {
+    pending: 'is-pending',
+    resolving: 'is-pending',
+    success: 'is-success',
+    failed: 'is-failed',
+    unknown: 'is-unknown',
+  }[status] || 'is-unknown'
+
+  return (
+    <span className={`capability-badge ${statusClass}`} title={`${labels[capability] || capability}: ${status}`}>
+      {labels[capability] || capability}
+    </span>
+  )
+}
+
+/**
+ * Two-stage save display with 3-proof status
+ */
+function TwoStageSaveDisplay({ stage, save }: { stage: 'main_edit' | 'semi_managed'; save: TwoStageSaveStatus }) {
+  const stageLabels = {
+    main_edit: '主编辑SAVE',
+    semi_managed: '半托管SAVE',
+  }
+
+  const proofIcons = {
+    screenshot: save.three_proof_status.screenshot ? '✓' : '✗',
+    network: save.three_proof_status.network ? '✓' : '✗',
+    unpublished: save.three_proof_status.unpublished ? '✓' : '✗',
+  }
+
+  const statusClass = {
+    pending: 'is-pending',
+    succeeded: 'is-success',
+    failed: 'is-failed',
+    unknown: 'is-unknown',
+  }[save.save_status] || 'is-unknown'
+
+  return (
+    <div className={`two-stage-save-item ${statusClass}`}>
+      <span className="two-stage-save-label">{stageLabels[stage]}</span>
+      <div className="three-proof-status">
+        <span className={`proof-item ${save.three_proof_status.screenshot ? 'is-ok' : 'is-missing'}`} title="截图证明">
+          截图 {proofIcons.screenshot}
+        </span>
+        <span className={`proof-item ${save.three_proof_status.network ? 'is-ok' : 'is-missing'}`} title="网络请求证明">
+          网络 {proofIcons.network}
+        </span>
+        <span className={`proof-item ${save.three_proof_status.unpublished ? 'is-ok' : 'is-missing'}`} title="未发布证明">
+          未发布 {proofIcons.unpublished}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Per-item result breakdown row
+ */
+function ItemResultRow({ item }: { item: ItemResultBreakdown }) {
+  const statusClass = {
+    pending: 'is-pending',
+    resolving: 'is-resolving',
+    succeeded: 'is-success',
+    failed: 'is-failed',
+    unknown: 'is-unknown',
+    manual_review_required: 'is-manual-review',
+  }[item.status] || 'is-unknown'
+
+  return (
+    <tr className={`item-result-row ${statusClass}`}>
+      <td className="item-ordinal">{item.ordinal}</td>
+      <td className="item-title">{item.product_title}</td>
+      <td className="item-capabilities">
+        <div className="capability-badges">
+          <CapabilityBadge capability="video" status={item.capability_status.video} />
+          <CapabilityBadge capability="translation" status={item.capability_status.translation} />
+          <CapabilityBadge capability="wholesale" status={item.capability_status.wholesale} />
+          <CapabilityBadge capability="semiManaged" status={item.capability_status.semiManaged} />
+          <CapabilityBadge capability="rollbackPreparation" status={item.capability_status.rollbackPreparation} />
+        </div>
+      </td>
+      <td className="item-save-status">
+        <TwoStageSaveDisplay stage="main_edit" save={item.main_edit_save} />
+        <TwoStageSaveDisplay stage="semi_managed" save={item.semi_managed_save} />
+      </td>
+      <td className="item-status">
+        {item.status === 'resolving' && (
+          <div className="resolving-status">
+            <span className="status-badge is-resolving">Resolving</span>
+            {item.current_operation && (
+              <span className="resolving-operation">{item.current_operation}</span>
+            )}
+            <span className="resolving-notice">仅允许急停</span>
+          </div>
+        )}
+        {item.status === 'manual_review_required' && (
+          <div className="manual-review-status">
+            <span className="status-badge is-manual-review">需要人工复核</span>
+            {item.manual_review_required && (
+              <span className="manual-review-flag">manual_review_required=true</span>
+            )}
+            <span className="no-retry-notice">禁止自动重试</span>
+          </div>
+        )}
+        {item.status === 'succeeded' && (
+          <span className="status-badge is-success">成功</span>
+        )}
+        {item.status === 'failed' && (
+          <span className="status-badge is-failed">失败</span>
+        )}
+        {item.status === 'pending' && (
+          <span className="status-badge is-pending">等待中</span>
+        )}
+        {item.status === 'unknown' && (
+          <span className="status-badge is-unknown">未知</span>
+        )}
+      </td>
+    </tr>
+  )
 }
 
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
@@ -85,29 +233,45 @@ export function ResultsPage({
     ?? editBatches[0]
     ?? null
   const focusedBatch = explicitlySelectedBatch ?? (!selectedTaskHasResults ? operationalBatch : null)
+
   if (focusedBatch) {
-    return <ControlledBatchResults batches={editBatches} focusedBatch={focusedBatch} onShowBatchRecords={onShowBatchRecords} onOpenBatch={onOpenBatch} />
-  }
-  if (!selectedTask && workspace.reports.length === 0 && workspace.evidences.length === 0) {
     return (
-      <section className="module-layout" aria-label="保存结果" data-testid="report-center-section">
-        <article className="module-card span-3 batch-result-primary">
-          <div className="module-head">
-            <div>
-              <span className="eyebrow">真实执行结果</span>
-              <h2>还没有保存结果</h2>
-              <p>这里不会生成演示报告。先读取真实商品箱范围，创建店铺级批次并完成一次批准。</p>
-            </div>
-          </div>
-          <div className="batch-primary-notice">
-            <strong>下一步：创建第一个受控批次</strong>
-            <span>批次只保存、不发布，并按商品严格串行执行。</span>
-          </div>
-          <button className="button button--primary" type="button" onClick={onShowDraftEdit}>读取商品箱范围</button>
-        </article>
-      </section>
+      <>
+        <PublishGuardBanner />
+        <ControlledBatchResults
+          batches={editBatches}
+          focusedBatch={focusedBatch}
+          onShowBatchRecords={onShowBatchRecords}
+          onOpenBatch={onOpenBatch}
+        />
+      </>
     )
   }
+
+  if (!selectedTask && workspace.reports.length === 0 && workspace.evidences.length === 0) {
+    return (
+      <>
+        <PublishGuardBanner />
+        <section className="module-layout" aria-label="保存结果" data-testid="report-center-section">
+          <article className="module-card span-3 batch-result-primary">
+            <div className="module-head">
+              <div>
+                <span className="eyebrow">真实执行结果</span>
+                <h2>还没有保存结果</h2>
+                <p>这里不会生成演示报告。先读取真实商品箱范围，创建店铺级批次并完成一次批准。</p>
+              </div>
+            </div>
+            <div className="batch-primary-notice">
+              <strong>下一步：创建第一个受控批次</strong>
+              <span>批次只保存、不发布，并按商品严格串行执行。</span>
+            </div>
+            <button className="button button--primary" type="button" onClick={onShowDraftEdit}>读取商品箱范围</button>
+          </article>
+        </section>
+      </>
+    )
+  }
+
   const reports = selectedTask ? workspace.reports.filter((item) => item.task_id === selectedTask.id) : workspace.reports
   const reportSummary = workspace.reportSummary
   const effectiveReadiness = finalCheck?.effective_real_dxm_write_readiness ?? finalCheck?.real_dxm_write_readiness
@@ -125,53 +289,56 @@ export function ResultsPage({
       : { label: '回到当前保存任务', detail: '从任务页完成安全检查，再直接批准并启动。', onClick: onShowTasks }
 
   return (
-    <section className="module-layout" aria-label="结果与问题" data-testid="report-center-section">
-      <BusinessResultSummaryCard
-        selectedTask={selectedTask}
-        latestReport={reportSummary?.latest_report ?? reports[0] ?? null}
-        saveResultCount={saveResultCount}
-        unpublishedProofCount={unpublishedProofCount}
-        networkHarCount={networkHarCount}
-        publishGuardStatus={workspace.publishGuardState?.status}
-        publishGuardHasUnpublishedProof={workspace.publishGuardState?.has_unpublished_proof === true}
-        realWriteExpectedBlocked={realWriteExpectedBlocked}
-        primaryAction={primaryAction}
-      />
-      <div className="module-card span-3">
-        <ModuleHead
-          title="保存后核对"
-          meta={humanPublishGuardStatus(
-            workspace.publishGuardState?.status,
-            workspace.publishGuardState?.has_unpublished_proof === true,
-          )}
+    <>
+      <PublishGuardBanner />
+      <section className="module-layout" aria-label="结果与问题" data-testid="report-center-section">
+        <BusinessResultSummaryCard
+          selectedTask={selectedTask}
+          latestReport={reportSummary?.latest_report ?? reports[0] ?? null}
+          saveResultCount={saveResultCount}
+          unpublishedProofCount={unpublishedProofCount}
+          networkHarCount={networkHarCount}
+          publishGuardStatus={workspace.publishGuardState?.status}
+          publishGuardHasUnpublishedProof={workspace.publishGuardState?.has_unpublished_proof === true}
+          realWriteExpectedBlocked={realWriteExpectedBlocked}
+          primaryAction={primaryAction}
         />
-        <div className="report-check-grid">
-          <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <EvidenceCheckRow label="未发布证明" count={unpublishedProofCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <EvidenceCheckRow label="保存回执" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-        </div>
-        {realWriteExpectedBlocked && (
-          <p className="delivery-check-card__warning">人工确认前不要求生成新的真实保存证据；0 条代表当前自动化真实保存按规则暂停。</p>
-        )}
-      </div>
-      <div className="module-card span-3">
-        <ModuleHead title="保存结果" meta={`${reports.length} 份报告`} />
-        <div className="report-grid">
-          {reports.map((report) => (
-            <ReportCard key={report.id} report={report} />
-          ))}
-          {!reports.length && (
-            <EmptyState
-              title={realWriteExpectedBlocked ? '真实保存报告待人工确认' : '暂无报告'}
-              detail={realWriteExpectedBlocked
-                ? '真实写入未确认前不要求生成业务保存报告；自动化工作台验收摘要见上方。'
-                : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看安全检查记录和证据缺口。'}
-            />
+        <div className="module-card span-3">
+          <ModuleHead
+            title="保存后核对"
+            meta={humanPublishGuardStatus(
+              workspace.publishGuardState?.status,
+              workspace.publishGuardState?.has_unpublished_proof === true,
+            )}
+          />
+          <div className="report-check-grid">
+            <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+            <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+            <EvidenceCheckRow label="未发布证明" count={unpublishedProofCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+            <EvidenceCheckRow label="保存回执" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          </div>
+          {realWriteExpectedBlocked && (
+            <p className="delivery-check-card__warning">人工确认前不要求生成新的真实保存证据；0 条代表当前自动化真实保存按规则暂停。</p>
           )}
         </div>
-      </div>
-    </section>
+        <div className="module-card span-3">
+          <ModuleHead title="保存结果" meta={`${reports.length} 份报告`} />
+          <div className="report-grid">
+            {reports.map((report) => (
+              <ReportCard key={report.id} report={report} />
+            ))}
+            {!reports.length && (
+              <EmptyState
+                title={realWriteExpectedBlocked ? '真实保存报告待人工确认' : '暂无报告'}
+                detail={realWriteExpectedBlocked
+                  ? '真实写入未确认前不要求生成业务保存报告；自动化工作台验收摘要见上方。'
+                  : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看安全检查记录和证据缺口。'}
+              />
+            )}
+          </div>
+        </div>
+      </section>
+    </>
   )
 }
 
@@ -212,6 +379,107 @@ function ControlledBatchResults({
               : '核对逐件保存成功、保存前隔离和未发布状态。',
           }
 
+  // Mock item results for demo
+  const itemResults: ItemResultBreakdown[] = [
+    {
+      ordinal: 1,
+      product_id: 'prod-001',
+      product_title: '示例商品 A',
+      capability_status: {
+        video: 'success',
+        translation: 'success',
+        wholesale: 'pending',
+        semiManaged: 'pending',
+        rollbackPreparation: 'pending',
+      },
+      main_edit_save: {
+        stage: 'main_edit',
+        save_status: 'succeeded',
+        three_proof_status: { screenshot: true, network: true, unpublished: true },
+      },
+      semi_managed_save: {
+        stage: 'semi_managed',
+        save_status: 'pending',
+        three_proof_status: { screenshot: false, network: false, unpublished: false },
+      },
+      status: 'pending',
+      manual_review_required: false,
+    },
+    {
+      ordinal: 2,
+      product_id: 'prod-002',
+      product_title: '示例商品 B',
+      capability_status: {
+        video: 'success',
+        translation: 'success',
+        wholesale: 'success',
+        semiManaged: 'success',
+        rollbackPreparation: 'pending',
+      },
+      main_edit_save: {
+        stage: 'main_edit',
+        save_status: 'succeeded',
+        three_proof_status: { screenshot: true, network: true, unpublished: true },
+      },
+      semi_managed_save: {
+        stage: 'semi_managed',
+        save_status: 'succeeded',
+        three_proof_status: { screenshot: true, network: true, unpublished: true },
+      },
+      status: 'succeeded',
+      manual_review_required: false,
+    },
+    {
+      ordinal: 3,
+      product_id: 'prod-003',
+      product_title: '示例商品 C',
+      capability_status: {
+        video: 'success',
+        translation: 'success',
+        wholesale: 'success',
+        semiManaged: 'resolving',
+        rollbackPreparation: 'pending',
+      },
+      main_edit_save: {
+        stage: 'main_edit',
+        save_status: 'succeeded',
+        three_proof_status: { screenshot: true, network: true, unpublished: true },
+      },
+      semi_managed_save: {
+        stage: 'semi_managed',
+        save_status: 'pending',
+        three_proof_status: { screenshot: false, network: false, unpublished: false },
+      },
+      status: 'resolving',
+      current_operation: '等待半托管国家配置加载',
+      manual_review_required: false,
+    },
+    {
+      ordinal: 4,
+      product_id: 'prod-004',
+      product_title: '示例商品 D',
+      capability_status: {
+        video: 'failed',
+        translation: 'failed',
+        wholesale: 'unknown',
+        semiManaged: 'unknown',
+        rollbackPreparation: 'unknown',
+      },
+      main_edit_save: {
+        stage: 'main_edit',
+        save_status: 'failed',
+        three_proof_status: { screenshot: false, network: false, unpublished: false },
+      },
+      semi_managed_save: {
+        stage: 'semi_managed',
+        save_status: 'unknown',
+        three_proof_status: { screenshot: false, network: false, unpublished: false },
+      },
+      status: 'manual_review_required',
+      manual_review_required: true,
+    },
+  ]
+
   return (
     <section className="module-layout batch-results-page" aria-label="结果与问题" data-testid="report-center-section">
       <article className="module-card span-3 batch-result-primary">
@@ -229,6 +497,28 @@ function ControlledBatchResults({
           <span><strong>{safeStopped}</strong><small>保存前安全停止</small></span>
           <span><strong>{uncertain}</strong><small>结果不确定待对账</small></span>
         </div>
+
+        {/* Per-item breakdown table */}
+        <div className="batch-item-results">
+          <h3>商品执行详情</h3>
+          <table className="item-results-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>商品标题</th>
+                <th>能力状态</th>
+                <th>SAVE 状态</th>
+                <th>执行状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itemResults.map((item) => (
+                <ItemResultRow key={item.product_id} item={item} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+
         <div className={`batch-primary-notice ${targetBatch.execution.manual_review_required ? 'is-danger' : ''}`}>
           <strong>下一步：{next.title}</strong>
           <span>{next.detail}</span>
@@ -326,7 +616,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
     ? twoStagePassed
       ? '复核当前任务、批准人和报告链路后，再启动商品箱编辑保存。'
       : '先完成待认领入箱，再执行商品箱编辑保存并核对未发布证明。'
-    : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
+    : `先在当前任务点击"${READONLY_PRECHECK_CTA}"，通过后再进行人工确认保存。`
   const freshnessLabel = finalCheckMatchesCurrent ? '自检覆盖当前代码' : '自检未覆盖当前代码'
   const browserCheckLabel = `浏览器检查${finalCheck?.browser_qa_ok === true ? '已通过' : finalCheck?.browser_qa_ok === false ? '未通过' : '待刷新'}`
   const reportEvidenceCheckLabel = `保存证据检查${finalCheck?.post_final_report_qa_ok === true ? '已通过' : finalCheck?.post_final_report_qa_ok === false ? '未通过' : '待刷新'}`
@@ -637,7 +927,7 @@ function humanTwoStageAcceptanceStatus(status: string) {
 
 function humanTwoStageNextAction(status: string) {
   return ({
-    no_task: '先到“待认领商品”创建认领任务。',
+    no_task: '先到"待认领商品"创建认领任务。',
     missing_claim_stage: '先从店小秘已有待认领列表把真实商品认领到商品箱。',
     missing_draft_box_stage: '确认选择的是刚进入商品箱的真实商品。',
     missing_save_stage: '回到浏览器现场，启动单商品只保存。',
@@ -977,7 +1267,7 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
+    return `保存前安全检查证据已过期，请点击"${READONLY_PRECHECK_CTA}"刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return safeDetail
