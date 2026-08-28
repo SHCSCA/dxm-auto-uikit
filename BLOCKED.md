@@ -10,6 +10,7 @@
 
 - 视频、翻译、批发、半托管和 rollback preparation 已固定为每件商品必经，但现有实现仍以类、配置、状态或局部测试为主，多处真实页面动作和持久证据未闭合。
 - 主编辑页可观察能力不支持、缺控件、缺稳定 binding 或缺读回时，必须在主页面首写前 fail-closed；半托管资格不得由本系统预判，主保存意图 Modal 中点击“编辑半托管信息”时只接受店小秘原生门裁决。明确拒绝或结果不确定均停批，不能跳过、空操作或降级 Path A。
+- 合并时已将冻结 product ID 直达编辑页的 loading/overlay 路径改为只读检查，持续 loading、可见 blocker 与身份不明均 fail-closed；但 `DxmLoginFlow._dismiss_blocking_modals` 的 legacy fallback 仍包含矩形中心点击、泛化 Escape 与 `_remove_stuck_notice_modal` DOM/遮罩删除。它不能进入生产 Path B，必须改成精确可见 close binding；无法安全关闭时保持 `blocked_pre_write`。
 - 关闭条件：每项贯穿 UI → API → snapshot → frozen execution payload → Runner → 正式 BrowserAgent/DxmWorkflowAdapter → 精确 readback → receipt，并覆盖失败与 UNKNOWN 反例。
 
 ### B-02 · Path B 两阶段保存、原生门时序与中间转换未闭环（真实写前 P0）
@@ -47,15 +48,15 @@
 
 ### B-06 · 完整 L0 已全绿（2026-08-28 关闭）
 
-- 使用隔离 `DXM_DATA_DIR` 对当前工作树运行完整后端门禁：`2344 passed in 782.38s (0:13:02)`，exit 0，`0 failed / 0 skipped`。
-- 原 15 个 skip 函数（23 个参数化 node）已迁移到现行 `plan_snapshot → batch_draft_save → V1TaskRunner` 公共链；未恢复旧接口/Runtime，未删除测试或放宽断言。
-- 本项不再是当前 blocker；该证据仍绑定当前脏工作树，不能替代 B-07 固定点、B-01/B-02 生产接线或 B-08 真实三商品验收。
+- 使用隔离 `DXM_DATA_DIR` 对 feature/main 合并源码树运行完整后端门禁：首轮如实为 `49 failed / 1760 passed`；修复全部失败后第二轮为 `1809 passed in 574.80s (0:09:34)`，exit 0，`0 failed / 0 skipped`。
+- 合并前 feature 的历史基线为 `2344 passed`；当前收集数减少来自旧 claim/two-stage 运行面和对应测试按 main 合同删除，不是 skip、阈值放宽或隐藏失败。
+- 本项不再是当前 blocker；该证据绑定 `7bb2ad7` / `af01446` 源码树，不能替代 B-01/B-02 生产接线、portable 或 B-08 真实三商品验收。
 
-### B-07 · 工作树与版本不可复现
+### B-07 · 远端源码固定点已关闭；0.3.0 portable 仍不可复验
 
-- 当前固定点仍是 `fix/dxm-two-stage-runtime-truth` / `cbb88c1eb22e5df58b05075f6aa3dde044856099`，但大量核心改动位于脏工作树。
-- backend/frontend/desktop 与根 package 已统一为 0.3.0，但当前仍没有包含核心源码、测试、合同和资源的远端可复验固定点，也不存在同源 0.3.0 portable。
-- 关闭条件：形成并推送固定点，从该点重跑门禁，构建并完成隔离 user-data package smoke。
+- feature 固定点 `7bb2ad781e5ee4bf53f2ad5ab38339b4da4dd7f0` 已推送至 `origin/fix/dxm-two-stage-runtime-truth`，main 非快进合并固定点 `af01446fbc45a4b8117202a8305a24685db67552` 已进入并推送至 `origin/main` 历史；核心源码、测试、合同与资源已有远端可复验固定点。
+- backend/frontend/desktop 与根 package 已统一为 0.3.0，但仍不存在从 `af01446` 构建并通过隔离 user-data/package identity smoke 的同源 0.3.0 portable。
+- 关闭条件：仅剩 portable 构建、manifest/hash、隔离 user-data 和 package smoke；不得把远端源码固定点等同于可交付安装包。
 
 ### B-08 · 真实三商品完整 Path B 未验收
 

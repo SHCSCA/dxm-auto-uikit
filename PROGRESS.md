@@ -9,22 +9,23 @@
 - 完整商品成功主路径固定为 Path B：普通编辑、视频、批发、翻译、半托管和 rollback preparation 对每件商品全部 `REQUIRED / ALWAYS_ON`，不得跳过、关闭或降级 Path A。
 - 半托管入口分成两个动作：点击顶部精确“保存”出现提示 Modal 后，再精确点击“编辑半托管信息”，由店小秘自身执行原生资格检查；只有店小秘放行且实际 SAVE1 已验证并绑定同一入口握手，才允许自动化中间“继续发布”进入冻结的 `editFromSmt`。系统不得主动调用 `verifyPopChoiceShop` 或用店铺类型/类目/catalog/历史结果预判资格。提示 Modal 不足以证明 SAVE1 已完成；当前尚未实证哪个点击触发 SAVE1，安全合同把两者都视为 `MAY_DISPATCH_SAVE1`，但两组事实只要已验证且因果同源，不要求还原墙钟全序。
 - Path A 只保留为诊断/canary，不能代表产品完成。
-- 当前代码仍未闭合上述完整生产链，因此维持 `BLOCKED`；本轮只收敛合同、上游知识和类目数据，没有操作真实浏览器、保存或发布。
+- 当前代码已形成远端源码固定点并通过完整工程门禁，但仍未闭合上述完整生产链，因此维持 `BLOCKED`；本轮合并与验收没有操作真实浏览器、保存或发布。
 
 ## 2. 当前身份与范围
 
 | 项 | 值 |
 |---|---|
 | 权威 checkout | `D:\Desktop\py\dxm-auto-uikit` |
-| 分支 | `fix/dxm-two-stage-runtime-truth` |
-| HEAD | `cbb88c1eb22e5df58b05075f6aa3dde044856099` |
+| 当前分支 | `main` |
+| feature 验收固定点 | `7bb2ad781e5ee4bf53f2ad5ab38339b4da4dd7f0` |
+| main 合并固定点 | `af01446fbc45a4b8117202a8305a24685db67552` |
 | 2026-08-25 文档工作流开始状态数 | `617` |
 | 上游 | `D:\Desktop\py\DXM-TX`，始终只读 |
 | backend/frontend/desktop | `0.3.0` |
 | 根 `package.json` | `0.3.0`，与 backend/frontend/desktop 一致 |
 | 当前 0.3.0 portable | 不存在 |
 
-工作树原有大量 tracked/untracked/删除项，均属于既有工作；本轮不清理、不恢复、不 commit、不 push。
+feature 与 main 已按普通非强制推送同步到远端；`af01446` 的工作树在推送时为 clean。后续状态文档提交只改变 `PROGRESS.md` / `BLOCKED.md`，不改变已验收源码树。
 
 ## 3. 本轮已完成
 
@@ -91,6 +92,16 @@
 - 隔离 `DXM_DATA_DIR` 的完整后端 L0：`2344 passed in 782.38s (0:13:02)`，exit 0，`0 failed / 0 skipped`。相关聚合：`145 passed in 130.10s`；前端标准构建、Desktop 94/94、文档 SelfTest 与 `git diff --check` 均通过。
 - 本项只关闭 B-06 测试门禁；工作树固定点、完整 Path B 接线、真实三商品两阶段只保存和 portable 证据仍未完成，`E3_OPEN / BLOCKED` 不变。没有执行真实保存或发布。
 
+### 3.9 2026-08-28 0.3.0 主线合并与远端固定点
+
+- 将 `origin/main@ef802631461c759abad820e66dd261e6ac124de0` 合入 feature，解决 claim 删除、批量授权、BrowserAgent、Runner、登录流、Frontend 与 Desktop 的合同冲突；feature 合并固定点为 `7bb2ad781e5ee4bf53f2ad5ab38339b4da4dd7f0`。
+- 删除旧 claim UI/API/runtime 与 `two_stage.py`，保留数据库迁移中的 legacy quarantine；批量草稿保存授权由 `batch_draft_authorization.py` / `save_authorization.py` 承担。
+- 合并期间发现并修复登录流的重复 `@staticmethod`、冻结 product ID 直达编辑页配套缺失、未定义来源变量，以及“隐藏/删除遮罩后继续”的危险实现；当前直达编辑页 overlay 检查只读，持续 loading、可见 blocker 或身份不明均 fail-closed。
+- 首轮完整 L0 为 `49 failed / 1760 passed`；没有忽略失败。迁移失效测试到当前正式 Runner/claim-removed 合同后，失败集聚合 `190 passed`，第二轮完整 L0 为 `1809 passed in 574.80s (0:09:34)`，exit 0、0 failed、0 skipped。
+- Frontend 标准 build：Node `34/34`、Chromium `11/11`、TypeScript、Vite 65 modules 全绿；Desktop `94/94`；文档 SelfTest 先 12 条 `RED_EXPECTED`，再 `MVP_DOCS_OK`。
+- feature 已普通推送至 `origin/fix/dxm-two-stage-runtime-truth@7bb2ad7`；main 以非快进合并提交 `af01446fbc45a4b8117202a8305a24685db67552` 普通推送至 `origin/main`，未 force push。
+- 本项只关闭“源码无远端固定点”；0.3.0 portable、完整 Path B 正式接线、旧弹窗坐标/DOM fallback 清除和真实三商品证据仍在 BLOCKED。真实浏览器动作、店小秘保存、发布均为 0。
+
 ## 4. 安全事件记录
 
 本轮早期一次绝对路径 `rg` 的 glob 排除失效，额外输出了上游 `data/capture/observed/.../docs-api/DXM-接口字段血缘.md` 中 4 行重复字段名称。没有 Cookie、会话、账号、店铺、商品值或 raw 回包，也没有修改上游；这仍属于当时边界偏差，已停止根目录递归检索。随后用户授权仅覆盖 `data/capture/categories`，不追溯豁免该事件，也不扩大到其它 `data/**`。
@@ -108,8 +119,8 @@
 
 ## 6. 当前代码证据边界
 
-- 2026-08-28 使用隔离 `DXM_DATA_DIR` 的完整 backend L0：`2344 passed in 782.38s (0:13:02)`，`0 failed / 0 skipped`。
-- 当前 frontend 标准 build：Node `34/34`、Chromium `11/11`、TypeScript 与 Vite 68 modules 通过；desktop `94/94` 通过。
+- `af01446` 源码树使用隔离 `DXM_DATA_DIR` 的完整 backend L0：`1809 passed in 574.80s (0:09:34)`，`0 failed / 0 skipped`。合并前 feature 的 `2344 passed` 属于旧 claim/two-stage 测试尚未删除时的历史基线，不能冒充当前收集数。
+- 当前 frontend 标准 build：Node `34/34`、Chromium `11/11`、TypeScript 与 Vite 65 modules 通过；desktop `94/94` 通过。
 - 以上证明当前工作树工程门禁，不证明真实 Path B 双保存、0.3.0 portable 或 `MVP_READY / PROD_READY`。
 - 当前产品阻断、包身份和真机证据见 [BLOCKED](BLOCKED.md)。
 
@@ -117,7 +128,7 @@
 
 1. 让 CategoryCatalog 进入后端/portable 的版本化资源与 runtime lookup，并冻结 node/catalog/capability identities。
 2. 将视频、批发、翻译、rollback preparation 和 Path B 两阶段写入/读回接入同一 frozen execution payload、Runner、BrowserAgent、ledger 和 receipt。
-3. 形成可复验 Git 固定点，从该点重跑门禁并构建同源 0.3.0 portable。
+3. 从 `af01446` 的同源源码构建 0.3.0 portable，并完成隔离 user-data/package identity smoke。
 4. 再取得当次真实写入授权，从同一工作台、会话和包完成三商品完整 Path B 两阶段只保存；逐阶段三铁证，最终发布为 0。
 
 ## 8. 2026-08-26 文档阶段记录（历史）
