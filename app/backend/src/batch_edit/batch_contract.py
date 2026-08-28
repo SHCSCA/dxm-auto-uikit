@@ -200,7 +200,6 @@ def freeze_template_bundle(template: Any) -> dict[str, Any]:
             "BATCH_CATEGORY_SCOPE_UNVERIFIABLE",
             "category-bound edit batches are disabled until DXM exposes exact per-row category evidence",
         )
-
     source_templates = payload["source_templates"]
     if not isinstance(source_templates, dict) or set(source_templates) != set(BATCH_TEMPLATE_REQUIRED_SECTIONS):
         _reject("TEMPLATE_BUNDLE_INVALID", "template bundle source set is incomplete")

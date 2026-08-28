@@ -7,6 +7,15 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from src.execution.batch_command_contract import (
+    BatchCommandContractError,
+    canonical_contract_sha256,
+    validate_batch_queue_guard_shape,
+    validate_save_verification_context,
+)
+
+from src.execution.product_identity import is_stable_product_id
+
 
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
     ("SAVE_ONLY", "save_only"): {
@@ -17,7 +26,6 @@ MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
 _MUTATION_STATES = frozenset(state for state, _action in MUTATION_COMMAND_PLANS)
 _MUTATION_COMMAND_ACTIONS = frozenset(action for _state, action in MUTATION_COMMAND_PLANS)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
-_FROZEN_PRODUCT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
 
 
 class MutationCommandContractError(ValueError):
@@ -286,7 +294,7 @@ def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[st
             "target_identity requires non-empty canonical supported product source URLs",
         )
     if kind == "product_id":
-        if _FROZEN_PRODUCT_ID_RE.fullmatch(stable_value) is None:
+        if not is_stable_product_id(stable_value):
             raise MutationCommandContractError(
                 "MUTATION_TARGET_INVALID",
                 "target_identity product_id is not a structured product identifier",
@@ -341,6 +349,69 @@ def canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[str
     """Public strict validator used by every Browser Agent step carrying a frozen target."""
 
     return _canonical_frozen_target_identity(value, store_name=store_name)
+
+
+def build_frozen_product_target_identity(
+    *,
+    product_id: str,
+    store_name: str,
+    source_urls: list[str],
+) -> dict[str, Any]:
+    """Build the one canonical product-id target accepted by save commands."""
+
+    canonical_product_id = _required_text(
+        product_id,
+        reason_code="MUTATION_TARGET_INVALID",
+        field_name="product_id",
+    )
+    if not is_stable_product_id(canonical_product_id):
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "product_id is not a structured stable product identifier",
+        )
+    canonical_store_name = _required_text(
+        store_name,
+        reason_code="MUTATION_TARGET_INVALID",
+        field_name="store_name",
+    )
+    canonical_source_urls = _canonical_target_source_urls(source_urls)
+    if not canonical_source_urls:
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "frozen product target requires canonical source URLs",
+        )
+    candidate = {
+        "schema_version": "dxm_draft_box_target.v1",
+        "store_fingerprint": hashlib.sha256(
+            json.dumps(
+                {
+                    "source": "structured_store_cell",
+                    "store_name": canonical_store_name,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest().upper(),
+        "stable_identity": {
+            "kind": "product_id",
+            "value": canonical_product_id,
+            "fingerprint": hashlib.sha256(
+                f"product_id:{canonical_product_id}".encode("utf-8")
+            ).hexdigest().upper(),
+        },
+        "source_urls": canonical_source_urls,
+    }
+    canonical = _canonical_frozen_target_identity(
+        candidate,
+        store_name=canonical_store_name,
+    )
+    if canonical is None:  # pragma: no cover - candidate is always non-null
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "frozen product target could not be constructed",
+        )
+    return canonical
 
 
 def canonical_mutation_target_payload(
@@ -432,11 +503,14 @@ class BrowserAgentCommand:
     state: str
     action: str
     params: dict[str, Any]
+    execution_mode: str = ""
+    execution_payload_hash: str | None = None
     step_label: str | None = None
     mutation_scope_id: str | None = None
     target_hash: str | None = None
     authorization_fingerprint: str | None = None
     authorization_lease_id: str | None = None
+    authorization_lease_fingerprint: str | None = None
     stage_task_facts_fingerprint: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
@@ -453,17 +527,32 @@ class BrowserAgentCommand:
             "params": dict(self.params),
             "step_label": self.step_label,
         }
+        if self.execution_mode:
+            payload["execution_mode"] = self.execution_mode
         for key in (
             "mutation_scope_id",
             "target_hash",
             "authorization_fingerprint",
             "authorization_lease_id",
+            "authorization_lease_fingerprint",
             "stage_task_facts_fingerprint",
+            "execution_payload_hash",
         ):
             value = getattr(self, key)
             if value is not None:
                 payload[key] = value
         return payload
+
+
+def browser_agent_command_sha256(command: BrowserAgentCommand) -> str:
+    """Digest the exact serialized command that crosses the worker boundary."""
+
+    if not isinstance(command, BrowserAgentCommand):
+        raise MutationCommandContractError(
+            "MUTATION_COMMAND_INVALID",
+            "browser agent command is required",
+        )
+    return canonical_contract_sha256(command.to_payload())
 
 
 def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, int]:
@@ -477,7 +566,9 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         command.target_hash,
         command.authorization_fingerprint,
         command.authorization_lease_id,
+        command.authorization_lease_fingerprint,
         command.stage_task_facts_fingerprint,
+        command.execution_payload_hash,
     )
     if plan is None:
         if mutation_adjacent:
@@ -490,7 +581,117 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
                 "NON_MUTATION_SCOPE_FORBIDDEN",
                 "non-mutation commands cannot carry mutation scope fields",
             )
+        if pair == ("VERIFY_NOT_PUBLISHED", "verify_not_published") and (
+            str(command.execution_mode or "") == "batch_draft_save"
+        ):
+            try:
+                validate_save_verification_context(
+                    command.params.get("save_verification_context"),
+                    task_id=command.task_id,
+                    job_id=command.job_id,
+                    runtime_id=command.runtime_id,
+                    execution_mode=command.execution_mode,
+                    structural_only=True,
+                )
+            except BatchCommandContractError as exc:
+                raise MutationCommandContractError(
+                    exc.reason_code,
+                    "batch VERIFY_NOT_PUBLISHED is not bound to one exact SAVE",
+                ) from exc
         return {}
+
+    execution_mode = _required_text(
+        command.execution_mode,
+        reason_code="MUTATION_EXECUTION_MODE_REQUIRED",
+        field_name="execution_mode",
+    )
+    allowed_modes = {"single_save", "batch_save", "batch_draft_save"}
+    if execution_mode not in allowed_modes:
+        raise MutationCommandContractError(
+            "MUTATION_EXECUTION_MODE_INVALID",
+            "execution_mode is not allowed for this mutation command",
+        )
+
+    if execution_mode == "batch_draft_save":
+        try:
+            validate_batch_queue_guard_shape(command.params.get("batch_queue_guard"))
+        except BatchCommandContractError as exc:
+            raise MutationCommandContractError(
+                exc.reason_code,
+                "batch_draft_save requires one exact frozen queue guard",
+            ) from exc
+        execution_payload_hash = _required_sha256(
+            command.execution_payload_hash,
+            field_name="execution_payload_hash",
+        )
+        defaults = command.params.get("defaults")
+        execution_payload = (
+            defaults.get("_frozen_execution_payload")
+            if isinstance(defaults, dict)
+            else None
+        )
+        defaults_payload_hash = (
+            defaults.get("_frozen_execution_payload_hash")
+            if isinstance(defaults, dict)
+            else None
+        )
+        if not isinstance(execution_payload, dict):
+            raise MutationCommandContractError(
+                "MUTATION_EXECUTION_PAYLOAD_REQUIRED",
+                "batch_draft_save requires a frozen execution payload",
+            )
+        embedded_hash = _required_sha256(
+            execution_payload.get("payload_hash"),
+            field_name="embedded execution payload hash",
+        )
+        defaults_hash = _required_sha256(
+            defaults_payload_hash,
+            field_name="defaults execution payload hash",
+        )
+        try:
+            encoded = json.dumps(
+                {
+                    key: value
+                    for key, value in execution_payload.items()
+                    if key != "payload_hash"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise MutationCommandContractError(
+                "MUTATION_EXECUTION_PAYLOAD_INVALID",
+                "batch execution payload is not canonical JSON",
+            ) from exc
+        recomputed = hashlib.sha256(encoded).hexdigest()
+        if not (
+            hmac.compare_digest(execution_payload_hash.casefold(), embedded_hash.casefold())
+            and hmac.compare_digest(execution_payload_hash.casefold(), defaults_hash.casefold())
+            and hmac.compare_digest(execution_payload_hash.casefold(), recomputed.casefold())
+        ):
+            raise MutationCommandContractError(
+                "MUTATION_EXECUTION_PAYLOAD_MISMATCH",
+                "batch execution payload hashes do not match",
+            )
+        fields = execution_payload.get("fields")
+        if not isinstance(fields, list):
+            raise MutationCommandContractError(
+                "MUTATION_EXECUTION_PAYLOAD_INVALID",
+                "batch execution fields are missing",
+            )
+        for field in fields:
+            if (
+                not isinstance(field, dict)
+                or not isinstance(field.get("field_key"), str)
+                or "resolved_value" not in field
+                or defaults.get(field["field_key"]) != field["resolved_value"]
+            ):
+                raise MutationCommandContractError(
+                    "MUTATION_EXECUTION_PAYLOAD_MISMATCH",
+                    "batch defaults differ from the embedded execution fields",
+                )
 
     scope_id = _required_text(
         command.mutation_scope_id,
@@ -503,6 +704,11 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         reason_code="MUTATION_AUTHORIZATION_LEASE_REQUIRED",
         field_name="authorization_lease_id",
     )
+    if command.execution_mode == "batch_draft_save":
+        _required_sha256(
+            command.authorization_lease_fingerprint,
+            field_name="authorization_lease_fingerprint",
+        )
     _required_sha256(command.target_hash, field_name="target_hash")
     _required_sha256(command.authorization_fingerprint, field_name="authorization_fingerprint")
     _required_sha256(
@@ -555,10 +761,17 @@ def browser_agent_command_from_worker_request(
         state=str(request.get("state") or ""),
         action=str(request.get("action") or ""),
         params=dict(params),
+        execution_mode=str(
+            request.get("execution_mode") or request.get("mode") or ""
+        ),
+        execution_payload_hash=request.get("execution_payload_hash"),
         step_label=step_label if step_label is not None else request.get("step_label"),
         mutation_scope_id=request.get("mutation_scope_id"),
         target_hash=request.get("target_hash"),
         authorization_fingerprint=request.get("authorization_fingerprint"),
         authorization_lease_id=request.get("authorization_lease_id"),
+        authorization_lease_fingerprint=request.get(
+            "authorization_lease_fingerprint"
+        ),
         stage_task_facts_fingerprint=request.get("stage_task_facts_fingerprint"),
     )

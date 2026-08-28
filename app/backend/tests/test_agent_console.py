@@ -387,7 +387,8 @@ def test_agent_console_hud_extends_old_payload_with_chinese_defaults(tmp_path, m
     hud = status["hud"]
     assert hud["title"] == "正在只保存"
     assert hud["state"] == "SAVE_ONLY"
-    assert hud["phase"] == "第二段：商品箱编辑保存"
+    assert hud["phase"] == "商品箱编辑保存"
+    assert "第二段" not in hud["phase"]
     assert hud["severity"] == "running"
     assert hud["line1"] == "只点击保存，不发布"
     assert hud["human_title"] == "正在只保存"
@@ -1122,9 +1123,8 @@ def _create_task(repo: Repository):
         {
             "name": "agent console task",
             "store_id": store["id"],
-            "mode": "single_save",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "AI认领",
+            "mode": "probe",
+            "publish_scene": "READ_ONLY_PROBE",
             "product_ids": [product["id"]],
             "payload": {"store_name": "Dang Kang"},
         }

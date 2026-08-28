@@ -278,6 +278,7 @@ def _strict_save_result(*, target_identity: dict, store_name: str) -> dict:
         "mutation_request_count": 1,
         "save_request_count": 1,
         "other_mutation_request_count": 0,
+        "read_only_schema_request_count": 0,
         "publish_request_count": 0,
     }
     publish_signal = {

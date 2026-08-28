@@ -10,8 +10,12 @@ from src import main as main_module
 def test_app_lifespan_closes_visible_browser_sessions(monkeypatch):
     calls: list[str] = []
 
-    monkeypatch.setattr(main_module.login_flow, '_close_browser_session', lambda: calls.append('login-flow'))
     monkeypatch.setattr(main_module.agent_console_service, 'stop', lambda: calls.append('agent-console') or {'active': False})
+    monkeypatch.setattr(
+        main_module.browser_agent_runtime,
+        'shutdown',
+        lambda: calls.append('browser-runtime') or {'ok': True},
+    )
 
     async def run_lifespan_once():
         async with main_module.app_lifespan(main_module.app):
@@ -19,7 +23,7 @@ def test_app_lifespan_closes_visible_browser_sessions(monkeypatch):
 
     asyncio.run(run_lifespan_once())
 
-    assert calls == ['running', 'agent-console', 'login-flow']
+    assert calls == ['running', 'agent-console', 'browser-runtime']
 
 
 def test_app_lifespan_records_truth_when_browser_agent_shutdown_is_incomplete(monkeypatch):

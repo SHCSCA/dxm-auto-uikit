@@ -74,6 +74,59 @@ export type DxmReferenceTemplateSection = {
   source: 'new' | 'legacy' | 'fallback'
 }
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
+export type DxmDraftShop = {
+  id: string
+  name: string
+  platform: 'smt'
+  shop_type: string | null
+}
+export type DxmDraftShopsResponse = {
+  source: 'api'
+  session_bound: true
+  session_ref: string
+  shops: DxmDraftShop[]
+}
+export type DxmCategoryRecord = {
+  categoryId: string
+  nameZh?: string
+  nameEn?: string
+  nodePath?: string
+  nodePathId?: string
+  pcid?: string
+  isleaf?: boolean | number | string
+  level?: number | string
+}
+export type DxmDraftProduct = {
+  id: string
+  shop_id: string
+  subject: string
+  category_id: string | null
+  category_name?: string
+  dxm_state: 'draft'
+  thumbnail_url?: string
+  remark?: string
+  source_platform?: string
+  source_urls?: string[]
+}
+export type DxmDraftPageResponse = {
+  source: 'api'
+  session_bound: true
+  session_ref: string
+  filter: {
+    shop_id: string
+    dxm_state: 'draft'
+  }
+  pagination: {
+    page_no: number
+    page_size: number
+    total_pages: number
+    total_items: number
+    has_previous: boolean
+    has_next: boolean
+  }
+  items: DxmDraftProduct[]
+  deduplicated_count: number
+}
 export type EditBatchBundleSectionCode =
   | 'category'
   | 'sku'
@@ -88,6 +141,7 @@ export type EditBatchBundleCandidate = {
   template_name: string
   template_type: EditBatchBundleSectionCode
   binding_scope: string
+  source_digest: string
   ready: boolean
   missing_fields: string[]
 }
@@ -113,7 +167,260 @@ export type EditBatchBundleCreateRequest = {
   category_name: string | null
   section_templates: Record<EditBatchBundleSectionCode, {
     template_id: number
+    source_digest: string
   }>
+}
+export type DxmTemplateRef = {
+  model: 'dxm_template_ref'
+  id: number
+  ref_type:
+    | 'product'
+    | 'attribute'
+    | 'variation'
+    | 'freight'
+    | 'service'
+    | 'size'
+    | 'regional'
+    | 'module_property'
+    | 'module_template'
+    | 'module_package'
+  dxm_template_id: string
+  shop_id: string
+  category_id: string | null
+  observed_display_name: string
+  source_api: string
+  availability: 'available' | 'missing' | 'drifted'
+  source_digest: string
+  resolved_values_hash: string
+  resolved_field_count: number
+  synced_at: string
+}
+export type DxmTemplateRefSyncResult = {
+  source: 'api'
+  session_bound: true
+  session_ref: string
+  shop_id: string
+  sync_scope?: 'category' | 'shop'
+  category_ids: string[]
+  scope_contract?: 'single_category.v1' | 'single_target_category.v2'
+  category_schemas: Record<string, E2CategorySchema>
+  editor_models: Record<string, DxmEditorCategoryModel>
+  category_capabilities?: Record<string, DxmEditorCategoryCapabilities>
+  sync_status?: 'synced' | 'empty'
+  template_record_count?: number
+  template_ref_count?: number
+  category_schema_count?: number
+  editor_section_count?: number
+  editor_field_count?: number
+  editor_template_binding_count?: number
+  empty_reason?: string | null
+  elapsed_ms?: number
+  sync_correlation_id?: string
+  request_trace?: Array<{
+    label: string
+    path: string
+    status: number | null
+    outcome: 'ok' | 'failed'
+    elapsed_ms: number
+    data_kind?: string
+    item_count?: number
+    total_pages?: number
+    reason?: string
+  }>
+  refs: DxmTemplateRef[]
+}
+export type E2CategorySchemaProperty = {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object'
+  ui_label_zh?: string
+  ui_binding?: string
+  ui_control?: string
+  natural_language?: boolean
+  enum?: unknown[]
+  values?: Array<{
+    id: string | number
+    name?: string
+    names?: { zh?: string; en?: string }
+  }>
+  properties?: Record<string, E2CategorySchemaProperty>
+  required?: string[]
+  items?: E2CategorySchemaProperty
+  [key: string]: unknown
+}
+export type E2CategorySchema = {
+  type: 'object'
+  properties: Record<string, E2CategorySchemaProperty>
+  required: string[]
+  dependentRequired?: Record<string, string[]>
+  allOf?: Array<Record<string, unknown>>
+  price_policy?: {
+    sku_cargo_not_above_sale: true
+    sku_prices_within_range: true
+  }
+}
+export type DxmEditorSectionTemplate = {
+  ref_id: number
+  ref_type: DxmTemplateRef['ref_type']
+  dxm_template_id: string
+  display_name: string
+  category_id: string | null
+  source_digest: string
+  resolved_field_keys: string[]
+  resolved_values: Record<string, unknown>
+  resolved_field_count?: number
+  unmapped_field_keys?: string[]
+  coverage_state?: 'none' | 'partial' | 'complete' | string
+  module_types?: string[]
+}
+export type DxmEditorSection = {
+  code: string
+  label: string
+  anchor?: string
+  help: string
+  order: number
+  field_keys: string[]
+  templates: DxmEditorSectionTemplate[]
+  source_apis: string[]
+  option_sources?: Array<{
+    field_key: string
+    label: string
+    source_api: string
+    option_count: number
+  }>
+  widgets?: Array<{
+    kind: 'description_editor' | 'marketing_image_generator'
+    label: string
+    workflow: string[]
+  }>
+  data_sources?: Array<{
+    label?: string
+    path?: string
+    status?: number | null
+    outcome?: 'ok' | 'failed'
+    elapsed_ms?: number
+    reason?: string
+  }>
+}
+export type DxmEditorCategoryModel = {
+  schema: 'dxm_editor_form.v2' | 'dxm_editor_form.v3' | 'dxm_editor_form.v4'
+  category_id: string
+  sections: DxmEditorSection[]
+  representative_product_id?: string | null
+  current_values?: Record<string, unknown>
+  value_scope?: 'store_category_plan'
+}
+export type DxmEditorCategoryCapabilities = {
+  logistics_attribute_options?: Array<Record<string, unknown>>
+  support_new_size_attribute?: boolean
+  commission_rate?: number
+  pop_choice_shop?: Record<string, unknown> | null
+  semi_managed_supported?: boolean
+  semi_managed_status?: 'supported' | 'unsupported' | 'unknown' | string
+  semi_managed_source_api?: string
+  semi_managed_country_options?: Array<Record<string, unknown>>
+  source_apis?: string[]
+  [key: string]: unknown
+}
+export type LocalPlanFieldMappingEntry = {
+  ui_label_zh: string
+  field_key: string
+  category_schema_path: string
+  ui_binding: string
+}
+export type LocalPlanTemplate = {
+  model: 'local_plan_template'
+  configuration_contract?: 'local_plan_template.v3'
+  status?: 'draft' | 'ready'
+  id: number
+  lineage_id: number
+  supersedes_id: number | null
+  name: string
+  version: string
+  shop_id: string
+  category_ids: string[]
+  path: 'A' | 'B'
+  scope_contract?: 'single_category.v1' | 'single_target_category.v2'
+  fixed_values: Record<string, unknown>
+  fill_rules: Record<string, Record<string, { value: unknown }>>
+  dxm_template_refs: Array<{ ref_id: number; source_digest: string }>
+  field_mappings: Record<string, {
+    mapping_version: string
+    entries: LocalPlanFieldMappingEntry[]
+  }>
+  source_policies?: Record<string, Record<string, 'auto' | 'current' | 'template'>>
+  semi_managed?: {
+    enabled: boolean
+    capability_snapshot?: Record<string, unknown>
+    countries: Array<string | number>
+    goods_config: Record<string, unknown>
+    variant_config: Record<string, unknown>
+    source_snapshot?: Record<string, unknown>
+  }
+  source_snapshots?: Record<string, unknown>
+  editor_actions?: Record<string, {
+    description?: {
+      editor: 'new'
+      generate_mobile_from_pc: true
+      confirm_before_save: true
+    }
+    marketing_images?: {
+      generate_from_product_images: true
+      required_slots: ['1:1_white_background', '3:4_scene']
+    }
+  }>
+  validation_policy: {
+    required_fields: 'fail_closed'
+    natural_language: 'english_before_save'
+  }
+  exception_policy: { unknown: 'stop_batch' }
+  provenance: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+export type PlanSnapshot = {
+  id?: number
+  task_id?: number
+  schema: 'dxm_batch_draft_save_plan.v1'
+  mode: 'batch_draft_save'
+  path: 'A'
+  shop_scope: string
+  product_ids: string[]
+  local_plan_template: { id: number; version: string }
+  dxm_template_refs: Array<Record<string, unknown>>
+  fixed_values: Record<string, unknown>
+  fill_rules: Record<string, unknown>
+  session_context: {
+    session_ref: string
+    account_ref_hash: string
+    shop_id: string
+  }
+  approval_context: {
+    state: 'not_granted'
+    runner_released: false
+    publish_allowed: false
+  }
+  item_snapshots: Array<{
+    product_id: string
+    shop_id: string
+    categoryId: string
+    category_schema: { normalized_schema: Record<string, unknown>; schema_hash: string }
+    field_mapping: {
+      mapping_version: string
+      mapping_hash: string
+      entries: LocalPlanFieldMappingEntry[]
+    }
+    required_fields: Array<Record<string, unknown>>
+    resolution_result: {
+      resolved_fields: Array<Record<string, unknown>>
+      unresolved_fields: string[]
+      resolution_hash: string
+    }
+  }>
+  evidence_policy: 'three_proofs'
+  failure_policy: { unknown: 'stop_batch' }
+  publish_allowed: false
+  snapshot_hash: string
+  created_at?: string
 }
 export type DraftBoxScopeSnapshotCreateRequest = {
   max_items: number
@@ -301,7 +608,39 @@ export type Product = {
   store_name?: string | null
 }
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
-export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
+export type TaskWorkerControl = {
+  schemaVersion?: string | null
+  request?: 'pause' | 'stop' | null
+  requestedAt?: string | null
+  ackedAt?: string | null
+  ack?: 'paused' | 'stopped' | null
+  reasonCode?: string | null
+  detail?: string | null
+  pending?: boolean
+}
+
+export type Task = {
+  id: number
+  name: string
+  status: string
+  mode: string
+  publish_scene: string
+  store_id?: number | null
+  total_jobs: number
+  completed_jobs: number
+  failed_jobs: number
+  payload: {
+    product_ids?: number[]
+    store_name?: string
+    category_name?: string
+    image?: { eu_outer_package_filename?: string }
+    worker_control?: TaskWorkerControl | Record<string, unknown>
+    [key: string]: unknown
+  }
+  jobs?: TaskJob[]
+  /** E4 HVD projection from GET /api/tasks/{id} */
+  workerControl?: TaskWorkerControl | null
+}
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
@@ -341,7 +680,18 @@ export type RuntimeStatus = {
     message?: string | null
     nextAction?: string | null
   }
-  dxmLogin: { status: string; currentUrl?: string | null; pageTitle?: string | null; browserVisible?: boolean; lastError?: string | null; message?: string | null; nextAction?: string | null }
+  dxmLogin: {
+    status: string
+    reasonCode?: string | null
+    loggedIn?: boolean
+    readerReady?: boolean
+    currentUrl?: string | null
+    pageTitle?: string | null
+    browserVisible?: boolean
+    lastError?: string | null
+    message?: string | null
+    nextAction?: string | null
+  }
   l2ReadonlyProbe?: {
     running: boolean
     stale?: boolean
@@ -667,8 +1017,10 @@ export type FinalDeliveryCheckSummary = {
 export type WorkbenchSection =
   | 'home'
   | 'dxm_access'
+  | 'draft_selection'
   | 'draft_edit_save'
   | 'template_center'
+  | 'dxm_templates'
   | 'start_save'
   | 'results'
   | 'issues'
@@ -831,4 +1183,156 @@ export type DeliveryWorkspace = {
     blockedByL2?: boolean
     l2Status?: string | null
   }
+}
+
+// ============================================================
+// DXM Path B Plan Types (Phase 1+2)
+// ============================================================
+
+/**
+ * The 11 real DXM operational sections for Path B plan editing
+ */
+export type PathBPlanSectionCode =
+  | 'product_info'
+  | 'basic_info'
+  | 'sale_info'
+  | 'media_assets'
+  | 'additional_info'
+  | 'compliance'
+  | 'logistics'
+  | 'wholesale'
+  | 'semi_countries'
+  | 'semi_goods'
+  | 'semi_variants'
+
+/**
+ * The 5 mandatory capabilities that cannot be disabled
+ */
+export type MandatoryCapabilityCode = 'video' | 'translation' | 'wholesale' | 'semiManaged' | 'rollbackPreparation'
+
+/**
+ * Field detail for per-section field panel
+ */
+export type PlanFieldDetail = {
+  field_key: string
+  ui_label_zh: string
+  source: 'fixed' | 'fill' | 'dxm_template_ref' | 'current_value'
+  target_value: unknown
+  binding: string | null
+  required: boolean
+  condition: string | null
+  risk: 'low' | 'medium' | 'high'
+  has_gap: boolean
+  current_value?: unknown
+}
+
+/**
+ * Execution constraints for snapshot
+ */
+export type ExecutionConstraints = {
+  schema_drift_policy: 'block' | 'warn' | 'allow'
+  catalog_drift_policy: 'block' | 'warn' | 'allow'
+  max_age_hours: number
+}
+
+/**
+ * Ordered item in the plan
+ */
+export type PlanOrderedItem = {
+  ordinal: number
+  product_id: string
+  category: string
+  product_title: string
+  target_leaf: string
+}
+
+/**
+ * Snapshot preview data structure
+ */
+export type PlanSnapshotPreview = {
+  plan_content_sha256: string
+  snapshot_instance_id: string
+  execution_constraints: ExecutionConstraints
+  ordered_items: PlanOrderedItem[]
+  mandatory_capabilities: Record<MandatoryCapabilityCode, boolean>
+  rollback_plan: string
+  evidence_policy: 'two_stage_three_proofs'
+}
+
+/**
+ * Snapshot drift warnings that block freeze
+ */
+export type SnapshotDriftWarning = {
+  code: 'plan_expired' | 'category_drift' | 'schema_drift' | 'catalog_drift' | 'draft_missing'
+  label: string
+  detail: string
+  blocking: boolean
+}
+
+/**
+ * Plan config for backend submission (always enables 5 mandatory capabilities)
+ */
+export type PathBPlanConfig = {
+  shop_id: string
+  category_ids: string[]
+  section_configs: Record<PathBPlanSectionCode, {
+    enabled: boolean
+    fields: PlanFieldDetail[]
+  }>
+  mandatory_capabilities: Record<MandatoryCapabilityCode, {
+    enabled: boolean
+    config: Record<string, unknown>
+  }>
+}
+
+/**
+ * Task resolving state for HVD
+ */
+export type TaskResolvingState = {
+  resolving: boolean
+  current_operation: string
+  waiting_for: string
+}
+
+// ============================================================
+// Results Page Types (Phase 3)
+// ============================================================
+
+/**
+ * Per-item capability status for results page
+ */
+export type ItemCapabilityStatus = {
+  video: 'pending' | 'resolving' | 'success' | 'failed' | 'unknown'
+  translation: 'pending' | 'resolving' | 'success' | 'failed' | 'unknown'
+  wholesale: 'pending' | 'resolving' | 'success' | 'failed' | 'unknown'
+  semiManaged: 'pending' | 'resolving' | 'success' | 'failed' | 'unknown'
+  rollbackPreparation: 'pending' | 'resolving' | 'success' | 'failed' | 'unknown'
+}
+
+/**
+ * Two-stage save status
+ */
+export type TwoStageSaveStatus = {
+  stage: 'main_edit' | 'semi_managed'
+  save_status: 'pending' | 'succeeded' | 'failed' | 'unknown'
+  three_proof_status: {
+    screenshot: boolean
+    network: boolean
+    unpublished: boolean
+  }
+}
+
+/**
+ * Per-item result breakdown
+ */
+export type ItemResultBreakdown = {
+  ordinal: number
+  product_id: string
+  product_title: string
+  capability_status: ItemCapabilityStatus
+  main_edit_save: TwoStageSaveStatus
+  semi_managed_save: TwoStageSaveStatus
+  status: 'pending' | 'resolving' | 'succeeded' | 'failed' | 'unknown' | 'manual_review_required'
+  current_operation?: string
+  manual_review_required: boolean
 }

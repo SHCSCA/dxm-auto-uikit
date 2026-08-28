@@ -338,7 +338,7 @@ print(json.dumps({
     assert payload["screenshotsExist"] is False
     assert payload["evidencesExist"] is False
     assert payload["modules"] == {
-        "src.db": False,
+        "src.db": True,
         "src.repository": False,
         "src.execution.browser_agent_worker": False,
         "src.execution.dxm_login_flow": False,
@@ -670,7 +670,11 @@ print(json.dumps({
     assert payload["sqliteExists"] is False
     assert payload["screenshotsExist"] is False
     assert payload["evidencesExist"] is False
-    assert all(loaded is False for loaded in payload["modules"].values())
+    # src.db is imported at line 44 of main.py, before bootstrap is called;
+    # all other modules must not be loaded.
+    loaded_modules = payload["modules"]
+    assert loaded_modules["src.db"] is True
+    assert all(v is False for k, v in loaded_modules.items() if k != "src.db")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows desktop Job bootstrap sentinel")
@@ -741,7 +745,11 @@ print(json.dumps({
     assert payload["sqliteExists"] is False
     assert payload["screenshotsExists"] is False
     assert payload["evidencesExists"] is False
-    assert all(loaded is False for loaded in payload["modules"].values())
+    # src.db is imported at line 44 of main.py, before bootstrap is called;
+    # all other modules must not be loaded.
+    loaded_modules = payload["modules"]
+    assert loaded_modules["src.db"] is True
+    assert all(v is False for k, v in loaded_modules.items() if k != "src.db")
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,16 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from src.execution.batch_command_contract import (
+    BatchCommandContractError,
+    validate_frozen_execution_readback as validate_expected_frozen_execution_readback,
+    validate_save_verification_context,
+)
+from src.execution.browser_agent_protocol import (
+    MutationCommandContractError,
+    mutation_target_hash,
+)
+
 
 ACTION_RESULT_SCHEMA_VERSION = "dxm.action-result.v1"
 
@@ -32,6 +42,19 @@ _EVIDENCE_KEYS = frozenset({"observations", "refs"})
 _EVIDENCE_REF_KEYS = frozenset({"path", "sha256", "size", "kind", "captured_at"})
 _PAGE_IDENTITY_KEYS = frozenset({"kind", "url", "runtime_id", "browser_session_id"})
 _RECOVERABILITY_KEYS = frozenset({"kind", "retryable", "requires_page_reverify", "reason"})
+_CATEGORY_SCHEMA_READBACK_KEYS = frozenset(
+    {
+        "schema",
+        "ok",
+        "phase",
+        "expected_category_id",
+        "observed_category_id",
+        "expected_category_schema_hash",
+        "observed_category_schema_hash",
+        "category_source",
+        "reason",
+    }
+)
 _FAILURE_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 _SHA256_PATTERN = re.compile(r"^[0-9A-Fa-f]{64}$")
 _RECOVERABILITY_KINDS = frozenset(
@@ -70,12 +93,29 @@ class ActionResultContractError(ValueError):
 class ActionResultContract:
     expected_page: str
     required_postconditions: frozenset[str]
+    allowed_pages: frozenset[str]
+    page_by_execution_mode: Mapping[str, str]
+
+    def page_for_execution_mode(self, execution_mode: str) -> str | None:
+        if not self.page_by_execution_mode:
+            return self.expected_page
+        return self.page_by_execution_mode.get(str(execution_mode or "").strip())
 
 
-def _contract(expected_page: str, *required_postconditions: str) -> ActionResultContract:
+def _contract(
+    expected_page: str,
+    *required_postconditions: str,
+    additional_pages: frozenset[str] = frozenset(),
+    page_by_execution_mode: Mapping[str, str] | None = None,
+) -> ActionResultContract:
+    mode_pages = dict(page_by_execution_mode or {})
     return ActionResultContract(
         expected_page=expected_page,
         required_postconditions=frozenset(required_postconditions),
+        allowed_pages=frozenset(
+            {expected_page, *additional_pages, *mode_pages.values()}
+        ),
+        page_by_execution_mode=MappingProxyType(mode_pages),
     )
 
 
@@ -227,6 +267,10 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                     "page_save_success",
                     "published_false",
                     "publish_action_not_clicked",
+                    page_by_execution_mode={
+                        "single_save": "semi_managed",
+                        "batch_draft_save": "editor",
+                    },
                 )
             }
         ),
@@ -239,6 +283,10 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                     "unpublished_verified",
                     "publish_status_absent_or_false",
                     "save_evidence_not_reused",
+                    page_by_execution_mode={
+                        "single_save": "semi_managed",
+                        "batch_draft_save": "editor",
+                    },
                 )
             }
         ),
@@ -291,7 +339,7 @@ def _validate_failure_recoverability(
     recoverability: dict[str, Any],
     *,
     state: str,
-    contract: ActionResultContract,
+    expected_page: str,
     page_identity: dict[str, Any],
 ) -> None:
     kind = recoverability["kind"]
@@ -308,8 +356,8 @@ def _validate_failure_recoverability(
     if kind == "retry_same_page":
         for field in _PAGE_IDENTITY_KEYS:
             _non_empty_string(page_identity[field], f"page_identity.{field}")
-        if page_identity["kind"] != contract.expected_page or not _page_url_matches_identity(
-            page_identity["url"], contract.expected_page
+        if page_identity["kind"] != expected_page or not _page_url_matches_identity(
+            page_identity["url"], expected_page
         ):
             _reject("retry_same_page requires the controlled DXM page identity")
 
@@ -327,24 +375,44 @@ def _validate_optional_page_identity(page_identity: dict[str, Any]) -> None:
 
 def _validate_page_url(value: Any) -> str:
     url = _non_empty_string(value, "page_identity.url")
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        _reject("page_identity.url must be an absolute HTTP URL")
+    if controlled_dxm_page_identity(url) is None:
+        _reject(
+            "page_identity.url must be an absolute HTTP URL for the controlled DXM page "
+            "using HTTPS on www.dianxiaomi.com with the default port"
+        )
     return url
 
 
-def _page_url_matches_identity(value: Any, expected_page: str) -> bool:
+def controlled_dxm_page_identity(value: Any) -> str | None:
+    """Return the exact controlled page kind for the production DXM origin."""
+
     try:
         parsed = urlsplit(str(value or "").strip())
-    except ValueError:
-        return False
-    hostname = str(parsed.hostname or "").casefold()
-    if hostname != "dianxiaomi.com" and not hostname.endswith(".dianxiaomi.com"):
-        return False
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if (
+        parsed.scheme.casefold() != "https"
+        or str(parsed.hostname or "").casefold() != "www.dianxiaomi.com"
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
     path = str(parsed.path or "").rstrip("/").casefold()
+    if path.startswith("/web/") and "/login" not in path:
+        for page_kind, controlled_path in _CONTROLLED_PAGE_PATHS.items():
+            if path == controlled_path:
+                return page_kind
+        return "authenticated_dxm"
+    return None
+
+
+def _page_url_matches_identity(value: Any, expected_page: str) -> bool:
+    observed = controlled_dxm_page_identity(value)
     if expected_page == "authenticated_dxm":
-        return path.startswith("/web/") and "/login" not in path
-    return path == _CONTROLLED_PAGE_PATHS.get(expected_page)
+        return observed is not None
+    return observed == expected_page
 
 
 def _parse_captured_at(value: Any, field: str) -> datetime:
@@ -437,6 +505,50 @@ def _validate_integrity_snapshot(value: Any, field: str) -> dict[str, Any]:
     return snapshot
 
 
+def _validate_batch_category_schema_readback(
+    value: Any,
+    *,
+    expected_execution_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    field = "save_result.pre_dispatch_readback.category_schema_readback"
+    readback = _exact_mapping(value, _CATEGORY_SCHEMA_READBACK_KEYS, field)
+    if (
+        readback.get("schema") != "dxm.editor.category_schema_readback.v1"
+        or readback.get("ok") is not True
+        or readback.get("phase") != "before_ledger_begin_dispatch"
+        or readback.get("reason") is not None
+    ):
+        _reject("SAVE success requires an exact current category_schema_readback")
+    expected_category_id = _non_empty_string(
+        expected_execution_payload.get("category_id"),
+        "expected_execution_payload.category_id",
+    )
+    if any(
+        readback.get(key) != expected_category_id
+        for key in ("expected_category_id", "observed_category_id")
+    ):
+        _reject(
+            "SAVE category_schema_readback must match the frozen execution payload"
+        )
+    expected_schema_hash = _required_sha256(
+        expected_execution_payload.get("category_schema_hash"),
+        "expected_execution_payload.category_schema_hash",
+    )
+    if any(
+        _required_sha256(readback.get(key), f"{field}.{key}")
+        != expected_schema_hash
+        for key in (
+            "expected_category_schema_hash",
+            "observed_category_schema_hash",
+        )
+    ):
+        _reject(
+            "SAVE category_schema_readback must match the frozen execution payload"
+        )
+    _non_empty_string(readback.get("category_source"), f"{field}.category_source")
+    return readback
+
+
 def _validate_save_network_receipt(value: Any, field: str) -> dict[str, Any]:
     receipt = _required_mapping(value, field)
     if receipt.get("ok") is not True or receipt.get("receipt_complete") is not True:
@@ -470,7 +582,12 @@ def _validate_save_network_receipt(value: Any, field: str) -> dict[str, Any]:
     return receipt
 
 
-def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
+def _validate_save_success_semantics(
+    envelope: Mapping[str, Any],
+    *,
+    execution_mode: str | None = None,
+    expected_execution_payload: Mapping[str, Any] | None = None,
+) -> None:
     before = dict(envelope["before_values"])
     after = dict(envelope["after_values"])
     observations = dict(envelope["evidence"]["observations"])
@@ -563,6 +680,20 @@ def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
     for key in ("kind", "field_count", "nonempty_field_count", "sha256"):
         if baseline.get(key) != current.get(key):
             _reject("SAVE form state changed after required-field readback")
+    if execution_mode == "batch_draft_save":
+        if not isinstance(expected_execution_payload, Mapping):
+            _reject("batch SAVE requires the exact frozen execution payload")
+        _validate_batch_category_schema_readback(
+            pre_dispatch.get("category_schema_readback"),
+            expected_execution_payload=expected_execution_payload,
+        )
+        try:
+            validate_expected_frozen_execution_readback(
+                pre_dispatch.get("frozen_execution_readback"),
+                expected_payload=expected_execution_payload,
+            )
+        except BatchCommandContractError as exc:
+            _reject(f"{exc.reason_code}: {exc}")
 
     network = _validate_save_network_receipt(
         save.get("network_save_result"), "save_result.network_save_result"
@@ -582,10 +713,17 @@ def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
         or audit.get("save_request_count") != 1
         or type(audit.get("other_mutation_request_count")) is not int
         or audit.get("other_mutation_request_count") != 0
+        or type(audit.get("read_only_schema_request_count")) is not int
+        or audit.get("read_only_schema_request_count") < 0
         or type(audit.get("publish_request_count")) is not int
         or audit.get("publish_request_count") != 0
     ):
         _reject("SAVE success requires one exact SAVE request and a closed zero-publish audit")
+    if (
+        execution_mode == "batch_draft_save"
+        and audit.get("read_only_schema_request_count") < 1
+    ):
+        _reject("batch SAVE success requires at least one live read-only Schema request")
     publish_signal = _required_mapping(
         save.get("publish_signal"), "save_result.publish_signal"
     )
@@ -649,7 +787,47 @@ def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
         _reject("SAVE after_values.published must be false")
 
 
-def _validate_unpublished_success_semantics(envelope: Mapping[str, Any]) -> None:
+def _validate_expected_save_target_binding(
+    envelope: Mapping[str, Any],
+    *,
+    expected_target_identity: Mapping[str, Any],
+    expected_store_name: str,
+    expected_target_hash: str,
+) -> None:
+    """Bind canonical SAVE evidence to the exact frozen command target."""
+
+    target = _required_mapping(
+        expected_target_identity,
+        "expected_target_identity",
+    )
+    store_name = _non_empty_string(expected_store_name, "expected_store_name")
+    target_hash = _required_sha256(expected_target_hash, "expected_target_hash")
+    before = dict(envelope["before_values"])
+    if (
+        before.get("target_identity") != target
+        or before.get("store_name") != store_name
+    ):
+        _reject("SAVE result target identity/store differs from the frozen command")
+    try:
+        reproduced_target_hash = mutation_target_hash(
+            "save_only",
+            {
+                "store_name": store_name,
+                "target_identity": target,
+                "target_source_urls": target.get("source_urls"),
+            },
+        )
+    except MutationCommandContractError:
+        _reject("SAVE frozen command target is invalid")
+    if reproduced_target_hash.casefold() != target_hash:
+        _reject("SAVE result target hash differs from the frozen command")
+
+
+def _validate_unpublished_success_semantics(
+    envelope: Mapping[str, Any],
+    *,
+    expected_page: str,
+) -> None:
     after = dict(envelope["after_values"])
     observations = dict(envelope["evidence"]["observations"])
     proof = _required_mapping(
@@ -679,8 +857,8 @@ def _validate_unpublished_success_semantics(envelope: Mapping[str, Any]) -> None
     _required_sha256(
         proof.get("target_identity_sha256"), "fresh_probe.target_identity_sha256"
     )
-    if not _page_url_matches_identity(proof.get("page_url"), "semi_managed"):
-        _reject("VERIFY_NOT_PUBLISHED proof must come from the controlled semi-managed page")
+    if not _page_url_matches_identity(proof.get("page_url"), expected_page):
+        _reject("VERIFY_NOT_PUBLISHED proof must come from the commanded controlled page")
     identity = _required_mapping(proof.get("identity_readback"), "fresh_probe.identity_readback")
     if any(
         identity.get(key) is not True
@@ -723,12 +901,24 @@ def _validate_unpublished_success_semantics(envelope: Mapping[str, Any]) -> None
 
 
 def _validate_success_evidence_semantics(
-    envelope: Mapping[str, Any], *, state: str
+    envelope: Mapping[str, Any],
+    *,
+    state: str,
+    expected_page: str,
+    execution_mode: str | None = None,
+    expected_execution_payload: Mapping[str, Any] | None = None,
 ) -> None:
     if state == "SAVE_ONLY":
-        _validate_save_success_semantics(envelope)
+        _validate_save_success_semantics(
+            envelope,
+            execution_mode=execution_mode,
+            expected_execution_payload=expected_execution_payload,
+        )
     elif state == "VERIFY_NOT_PUBLISHED":
-        _validate_unpublished_success_semantics(envelope)
+        _validate_unpublished_success_semantics(
+            envelope,
+            expected_page=expected_page,
+        )
 
 
 def validate_action_result_envelope(
@@ -736,8 +926,14 @@ def validate_action_result_envelope(
     *,
     expected_state: str | None = None,
     expected_action: str | None = None,
+    expected_page: str | None = None,
+    execution_mode: str | None = None,
     expected_runtime_id: str | None = None,
     expected_browser_session_id: str | None = None,
+    expected_execution_payload: Mapping[str, Any] | None = None,
+    expected_target_identity: Mapping[str, Any] | None = None,
+    expected_store_name: str | None = None,
+    expected_target_hash: str | None = None,
 ) -> dict[str, Any]:
     """Validate and clone a producer action result without inferring missing facts."""
 
@@ -758,6 +954,18 @@ def validate_action_result_envelope(
     contract = state_contracts.get(state) if state_contracts is not None else None
     if contract is None:
         _reject(f"unsupported state/action pair: {state}/{action}")
+    mode_page = (
+        contract.page_for_execution_mode(execution_mode)
+        if execution_mode is not None
+        else None
+    )
+    if execution_mode is not None and mode_page is None:
+        _reject("execution_mode is not allowed for the state/action contract")
+    if expected_page is not None and mode_page is not None and expected_page != mode_page:
+        _reject("expected_page conflicts with the execution_mode page contract")
+    commanded_page = mode_page or expected_page or contract.expected_page
+    if commanded_page not in contract.allowed_pages:
+        _reject("expected_page is not allowed for the state/action contract")
 
     for field in ("before_values", "after_values", "postconditions"):
         if not isinstance(envelope[field], Mapping):
@@ -805,7 +1013,7 @@ def validate_action_result_envelope(
         _validate_failure_recoverability(
             recoverability,
             state=state,
-            contract=contract,
+            expected_page=commanded_page,
             page_identity=page_identity,
         )
         _validate_optional_page_identity(page_identity)
@@ -822,10 +1030,10 @@ def validate_action_result_envelope(
     if any(condition_value is not True for condition_value in postconditions.values()):
         _reject("successful action postconditions must all be true")
 
-    if _non_empty_string(page_identity["kind"], "page_identity.kind") != contract.expected_page:
+    if _non_empty_string(page_identity["kind"], "page_identity.kind") != commanded_page:
         _reject("page_identity.kind does not match the action contract")
     _validate_page_url(page_identity["url"])
-    if not _page_url_matches_identity(page_identity["url"], contract.expected_page):
+    if not _page_url_matches_identity(page_identity["url"], commanded_page):
         _reject("page_identity must identify the controlled DXM page")
     _non_empty_string(page_identity["runtime_id"], "page_identity.runtime_id")
     _non_empty_string(
@@ -841,7 +1049,34 @@ def validate_action_result_envelope(
     }:
         _reject("successful actions require recoverability kind=none")
 
-    _validate_success_evidence_semantics(envelope, state=state)
+    _validate_success_evidence_semantics(
+        envelope,
+        state=state,
+        expected_page=commanded_page,
+        execution_mode=execution_mode,
+        expected_execution_payload=expected_execution_payload,
+    )
+
+    expected_target_values = (
+        expected_target_identity,
+        expected_store_name,
+        expected_target_hash,
+    )
+    if any(value is not None for value in expected_target_values):
+        if not (
+            isinstance(expected_target_identity, Mapping)
+            and isinstance(expected_store_name, str)
+            and isinstance(expected_target_hash, str)
+        ):
+            _reject("SAVE expected target binding must be complete")
+        if state != "SAVE_ONLY" or action != "save_only":
+            _reject("expected SAVE target binding is invalid for this action")
+        _validate_expected_save_target_binding(
+            envelope,
+            expected_target_identity=expected_target_identity,
+            expected_store_name=expected_store_name,
+            expected_target_hash=expected_target_hash,
+        )
 
     return _json_clone(envelope)
 
@@ -849,6 +1084,12 @@ def validate_action_result_envelope(
 def validate_independent_save_verification_pair(
     save_value: Mapping[str, Any],
     verification_value: Mapping[str, Any],
+    *,
+    expected_page: str | None = None,
+    execution_mode: str | None = None,
+    expected_execution_payload: Mapping[str, Any] | None = None,
+    expected_verification_context: Mapping[str, Any] | None = None,
+    expected_save_command: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Validate that unpublished proof is target-bound and captured after SAVE."""
 
@@ -856,11 +1097,16 @@ def validate_independent_save_verification_pair(
         save_value,
         expected_state="SAVE_ONLY",
         expected_action="save_only",
+        expected_page=expected_page,
+        execution_mode=execution_mode,
+        expected_execution_payload=expected_execution_payload,
     )
     verification = validate_action_result_envelope(
         verification_value,
         expected_state="VERIFY_NOT_PUBLISHED",
         expected_action="verify_not_published",
+        expected_page=expected_page,
+        execution_mode=execution_mode,
     )
 
     save_target = save["before_values"].get("target_identity")
@@ -897,6 +1143,38 @@ def validate_independent_save_verification_pair(
     )
     if save_target_digest != verification_target_digest:
         _reject("SAVE and VERIFY_NOT_PUBLISHED target identity digests must match")
+
+    if execution_mode == "batch_draft_save":
+        if not isinstance(expected_verification_context, Mapping):
+            _reject(
+                "batch VERIFY_NOT_PUBLISHED requires the exact preceding SAVE context"
+            )
+        try:
+            verified_context = validate_save_verification_context(
+                expected_verification_context,
+                save_command=expected_save_command,
+                save_action_result=save,
+                structural_only=True,
+            )
+        except BatchCommandContractError as exc:
+            _reject(f"{exc.reason_code}: {exc}")
+        reported_before_context = verification["before_values"].get(
+            "save_verification_context"
+        )
+        reported_probe_context = verification_probe.get(
+            "save_verification_context"
+        )
+        if (
+            reported_before_context != verified_context
+            or reported_probe_context != verified_context
+            or verified_context["browser_session_id"]
+            != save["page_identity"]["browser_session_id"]
+            or verified_context["browser_session_id"]
+            != verification["page_identity"]["browser_session_id"]
+        ):
+            _reject(
+                "VERIFY_NOT_PUBLISHED is not bound to the exact preceding SAVE context"
+            )
 
     save_refs = save["evidence"]["refs"]
     verification_refs = verification["evidence"]["refs"]

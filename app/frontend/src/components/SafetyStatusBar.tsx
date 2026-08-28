@@ -210,7 +210,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
         </div>
       </div>
       <div className="safety-bar__meta" aria-label="当前操作">
-        <button className="button button--secondary safety-bar__primary-action" type="button" onClick={handlePrimaryAction} disabled={busy}>
+        <button className="button button--secondary safety-bar__primary-action" type="button" onClick={handlePrimaryAction}>
           {primaryActionLabel}
         </button>
       </div>

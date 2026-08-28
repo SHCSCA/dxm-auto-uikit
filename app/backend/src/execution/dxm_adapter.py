@@ -143,6 +143,26 @@ class DxmWorkflowAdapter:
         text = str(value or '').strip()
         return text or None
 
+    def refresh_account_context_hash(self) -> str:
+        refresher = getattr(self.login_flow, 'refresh_account_context_hash', None)
+        if not callable(refresher):
+            raise RuntimeError('AUTH_ACCOUNT_CONTEXT_UNAVAILABLE')
+        value = refresher()
+        text = str(value or '').strip().upper()
+        if len(text) != 64 or any(character not in '0123456789ABCDEF' for character in text):
+            raise RuntimeError('AUTH_ACCOUNT_CONTEXT_UNAVAILABLE')
+        return text
+
+    def current_account_context_hash(self) -> str | None:
+        getter = getattr(self.login_flow, 'current_account_context_hash', None)
+        if not callable(getter):
+            return None
+        value = getter()
+        text = str(value or '').strip().upper()
+        if len(text) != 64 or any(character not in '0123456789ABCDEF' for character in text):
+            return None
+        return text
+
     def current_mutation_identity(self) -> dict[str, Any] | None:
         getter = getattr(self.login_flow, 'current_mutation_identity', None)
         if not callable(getter):
@@ -186,17 +206,20 @@ class DxmWorkflowAdapter:
                 )
             except Exception as exc:
                 saved_state = self.login_flow.get_state()
-                if self._state_looks_logged_in(saved_state):
-                    return self._result(
-                        'check_login_state',
-                        {
-                            **saved_state,
-                            'stage': saved_state.get('stage') or 'login_success',
-                            'live_probe_error': str(exc),
-                        },
-                        before_values={'probe': 'saved_session_after_live_probe_error'},
-                    )
-                raise
+                return self._result(
+                    'check_login_state',
+                    {
+                        **saved_state,
+                        'ok': False,
+                        'stage': 'login_failed',
+                        'label': '登录态检测失败',
+                        'message': '无法从当前真实会话重新证明登录账号，已按失败关闭。',
+                        'next_action': '请重新打开真实登录页并完成登录，再次检测后读取草稿。',
+                        'requires_user_action': True,
+                        'live_probe_error': str(exc),
+                    },
+                    before_values={'probe': 'live_session_probe_failed_closed'},
+                )
         return self._result(
             'check_login_state',
             self.login_flow.get_state(),
@@ -214,6 +237,63 @@ class DxmWorkflowAdapter:
         """Return the flow's raw, read-only scope attestation unchanged."""
 
         return self.login_flow.capture_draft_box_scope(max_items=max_items)
+
+    def read_draft_shops(self) -> dict[str, Any]:
+        """Return the allowlisted shopMap read envelope unchanged."""
+
+        return self.login_flow.read_draft_shops()
+
+    def read_category_children(self, pcid: str = '') -> list[dict[str, Any]]:
+        return self.login_flow.read_category_children(pcid=pcid)
+
+    def search_categories(self, keyword: str) -> list[dict[str, Any]]:
+        return self.login_flow.search_categories(keyword=keyword)
+
+    def get_category_by_id(self, category_id: str) -> dict[str, Any] | None:
+        return self.login_flow.get_category_by_id(category_id=category_id)
+
+    def read_draft_page(
+        self,
+        *,
+        shop_id: str,
+        page_no: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        """Return one allowlisted draft-only page read envelope unchanged."""
+
+        return self.login_flow.read_draft_page(
+            shop_id=shop_id,
+            page_no=page_no,
+            page_size=page_size,
+        )
+
+    def read_e2_plan_scope(
+        self,
+        *,
+        shop_id: str,
+        category_ids: list[str],
+        representative_product_ids: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Return current-session E2 template/schema reads unchanged."""
+
+        return self.login_flow.read_e2_plan_scope(
+            shop_id=shop_id,
+            category_ids=category_ids,
+            representative_product_ids=representative_product_ids,
+        )
+
+    def read_e2_product_details(
+        self,
+        *,
+        shop_id: str,
+        product_ids: list[str],
+    ) -> dict[str, Any]:
+        """Return current-session edit-page reads unchanged."""
+
+        return self.login_flow.read_e2_product_details(
+            shop_id=shop_id,
+            product_ids=product_ids,
+        )
 
     def open_editor(
         self,
@@ -613,6 +693,8 @@ class DxmWorkflowAdapter:
                 and _strict_int(audit.get('mutation_request_count')) == 1
                 and _strict_int(audit.get('save_request_count')) == 1
                 and _strict_int(audit.get('other_mutation_request_count')) == 0
+                and _strict_int(audit.get('read_only_schema_request_count')) is not None
+                and _strict_int(audit.get('read_only_schema_request_count')) >= 0
                 and _strict_int(audit.get('publish_request_count')) == 0
                 and signal.get('detected') is False
                 and signal.get('kind') == 'network_route_classification'
@@ -1487,6 +1569,8 @@ class DxmWorkflowAdapter:
             and _strict_int(network_audit.get('mutation_request_count')) == 1
             and _strict_int(network_audit.get('save_request_count')) == 1
             and _strict_int(network_audit.get('other_mutation_request_count')) == 0
+            and _strict_int(network_audit.get('read_only_schema_request_count')) is not None
+            and _strict_int(network_audit.get('read_only_schema_request_count')) >= 0
             and _strict_int(network_audit.get('publish_request_count')) == 0
             and publish_signal.get('detected') is False
             and publish_signal.get('kind') == 'network_route_classification'

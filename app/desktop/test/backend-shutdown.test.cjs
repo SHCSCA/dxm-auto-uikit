@@ -1000,8 +1000,12 @@ test('real asynchronous log ENOENT forbids START and startup waits for exact chi
   })()
   const rejected = assert.rejects(startup, /ENOENT/)
 
-  for (let attempt = 0; attempt < 20 && child.killCount === 0; attempt += 1) {
-    await new Promise((resolve) => setImmediate(resolve))
+  // fs error delivery is I/O scheduled, not a promise microtask.  A sequence
+  // of setImmediate turns can finish before Windows reports ENOENT under a
+  // busy build, which made this safety assertion flaky despite the production
+  // gate being correct.  Wait on a short bounded clock instead.
+  for (let attempt = 0; attempt < 40 && child.killCount === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
   }
   assert.deepEqual(child.stdin.writes, [])
   assert.equal(child.stdin.endCount, 1)

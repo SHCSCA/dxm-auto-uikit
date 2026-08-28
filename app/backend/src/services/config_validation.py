@@ -15,6 +15,7 @@ class ExecutionMode(StrEnum):
     DRY_RUN = "dry_run"
     SINGLE_SAVE = "single_save"
     BATCH_SAVE = "batch_save"
+    BATCH_DRAFT_SAVE = "batch_draft_save"
 
 
 class ConfigValidationService:
@@ -129,6 +130,17 @@ class ConfigValidationService:
     ) -> list[str]:
         if mode == ExecutionMode.PROBE.value:
             return []
+        if mode == ExecutionMode.BATCH_DRAFT_SAVE.value:
+            missing: list[str] = []
+            if not self._has_store(task, payload):
+                missing.append("store")
+            plan = payload.get("plan_snapshot")
+            if not isinstance(plan, Mapping) or not str(plan.get("snapshot_hash") or "").strip():
+                missing.append("plan_snapshot")
+            product_ids = payload.get("product_ids")
+            if not isinstance(product_ids, list) or not product_ids:
+                missing.append("product_ids")
+            return missing
         if mode in (ExecutionMode.SINGLE_SAVE.value, ExecutionMode.BATCH_SAVE.value):
             present_templates = self._present_template_types(templates)
             missing = [name for name in self.SAVE_REQUIRED_TEMPLATES if name not in present_templates]

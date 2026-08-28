@@ -188,13 +188,14 @@ function resolveSelectedDataDir({ isIsolatedQa, isPackaged, repoRoot, userDataDi
 }
 
 async function selectBackendPort({
-  isIsolatedQa,
-  isPortFree,
-  deadlineMs = DEFAULT_QA_PORT_DEADLINE_MS,
-  setTimer = setTimeout,
-  clearTimer = clearTimeout,
-}) {
-  if (!isIsolatedQa) return 8000
+    isIsolatedQa,
+    isPackaged = false,
+    isPortFree,
+    deadlineMs = DEFAULT_QA_PORT_DEADLINE_MS,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+  }) {
+    if (!isIsolatedQa && !isPackaged) return 8000
   if (typeof isPortFree !== 'function') throw new TypeError('isolated QA requires an isPortFree function')
   if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) throw new TypeError('QA port deadlineMs must be positive')
   const controller = new AbortController()
@@ -378,6 +379,7 @@ async function inspectLegacyRuntimePorts({
   httpProbe = createHttpRuntimeProbe(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
+  requireFixedPortFree = true,
 }) {
   if (!Array.isArray(ports) || ports.length === 0) throw new TypeError('ports must be a non-empty array')
   if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) throw new TypeError('deadlineMs must be positive')
@@ -478,14 +480,14 @@ async function inspectLegacyRuntimePorts({
   }
 
   const fixedPort = snapshot.find((record) => record.port === NORMAL_BACKEND_PORT)
-  if (fixedPort?.tcp === 'occupied') {
+  if (requireFixedPortFree && fixedPort?.tcp === 'occupied') {
     throw createConflictError(
       'DXM_PORT_8000_OCCUPIED',
       'Loopback port 8000 is occupied. Stop the owning application explicitly; do not adopt or kill it.',
       { conflict: fixedPort },
     )
   }
-  if (fixedPort && fixedPort.tcp !== 'free') {
+  if (requireFixedPortFree && fixedPort && fixedPort.tcp !== 'free') {
     throw createConflictError(
       'DXM_PORT_8000_UNCERTAIN',
       'Loopback port 8000 could not be proven free before the shared diagnostic deadline.',

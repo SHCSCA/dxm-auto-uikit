@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,30 @@ class DxmLiveClient:
         if not self.has_cookie_session():
             return {'logged_in': False, 'reason': 'cookie_file_missing'}
 
+        # Playwright Sync API must never run on a thread that may carry a
+        # running asyncio loop (e.g. the shared visible-session owner thread):
+        # the sync bridge installs a running loop on that thread, which then
+        # breaks every later Sync API call on the same thread.  Probe on a
+        # fresh one-shot thread instead.
+        result_box: dict[str, Any] = {}
+        error_box: list[BaseException] = []
+
+        def _run_probe() -> None:
+            try:
+                result_box.update(self._probe_session_impl())
+            except BaseException as exc:  # noqa: BLE001 - forwarded to caller
+                error_box.append(exc)
+
+        worker = threading.Thread(target=_run_probe, name='dxm-session-probe', daemon=True)
+        worker.start()
+        worker.join(timeout=150)
+        if worker.is_alive():
+            return {'logged_in': False, 'reason': 'probe_timeout'}
+        if error_box:
+            raise error_box[0]
+        return result_box
+
+    def _probe_session_impl(self) -> dict[str, Any]:
         screenshot = SCREENSHOT_DIR / 'dianxiaomi_live_home.png'
         product_screenshot = SCREENSHOT_DIR / 'dianxiaomi_live_products.png'
         result: dict[str, Any] = {}

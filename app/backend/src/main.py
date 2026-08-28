@@ -8,13 +8,14 @@ import socket
 import secrets
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import RLock
-from typing import Any, NoReturn
+from threading import Lock, RLock
+from typing import Any, Mapping, NoReturn
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -22,10 +23,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.core.config import DATA_DIR
+from src.services.operation_audit import (
+    OperationAuditError,
+    get_audit_service,
+    record_best_effort,
+)
 from src.services.runtime_bootstrap import ensure_runtime_bootstrap
 
 
-APP_VERSION = '0.1.0'
+APP_VERSION = '0.3.0'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 runtime_bootstrap_state = ensure_runtime_bootstrap(
     data_dir=DATA_DIR,
@@ -40,6 +46,18 @@ from src.execution.dxm_live import DxmLiveClient
 from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import DxmLoginFlow
 from src.execution.browser_agent_worker import BrowserAgentRuntime
+from src.execution.browser_agent_protocol import (
+    MutationCommandContractError,
+    canonical_frozen_target_identity,
+    canonical_mutation_target_payload,
+    mutation_target_hash,
+    validate_browser_agent_command,
+)
+from src.execution.batch_command_contract import (
+    BatchCommandContractError,
+    validate_current_batch_queue_guard,
+)
+from src.execution.batch_dispatch_authority import LiveDispatchFacts
 from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
 from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
@@ -51,6 +69,8 @@ from src.models import (
     AgentConsoleStartRequest,
     DraftBoxActionRequest,
     DraftBoxScopeSnapshotCreate,
+    DxmTemplateShopSyncRequest,
+    DxmTemplateRefSyncRequest,
     EditBatchApproveAndStartRequest,
     EditBatchCreate,
     EditBatchBundleComposeRequest,
@@ -60,6 +80,8 @@ from src.models import (
     LoginContinueRequest,
     LoginNavigateRequest,
     LoginStartRequest,
+    LocalPlanTemplateRequest,
+    PlanSnapshotRequest,
     ProductCreate,
     ProductImportRequest,
     RuntimeControlRequest,
@@ -76,11 +98,21 @@ from src.models import (
 from src.batch_edit import (
     BatchEditContractError,
     BatchEditCoordinator,
-    BatchExecutionRuntime,
-    BatchRuntimeError,
     BundleComposerError,
     EditBatchBundleComposer,
 )
+from src.batch_edit.plan_contract import E2PlanService, PlanContractError
+from src.batch_edit.plan_snapshot_compiler import (
+    PLAN_PATH_EXECUTION_NOT_RELEASED,
+    WorkflowMandatoryCapabilityChecker,
+    is_plan_execution_path_released,
+)
+from src.batch_edit.frozen_execution_contract import (
+    FrozenExecutionContractError,
+    compile_frozen_execution_payload,
+    validate_frozen_execution_defaults,
+)
+from src.batch_edit.plan_schema_contract import PlanSchemaError
 from src.repository import Repository
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES
 from src.services.title_ai import TitleAIService
@@ -92,10 +124,19 @@ from src.services.dxm_reference_templates import (
     configured_unsupported_reference_sections,
     resolve_dxm_reference_templates,
 )
+from src.services.dxm_draft_reader import DxmDraftReader, DxmDraftReaderError
+from src.services.dxm_plan_reader import DxmPlanReader, DxmPlanReaderError
+from src.services.dxm_editor_model import build_dxm_editor_models
 from src.services.template_center import template_center_metadata
+from src.state_machine.batch_draft_authorization import (
+    BatchDraftAuthorizationError,
+    authorization_context_fingerprint as batch_authorization_context_fingerprint,
+    build_authorization_context as build_batch_authorization_context,
+    build_batch_draft_save_task_facts,
+)
 from src.state_machine.save_authorization import (
     SaveOnlyContractError,
-    build_authorization_context,
+    build_authorization_context as build_save_authorization_context,
     build_save_task_facts,
 )
 from src.ws import ConnectionManager
@@ -113,23 +154,9 @@ async def app_lifespan(_app: FastAPI):
     except Exception as exc:
         _append_backend_runtime_log(f'Startup task recovery failed: {exc}')
     try:
-        recovered_batches = batch_execution_runtime.recover_interrupted_batches()
-        if recovered_batches:
-            _append_backend_runtime_log(
-                f'startup edit-batch recovery stopped={recovered_batches}'
-            )
-    except Exception as exc:
-        _append_backend_runtime_log(f'Startup edit-batch recovery failed: {exc}')
-    try:
         yield
     finally:
         _append_backend_runtime_log('DXM backend runtime stopping; closing visible browser sessions')
-        try:
-            batch_shutdown = batch_execution_runtime.shutdown()
-            if isinstance(batch_shutdown, dict) and batch_shutdown.get('ok') is not True:
-                _append_backend_runtime_log('Edit-batch runtime cleanup incomplete')
-        except Exception as exc:
-            _append_backend_runtime_log(f'Edit-batch runtime cleanup failed: {exc}')
         try:
             agent_console_service.stop()
         except Exception as exc:
@@ -171,26 +198,32 @@ engine = PlaywrightEngine()
 live_client = DxmLiveClient()
 login_flow = DxmLoginFlow(live_client)
 login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')
+login_flow_api_lock = Lock()
 workflow_adapter = DxmWorkflowAdapter(login_flow)
-mutation_dispatch_ledger = MutationDispatchLedger()
+
+
+def _mutation_dispatch_live_facts() -> LiveDispatchFacts:
+    git_summary = _current_git_summary()
+    l2_gate = l2_real_probe_gate()
+    return LiveDispatchFacts(
+        runtime_instance_id=str(runtime_identity.instance_id),
+        browser_runtime_id=browser_agent_runtime.runtime_id,
+        browser_session_id=str(workflow_adapter.browser_session_id() or ""),
+        git_head=str(git_summary.get("head") or ""),
+        worktree_identity=_current_execution_worktree_identity(git_summary),
+        l2_status=str(l2_gate.get("status") or ""),
+        l2_evidence_fingerprint=_l2_authorization_fingerprint(l2_gate),
+        account_ref_hash=workflow_adapter.refresh_account_context_hash(),
+    )
+
+
+mutation_dispatch_ledger = MutationDispatchLedger(
+    live_facts_provider=_mutation_dispatch_live_facts,
+)
 browser_agent_runtime = BrowserAgentRuntime(
     workflow_adapter,
     mutation_ledger=mutation_dispatch_ledger,
 )
-
-
-def _current_batch_runtime_facts() -> dict[str, Any]:
-    identity = runtime_identity.as_dict()
-    browser_session_id = workflow_adapter.browser_session_id()
-    return {
-        'runtime_identity': {
-            'instance_id': identity['instanceId'],
-            'browser_runtime_id': browser_agent_runtime.runtime_id,
-            'browser_session_id': browser_session_id,
-            'git_head': identity['gitHead'],
-        },
-        'git_head': identity['gitHead'],
-    }
 
 
 def _current_batch_l2_verification() -> dict[str, str]:
@@ -203,22 +236,213 @@ def _current_batch_l2_verification() -> dict[str, str]:
     }
 
 
-batch_execution_runtime = BatchExecutionRuntime(
-    repo,
-    browser_agent_runtime,
-    mutation_dispatch_ledger,
-    runtime_facts_provider=_current_batch_runtime_facts,
-    browser_session_provider=lambda: workflow_adapter.browser_session_id(),
-    l2_verifier=_current_batch_l2_verification,
-)
+def _reject_batch_command_authorization(reason_code: str) -> dict[str, Any]:
+    return {'ok': False, 'reason_code': reason_code}
+
+
+def _verify_batch_draft_save_command_authorization(
+    command: Any,
+    context: Any,
+) -> dict[str, Any]:
+    """Bind the JIT grant to the exact frozen job command being dispatched."""
+
+    try:
+        validate_browser_agent_command(command)
+    except (MutationCommandContractError, TypeError, ValueError):
+        return _reject_batch_command_authorization('AUTH_COMMAND_CONTRACT_INVALID')
+    if (
+        command.state != 'SAVE_ONLY'
+        or command.action != 'save_only'
+        or command.execution_mode != 'batch_draft_save'
+        or command.expected_page != 'editor'
+        or not isinstance(command.params, dict)
+    ):
+        return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
+    if (
+        not isinstance(context, Mapping)
+        or context.get('mutation_action') != 'save_only_click'
+    ):
+        return _reject_batch_command_authorization('AUTH_COMMAND_MUTATION_MISMATCH')
+    if (
+        isinstance(command.task_id, bool)
+        or not isinstance(command.task_id, int)
+        or command.task_id <= 0
+        or isinstance(command.job_id, bool)
+        or not isinstance(command.job_id, int)
+        or command.job_id <= 0
+    ):
+        return _reject_batch_command_authorization('AUTH_COMMAND_JOB_MISMATCH')
+
+    task = repo.get_task_private(command.task_id)
+    if not isinstance(task, Mapping):
+        return _reject_batch_command_authorization('AUTH_TASK_NOT_FOUND')
+    if str(task.get('mode') or '').strip() != 'batch_draft_save':
+        return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
+    try:
+        snapshot = E2PlanService().assert_task_snapshot_binding(task)
+    except PlanContractError:
+        return _reject_batch_command_authorization('AUTH_COMMAND_SNAPSHOT_MISMATCH')
+
+    jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
+    matching_jobs = [
+        (index, job)
+        for index, job in enumerate(jobs)
+        if isinstance(job, Mapping) and job.get('id') == command.job_id
+    ]
+    if len(matching_jobs) != 1:
+        return _reject_batch_command_authorization('AUTH_COMMAND_JOB_MISMATCH')
+    queue_index, job = matching_jobs[0]
+    item_snapshots = (
+        snapshot.get('item_snapshots')
+        if isinstance(snapshot.get('item_snapshots'), list)
+        else []
+    )
+    if queue_index >= len(item_snapshots) or not isinstance(item_snapshots[queue_index], Mapping):
+        return _reject_batch_command_authorization('AUTH_COMMAND_JOB_MISMATCH')
+    item_snapshot = item_snapshots[queue_index]
+    product_id = job.get('product_id')
+    if (
+        isinstance(product_id, bool)
+        or not isinstance(product_id, int)
+        or product_id <= 0
+        or str(item_snapshot.get('product_id') or '') != str(product_id)
+    ):
+        return _reject_batch_command_authorization('AUTH_COMMAND_JOB_MISMATCH')
+    try:
+        validate_current_batch_queue_guard(
+            task,
+            command.job_id,
+            command.params.get('batch_queue_guard'),
+        )
+    except BatchCommandContractError:
+        return _reject_batch_command_authorization(
+            'AUTH_COMMAND_QUEUE_STATE_MISMATCH'
+        )
+    try:
+        expected_execution_payload = compile_frozen_execution_payload(task, job)
+        actual_execution_payload = validate_frozen_execution_defaults(
+            command.params.get('defaults'),
+            expected_payload=expected_execution_payload,
+        )
+    except FrozenExecutionContractError:
+        return _reject_batch_command_authorization(
+            'AUTH_COMMAND_EXECUTION_MISMATCH'
+        )
+    if not hmac.compare_digest(
+        str(command.execution_payload_hash or '').casefold(),
+        str(actual_execution_payload.get('payload_hash') or '').casefold(),
+    ):
+        return _reject_batch_command_authorization(
+            'AUTH_COMMAND_EXECUTION_MISMATCH'
+        )
+
+    payload = task.get('payload') if isinstance(task.get('payload'), Mapping) else {}
+    approval = (
+        payload.get('manual_approval')
+        if isinstance(payload.get('manual_approval'), Mapping)
+        else {}
+    )
+    stored_context = (
+        approval.get('authorization_context')
+        if isinstance(approval.get('authorization_context'), Mapping)
+        else {}
+    )
+    stage_facts = (
+        approval.get('stage_task_facts')
+        if isinstance(approval.get('stage_task_facts'), Mapping)
+        else {}
+    )
+    try:
+        expected_authorization_fingerprint = batch_authorization_context_fingerprint(stored_context)
+    except BatchDraftAuthorizationError:
+        return _reject_batch_command_authorization('AUTH_COMMAND_AUTHORIZATION_MISMATCH')
+    if (
+        str(command.authorization_lease_id or '') != str(approval.get('lease_id') or '')
+        or not hmac.compare_digest(
+            str(command.authorization_fingerprint or '').casefold(),
+            expected_authorization_fingerprint.casefold(),
+        )
+        or not hmac.compare_digest(
+            str(command.stage_task_facts_fingerprint or '').casefold(),
+            str(stage_facts.get('fingerprint') or '').casefold(),
+        )
+    ):
+        return _reject_batch_command_authorization('AUTH_COMMAND_AUTHORIZATION_MISMATCH')
+
+    session_context = (
+        snapshot.get('session_context')
+        if isinstance(snapshot.get('session_context'), Mapping)
+        else {}
+    )
+    store_name = str(session_context.get('shop_name') or '').strip()
+    if not store_name:
+        return _reject_batch_command_authorization('AUTH_COMMAND_SNAPSHOT_MISMATCH')
+    try:
+        frozen_target = canonical_frozen_target_identity(
+            item_snapshot.get('target_identity'),
+            store_name=store_name,
+        )
+        actual_target = canonical_mutation_target_payload(
+            command.action,
+            command.params,
+        )
+        expected_target = canonical_mutation_target_payload(
+            'save_only',
+            {
+                'store_name': store_name,
+                'target_identity': frozen_target,
+            },
+        )
+        recomputed_target_hash = mutation_target_hash(command.action, command.params)
+    except MutationCommandContractError:
+        return _reject_batch_command_authorization('AUTH_COMMAND_TARGET_MISMATCH')
+    if (
+        frozen_target is None
+        or actual_target != expected_target
+        or command.params.get('target_identity') != frozen_target
+        or command.params.get('target_source_urls') != frozen_target.get('source_urls')
+        or command.params.get('product_query') != str(product_id)
+        or command.params.get('store_name') != store_name
+        or not hmac.compare_digest(
+            str(command.target_hash or '').casefold(),
+            recomputed_target_hash.casefold(),
+        )
+    ):
+        return _reject_batch_command_authorization('AUTH_COMMAND_TARGET_MISMATCH')
+    if (
+        stored_context.get('schema') != 'dxm.authorization.context.v2'
+        or not isinstance(stored_context.get('worktree_identity'), Mapping)
+    ):
+        return _reject_batch_command_authorization(
+            'AUTH_WORKTREE_IDENTITY_REQUIRED'
+        )
+
+    return _verify_runner_authorization(
+        command.task_id,
+        'batch_draft_save',
+        command.state,
+    )
 
 
 def _authorize_browser_mutation(command: Any, context: Any) -> dict[str, Any]:
-    if batch_execution_runtime.is_batch_command(command):
-        return batch_execution_runtime.authorize_mutation(command, context)
+    try:
+        task_id = int(command.task_id)
+    except (TypeError, ValueError):
+        return _reject_batch_command_authorization('AUTH_COMMAND_JOB_MISMATCH')
+    task = repo.get_task_private(task_id)
+    if not isinstance(task, Mapping):
+        return _reject_batch_command_authorization('AUTH_TASK_NOT_FOUND')
+    persisted_mode = str(task.get('mode') or '').strip()
+    command_mode = str(command.execution_mode or '').strip()
+    if command_mode != persisted_mode:
+        return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
+    if persisted_mode == 'batch_draft_save':
+        return _verify_batch_draft_save_command_authorization(command, context)
+    if persisted_mode != 'single_save' or command.state != 'SAVE_ONLY':
+        return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
     return _verify_runner_authorization(
-        int(command.task_id),
-        'single_save',
+        task_id,
+        persisted_mode,
         command.state,
     )
 
@@ -238,14 +462,17 @@ runner = V1TaskRunner(
     workflow_executor=login_flow_executor,
 )
 
-REAL_DXM_MUTATION_MODES = {'single_save', 'batch_save'}
-RELEASED_REAL_DXM_MUTATION_MODES = {'single_save'}
+REAL_DXM_MUTATION_MODES = {'single_save', 'batch_save', 'batch_draft_save'}
+RELEASED_REAL_DXM_MUTATION_MODES = {'single_save', 'batch_draft_save'}
 AUTHORIZATION_LEASE_TTL_SECONDS = 5 * 60
 REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
-ALLOWED_START_MODES = {'probe', 'dry_run', 'single_save', 'batch_save'}
+ALLOWED_START_MODES = {'probe', 'dry_run', 'single_save', 'batch_save', 'batch_draft_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
-UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled single_save is released for real DXM mutation'
+UNRELEASED_REAL_DXM_MODE_DETAIL = (
+    'Only controlled single_save and batch_draft_save are released for real DXM mutation; '
+    'batch_save remains unreleased'
+)
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
 RUNTIME_LAUNCHER_LOG_FILE = Path(
     os.environ.get('DXM_LAUNCHER_LOG_FILE')
@@ -298,6 +525,7 @@ RUNTIME_LOG_TAG_PATTERNS = {
 
 
 def _recover_orphaned_runtime_tasks() -> dict[str, list[int]]:
+    mutation_dispatch_ledger.recover_inflight()
     recovered: list[int] = []
     cancelled: list[int] = []
     for task in repo.list_tasks():
@@ -309,16 +537,16 @@ def _recover_orphaned_runtime_tasks() -> dict[str, list[int]]:
         mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
         if mode in REAL_WRITE_START_MODES:
             repo.update_task_status(task_id, 'needs_manual_review')
-            _mark_unfinished_jobs_after_runtime_recovery(
-                full_task,
-                status='failed',
-                error_code='E901',
-                error_message='上次真实浏览器任务没有正常结束，已停止自动执行并转入人工复核；请确认店小秘页面状态后重新打开执行浏览器再重试。',
-            )
+            unknown_jobs = _mark_real_jobs_after_runtime_recovery(full_task, mode=mode)
             repo.add_log(task_id, None, 'warning', '启动恢复：真实任务已转人工复核', {
                 'previous_status': previous_status,
                 'mode': mode,
-                'reason': 'backend_restarted_while_task_active',
+                'reason': (
+                    'mutation_outcome_unknown'
+                    if unknown_jobs
+                    else 'backend_restarted_while_task_active'
+                ),
+                'unknown_job_ids': unknown_jobs,
             })
             recovered.append(task_id)
             continue
@@ -336,6 +564,50 @@ def _recover_orphaned_runtime_tasks() -> dict[str, list[int]]:
         })
         cancelled.append(task_id)
     return {'recovered': recovered, 'cancelled': cancelled}
+
+
+def _mark_real_jobs_after_runtime_recovery(
+    task: dict[str, Any],
+    *,
+    mode: str,
+) -> list[int]:
+    unknown_job_ids: list[int] = []
+    preserve_pending_tail = mode == 'batch_draft_save'
+    for job in task.get('jobs') or []:
+        job_status = str(job.get('status') or '')
+        if job_status not in {'running', 'pending'}:
+            continue
+        job_id = int(job['id'])
+        classification = mutation_dispatch_ledger.job_recovery_classification(
+            task['id'],
+            job_id,
+        )
+        if classification == 'UNKNOWN':
+            mutation_dispatch_ledger.mark_incomplete_job_unknown(
+                task['id'],
+                job_id,
+            )
+            repo.update_job(
+                job_id,
+                status='unknown',
+                current_step_code='RUNTIME_RECOVERY_UNKNOWN',
+                current_step_name='保存结果待人工核对',
+                error_code='UNKNOWN',
+                error_message='保存动作已派发但结果不确定；批次已停止，禁止自动重试。请先在店小秘草稿箱人工核对该商品。',
+            )
+            unknown_job_ids.append(job_id)
+            continue
+        if preserve_pending_tail and job_status == 'pending':
+            continue
+        repo.update_job(
+            job_id,
+            status='failed',
+            current_step_code='RUNTIME_RECOVERY',
+            current_step_name='后台重启恢复',
+            error_code='E901',
+            error_message='上次真实浏览器任务没有正常结束，已停止自动执行并转入人工复核；请确认店小秘页面状态后重新打开执行浏览器再重试。',
+        )
+    return unknown_job_ids
 
 
 def _mark_unfinished_jobs_after_runtime_recovery(
@@ -372,7 +644,34 @@ def get_engine():
 @app.get('/api/dxm/live-status')
 def dxm_live_status():
     _assert_batch_browser_available()
-    result = live_client.probe_session()
+    # Verify the same Playwright objects Reader will use, on their owner thread.
+    # The probe does not navigate or call DXM.  It also never queues behind a
+    # long login call: busy is a first-class reason_code instead of stale green.
+    try:
+        live_state = getattr(login_flow, 'get_live_state', None)
+        result = dict(_run_login_flow(
+            live_state if callable(live_state) else login_flow.get_state,
+            fail_if_busy=True,
+        ))
+    except DxmSessionBusyError:
+        result = {
+            **dict(login_flow.get_state()),
+            'ok': False,
+            'reason_code': 'DXM_SESSION_BUSY',
+            'logged_in': False,
+            'reader_ready': False,
+            'message': '真实可见浏览器正在处理登录或上一条只读操作；本次状态请求未排队。',
+            'next_action': '等待当前操作返回后重新检测；不要重复提交登录。',
+            'requires_user_action': False,
+        }
+    result.setdefault('logged_in', False)
+    result.setdefault('reader_ready', False)
+    result.setdefault(
+        'reason_code',
+        'LOGIN_READER_READY'
+        if result['logged_in'] is True and result['reader_ready'] is True
+        else 'BROWSER_SESSION_UNAVAILABLE',
+    )
     return normalize_artifact_paths(result)
 
 
@@ -399,6 +698,26 @@ def dxm_login_start(payload: LoginStartRequest):
             next_action='请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；账号密码不会用于保存或发布。',
             raw_error=str(exc),
         )
+    waiting_for_operator = (
+        result.get('stage') == 'waiting_captcha'
+        or result.get('reason_code') == 'LOGIN_INTERACTION_REQUIRED'
+    )
+    audit_state = record_best_effort({
+        'actor': 'operator',
+        'component': 'dxm_access',
+        'action': 'login_start',
+        'phase': 'waiting_user' if waiting_for_operator else 'completed' if result.get('ok') is not False else 'failed',
+        'status': 'pending' if waiting_for_operator else 'ok' if result.get('ok') is not False else 'failed',
+        'correlation_id': 'login-start',
+        'root_correlation_id': 'login',
+        'input': {'username_length': len(payload.username or '')},
+        'output': {
+            'reason_code': result.get('reason_code'),
+            'logged_in': result.get('logged_in') is True,
+        },
+    })
+    if audit_state.get('degraded'):
+        result = {**result, 'audit_degraded': True}
     return normalize_artifact_paths(result)
 
 
@@ -416,6 +735,77 @@ def dxm_login_continue(payload: LoginContinueRequest):
             next_action='请确认真实浏览器窗口仍然打开，完成验证码或账号修正后再次检测；必要时重新打开登录页。',
             raw_error=str(exc),
         )
+    record_best_effort({
+        'actor': 'operator',
+        'component': 'dxm_access',
+        'action': 'login_continue',
+        'phase': 'completed',
+        'status': 'ok' if result.get('logged_in') is True else 'pending',
+        'correlation_id': 'login-continue',
+        'root_correlation_id': 'login',
+        'output': {
+            'reason_code': result.get('reason_code'),
+            'reader_ready': result.get('reader_ready') is True,
+        },
+    })
+    return normalize_artifact_paths(result)
+
+
+@app.post('/api/dxm/logout')
+def dxm_logout():
+    """Close the visible DXM session and make the next login use a clean account."""
+
+    _assert_batch_browser_available()
+    try:
+        result = dict(_run_login_flow(login_flow.logout, fail_if_busy=True))
+    except DxmSessionBusyError:
+        record_best_effort({
+            'actor': 'operator',
+            'component': 'dxm_access',
+            'action': 'logout',
+            'phase': 'failed',
+            'status': 'failed',
+            'reason': 'DXM_SESSION_BUSY',
+            'correlation_id': 'logout',
+            'root_correlation_id': 'login',
+        })
+        raise _dxm_session_busy_http_exception()
+    except Exception as exc:  # noqa: BLE001 - keep a recoverable operator state.
+        result = _login_flow_failure_state(
+            label='退出失败',
+            message='退出店小秘登录态失败；请检查真实浏览器窗口并查看日志。',
+            next_action='确认没有正在执行的读取或保存操作后，再重试退出登录。',
+            raw_error=str(exc),
+        )
+        result['reason_code'] = 'DXM_LOGOUT_FAILED'
+        record_best_effort({
+            'actor': 'operator',
+            'component': 'dxm_access',
+            'action': 'logout',
+            'phase': 'failed',
+            'status': 'failed',
+            'reason': 'DXM_LOGOUT_FAILED',
+            'correlation_id': 'logout',
+            'root_correlation_id': 'login',
+            'output': {'raw_error': str(exc)[:240]},
+        })
+        return normalize_artifact_paths(result)
+
+    logout_ok = result.get('reason_code') == 'DXM_LOGGED_OUT'
+    record_best_effort({
+        'actor': 'operator',
+        'component': 'dxm_access',
+        'action': 'logout',
+        'phase': 'completed' if logout_ok else 'failed',
+        'status': 'ok' if logout_ok else 'failed',
+        'reason': result.get('reason_code'),
+        'correlation_id': 'logout',
+        'root_correlation_id': 'login',
+        'output': {
+            'logged_in': result.get('logged_in') is True,
+            'reader_ready': result.get('reader_ready') is True,
+        },
+    })
     return normalize_artifact_paths(result)
 
 
@@ -436,6 +826,112 @@ def dxm_navigate(payload: LoginNavigateRequest):
 def dxm_workflow_open_draft_box():
     _assert_batch_browser_available()
     return normalize_artifact_paths(_run_login_flow(_workflow_adapter().open_draft_box))
+
+
+@app.get('/api/dxm/draft-reader/shops')
+def dxm_draft_reader_shops():
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            DxmDraftReader(workflow_adapter).list_shops,
+            fail_if_busy=True,
+        )
+    except DxmSessionBusyError as exc:
+        raise _dxm_session_busy_http_exception() from exc
+    except DxmDraftReaderError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+            },
+        ) from exc
+
+
+@app.get('/api/dxm/draft-reader/products')
+def dxm_draft_reader_products(
+    shop_id: str = Query(default='-1', min_length=1, max_length=32),
+    page_no: int = Query(default=1, ge=1, le=100_000),
+    page_size: int = Query(default=100, ge=1, le=200),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            DxmDraftReader(workflow_adapter).list_products,
+            shop_id=shop_id,
+            page_no=page_no,
+            page_size=page_size,
+            fail_if_busy=True,
+        )
+    except DxmSessionBusyError as exc:
+        raise _dxm_session_busy_http_exception() from exc
+    except DxmDraftReaderError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+            },
+        ) from exc
+
+
+def _dxm_category_query_exception_mapping(exc: Exception) -> HTTPException:
+    if isinstance(exc, DxmSessionBusyError):
+        return _dxm_session_busy_http_exception()
+    if isinstance(exc, DxmDraftReaderError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+            },
+        )
+    raise exc
+
+
+@app.get('/api/dxm/category/children')
+def dxm_category_children(
+    pcid: str = Query(default='', max_length=24),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            workflow_adapter.read_category_children,
+            pcid=pcid,
+            fail_if_busy=True,
+        )
+    except Exception as exc:
+        raise _dxm_category_query_exception_mapping(exc) from exc
+
+
+@app.get('/api/dxm/category/search')
+def dxm_category_search(
+    keyword: str = Query(min_length=1, max_length=64),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            workflow_adapter.search_categories,
+            keyword=keyword,
+            fail_if_busy=True,
+        )
+    except Exception as exc:
+        raise _dxm_category_query_exception_mapping(exc) from exc
+
+
+@app.get('/api/dxm/category/get')
+def dxm_category_get(
+    category_id: str = Query(min_length=1, max_length=24),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            workflow_adapter.get_category_by_id,
+            category_id=category_id,
+            fail_if_busy=True,
+        )
+    except Exception as exc:
+        raise _dxm_category_query_exception_mapping(exc) from exc
 
 
 def _active_agent_console_browser() -> dict[str, Any] | None:
@@ -523,24 +1019,18 @@ def create_draft_box_scope_snapshot(payload: DraftBoxScopeSnapshotCreate):
         ) from exc
 
 
-@app.post('/api/edit-batches', status_code=201)
+@app.post('/api/edit-batches', status_code=410)
 def create_edit_batch(payload: EditBatchCreate):
-    try:
-        return BatchEditCoordinator(
-            repo,
-            l2_verifier=_current_batch_l2_verification,
-        ).create_draft_batch(
-            scope_snapshot_id=payload.scope_snapshot_id,
-            template_id=payload.template_id,
-        )
-    except BatchEditContractError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"reason_code": exc.reason_code, "message": str(exc)},
-        ) from exc
+    raise HTTPException(
+        status_code=410,
+        detail={
+            'reason_code': 'BATCH_EXECUTION_RUNTIME_REMOVED',
+            'message': 'BatchExecutionRuntime has been removed. Use V1TaskRunner for batch execution.',
+        },
+    )
 
 
-@app.post('/api/edit-batches/{batch_id}/manual-approval')
+@app.post('/api/edit-batches/{batch_id}/manual-approval', status_code=410)
 def approve_edit_batch(batch_id: int, _payload: EditBatchManualApprovalRequest):
     if not repo.get_edit_batch(batch_id):
         raise HTTPException(status_code=404, detail='Edit batch not found')
@@ -553,123 +1043,29 @@ def approve_edit_batch(batch_id: int, _payload: EditBatchManualApprovalRequest):
     )
 
 
-@app.post('/api/edit-batches/{batch_id}/approve-and-start')
+@app.post('/api/edit-batches/{batch_id}/approve-and-start', status_code=410)
 async def approve_and_start_edit_batch(
     batch_id: int,
     payload: EditBatchApproveAndStartRequest,
 ):
-    batch = repo.get_edit_batch_private(batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail='Edit batch not found')
-    _assert_batch_browser_available()
-    if payload.confirmation != 'CONFIRM_DXM_BATCH_SAVE_ONLY':
-        raise HTTPException(
-            status_code=400,
-            detail='confirmation must exactly equal CONFIRM_DXM_BATCH_SAVE_ONLY',
-        )
-    if not payload.approved_by.strip():
-        raise HTTPException(status_code=400, detail='approved_by must identify the approving operator')
-
-    coordinator = BatchEditCoordinator(
-        repo,
-        l2_verifier=_current_batch_l2_verification,
-    )
-    try:
-        capture_max_items = coordinator.approval_capture_max_items(batch)
-    except BatchEditContractError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={'reason_code': exc.reason_code, 'message': str(exc)},
-        ) from exc
-
-    try:
-        capture = await asyncio.to_thread(
-            _run_login_flow,
-            workflow_adapter.capture_draft_box_scope,
-            capture_max_items,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                'reason_code': 'BATCH_SCOPE_RECAPTURE_FAILED',
-                'message': '无法重新读取当前商品箱范围，批次没有启动。',
-            },
-        ) from exc
-    browser_session_id = workflow_adapter.browser_session_id()
-    identity = runtime_identity.as_dict()
-    runtime_context = {
-        'instance_id': identity['instanceId'],
-        'browser_runtime_id': browser_agent_runtime.runtime_id,
-        'git_head': identity['gitHead'],
-    }
-    authoritative_facts = {
-        'runtime_identity': {
-            **runtime_context,
-            'browser_session_id': browser_session_id,
+    raise HTTPException(
+        status_code=410,
+        detail={
+            'reason_code': 'BATCH_EXECUTION_RUNTIME_REMOVED',
+            'message': 'BatchExecutionRuntime has been removed. Use V1TaskRunner for batch execution.',
         },
-        'browser_session_id': browser_session_id,
-        'git_head': identity['gitHead'],
-        'store_identity': batch['scope_snapshot']['store_identity'],
-        'page_identity': batch['scope_snapshot']['page_identity'],
-    }
-    try:
-        started = coordinator.approve_and_start_batch(
-            batch,
-            capture,
-            runtime_context=runtime_context,
-            expected_browser_session_id=browser_session_id,
-            authoritative_facts=authoritative_facts,
-            approved_by=payload.approved_by,
-            confirmation=payload.confirmation,
-        )
-    except BatchEditContractError as exc:
-        status_code = 404 if exc.reason_code == 'BATCH_NOT_FOUND' else 409
-        raise HTTPException(
-            status_code=status_code,
-            detail={'reason_code': exc.reason_code, 'message': str(exc)},
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'reason_code': 'BATCH_START_FAILED',
-                'message': '批次启动失败，未安排执行。',
-            },
-        ) from exc
-    try:
-        batch_execution_runtime.schedule(batch_id)
-    except Exception as exc:
-        repo.stop_edit_batch(
-            batch_id,
-            reason_code='BATCH_RUNTIME_SCHEDULE_FAILED',
-            reason='批次已批准，但执行协调器未能启动；系统已在任何商品开始前停止。',
-            requires_manual_review=False,
-        )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'reason_code': 'BATCH_RUNTIME_SCHEDULE_FAILED',
-                'message': '批次执行协调器未能启动，批次已安全停止。',
-            },
-        ) from exc
-    return started
+    )
 
 
-@app.post('/api/edit-batches/{batch_id}/stop')
+@app.post('/api/edit-batches/{batch_id}/stop', status_code=410)
 def request_edit_batch_stop(batch_id: int, payload: EditBatchStopRequest):
-    try:
-        return batch_execution_runtime.request_stop(
-            batch_id,
-            requested_by=payload.requested_by,
-            reason=payload.reason,
-        )
-    except BatchRuntimeError as exc:
-        status_code = 404 if exc.reason_code == 'BATCH_NOT_FOUND' else 409
-        raise HTTPException(
-            status_code=status_code,
-            detail={'reason_code': exc.reason_code, 'message': str(exc)},
-        ) from exc
+    raise HTTPException(
+        status_code=410,
+        detail={
+            'reason_code': 'BATCH_EXECUTION_RUNTIME_REMOVED',
+            'message': 'BatchExecutionRuntime has been removed. Use V1TaskRunner for batch execution.',
+        },
+    )
 
 
 @app.get('/api/edit-batches/{batch_id}')
@@ -771,6 +1167,537 @@ def compose_edit_batch_bundle(payload: EditBatchBundleComposeRequest):
         ) from exc
 
 
+def _editor_source_section(path: Any) -> str:
+    normalized = str(path or '')
+    if 'attribute' in normalized.casefold():
+        return 'attribute_info'
+    if 'adjustprice' in normalized.casefold():
+        return 'regional_pricing'
+    if 'sizechart' in normalized.casefold():
+        return 'description_info'
+    if 'msr/' in normalized.casefold() or 'manufacture/' in normalized.casefold() or 'qualification' in normalized.casefold():
+        return 'compliance_info'
+    if 'shopinfosync/list' in normalized.casefold() or 'templatelistformodule' in normalized.casefold():
+        return 'template_main'
+    if 'edit.json' in normalized.casefold():
+        return 'basic_info'
+    return 'other_info'
+
+
+@app.post('/api/dxm-template-refs/sync', status_code=201)
+def sync_dxm_template_refs(payload: DxmTemplateRefSyncRequest):
+    sync_started = time.perf_counter()
+    sync_correlation_id = f'dxm-template-sync-{uuid.uuid4().hex}'
+    sync_input = {
+        "shop_id": payload.shop_id,
+        "category_count": len(payload.category_ids),
+    }
+    record_best_effort({
+        "actor": "operator",
+        "component": "dxm_template_sync",
+        "action": "sync",
+        "phase": "started",
+        "status": "running",
+        "correlation_id": sync_correlation_id,
+        "root_correlation_id": sync_correlation_id,
+        "input": sync_input,
+    })
+    try:
+        read_result = _run_login_flow(
+            DxmPlanReader(workflow_adapter).read_scope,
+            shop_id=payload.shop_id,
+            category_ids=payload.category_ids,
+            representative_product_ids=payload.representative_product_ids,
+            fail_if_busy=True,
+        )
+        refs = E2PlanService().sync_dxm_template_refs(
+            read_result["template_records"],
+            shop_id=read_result["shop_id"],
+            category_ids=read_result["category_ids"],
+        )
+        editor_models = build_dxm_editor_models(
+            category_schemas=read_result["category_schemas"],
+            template_records=read_result["template_records"],
+            refs=refs,
+            representative_products=read_result.get("representative_products", {}),
+            data_sources=[
+                {
+                    "section": _editor_source_section(item.get("path")),
+                    **item,
+                }
+                for item in (read_result.get("request_trace") or [])
+                if isinstance(item, Mapping)
+            ],
+        )
+        editor_section_count = sum(
+            len(model["sections"])
+            for model in editor_models.values()
+        )
+        editor_field_count = sum(
+            len(section["field_keys"])
+            for model in editor_models.values()
+            for section in model["sections"]
+        )
+        editor_template_binding_count = sum(
+            len(section["templates"])
+            for model in editor_models.values()
+            for section in model["sections"]
+        )
+        template_record_count = len(read_result["template_records"])
+        category_schema_count = len(read_result.get("category_schemas") or {})
+        request_trace = read_result.get("request_trace") or []
+        elapsed_ms = round((time.perf_counter() - sync_started) * 1000, 1)
+        sync_status = "synced" if refs else "empty"
+        empty_reason = None if refs else "DXM_RETURNED_NO_TEMPLATE_RECORDS"
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync",
+            "phase": "completed",
+            "status": sync_status,
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": {
+                "source": read_result["source"],
+                "template_record_count": template_record_count,
+                "template_ref_count": len(refs),
+                "category_schema_count": category_schema_count,
+                "editor_section_count": editor_section_count,
+                "editor_field_count": editor_field_count,
+                "editor_template_binding_count": editor_template_binding_count,
+                "empty_reason": empty_reason,
+                "elapsed_ms": elapsed_ms,
+                "request_trace": request_trace,
+            },
+        })
+        return {
+            "source": read_result["source"],
+            "session_bound": read_result["session_bound"],
+            "session_ref": read_result["session_ref"],
+            "shop_id": read_result["shop_id"],
+            "category_ids": read_result["category_ids"],
+            "category_schemas": read_result["category_schemas"],
+            "editor_models": editor_models,
+            "category_capabilities": read_result.get("category_capabilities", {}),
+            "sync_status": sync_status,
+            "template_record_count": template_record_count,
+            "template_ref_count": len(refs),
+            "category_schema_count": category_schema_count,
+            "editor_section_count": editor_section_count,
+            "editor_field_count": editor_field_count,
+            "editor_template_binding_count": editor_template_binding_count,
+            "empty_reason": empty_reason,
+            "elapsed_ms": elapsed_ms,
+            "sync_correlation_id": sync_correlation_id,
+            "request_trace": request_trace,
+            "refs": refs,
+        }
+    except DxmSessionBusyError as exc:
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync",
+            "phase": "failed",
+            "status": "failed",
+            "reason": "DXM_SESSION_BUSY",
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": {"elapsed_ms": round((time.perf_counter() - sync_started) * 1000, 1)},
+        })
+        raise _dxm_session_busy_http_exception() from exc
+    except DxmPlanReaderError as exc:
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync",
+            "phase": "failed",
+            "status": "failed",
+            "reason": exc.reason_code,
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": {"elapsed_ms": round((time.perf_counter() - sync_started) * 1000, 1)},
+        })
+        raise HTTPException(
+            status_code=409,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    except DxmDraftReaderError as exc:
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync",
+            "phase": "failed",
+            "status": "failed",
+            "reason": exc.reason_code,
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": {"elapsed_ms": round((time.perf_counter() - sync_started) * 1000, 1)},
+        })
+        raise HTTPException(
+            status_code=409,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    except PlanContractError as exc:
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync",
+            "phase": "failed",
+            "status": "failed",
+            "reason": exc.reason_code,
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": {"elapsed_ms": round((time.perf_counter() - sync_started) * 1000, 1)},
+        })
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/dxm-template-refs/sync-shop', status_code=201)
+def sync_dxm_template_refs_for_shop(payload: DxmTemplateShopSyncRequest):
+    """Synchronize the complete management-center index for one DXM shop."""
+
+    sync_started = time.perf_counter()
+    sync_correlation_id = f'dxm-template-shop-sync-{uuid.uuid4().hex}'
+    sync_input = {"shop_id": payload.shop_id, "scope": "shop"}
+    record_best_effort({
+        "actor": "operator",
+        "component": "dxm_template_sync",
+        "action": "sync_shop",
+        "phase": "started",
+        "status": "running",
+        "correlation_id": sync_correlation_id,
+        "root_correlation_id": sync_correlation_id,
+        "input": sync_input,
+    })
+    try:
+        read_result = _run_login_flow(
+            DxmPlanReader(workflow_adapter).read_template_library,
+            shop_id=payload.shop_id,
+            fail_if_busy=True,
+        )
+        refs = E2PlanService().sync_dxm_template_refs_for_shop(
+            read_result["template_records"],
+            shop_id=read_result["shop_id"],
+        )
+        template_record_count = len(read_result["template_records"])
+        request_trace = read_result.get("request_trace") or []
+        elapsed_ms = round((time.perf_counter() - sync_started) * 1000, 1)
+        sync_status = "synced" if refs else "empty"
+        empty_reason = None if refs else "DXM_RETURNED_NO_TEMPLATE_RECORDS"
+        output = {
+            "source": read_result["source"],
+            "template_record_count": template_record_count,
+            "template_ref_count": len(refs),
+            "category_count": len(read_result["category_ids"]),
+            "empty_reason": empty_reason,
+            "elapsed_ms": elapsed_ms,
+            "request_trace": request_trace,
+        }
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync_shop",
+            "phase": "completed",
+            "status": sync_status,
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": output,
+        })
+        return {
+            "source": read_result["source"],
+            "session_bound": read_result["session_bound"],
+            "session_ref": read_result["session_ref"],
+            "shop_id": read_result["shop_id"],
+            "sync_scope": "shop",
+            "category_ids": read_result["category_ids"],
+            "category_schemas": {},
+            "editor_models": {},
+            "sync_status": sync_status,
+            "template_record_count": template_record_count,
+            "template_ref_count": len(refs),
+            "category_schema_count": 0,
+            "empty_reason": empty_reason,
+            "elapsed_ms": elapsed_ms,
+            "sync_correlation_id": sync_correlation_id,
+            "request_trace": request_trace,
+            "refs": refs,
+        }
+    except DxmSessionBusyError as exc:
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync_shop",
+            "phase": "failed",
+            "status": "failed",
+            "reason": "DXM_SESSION_BUSY",
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": {"elapsed_ms": round((time.perf_counter() - sync_started) * 1000, 1)},
+        })
+        raise _dxm_session_busy_http_exception() from exc
+    except (DxmPlanReaderError, DxmDraftReaderError, PlanContractError) as exc:
+        reason_code = getattr(exc, "reason_code", type(exc).__name__)
+        record_best_effort({
+            "actor": "operator",
+            "component": "dxm_template_sync",
+            "action": "sync_shop",
+            "phase": "failed",
+            "status": "failed",
+            "reason": reason_code,
+            "correlation_id": sync_correlation_id,
+            "root_correlation_id": sync_correlation_id,
+            "input": sync_input,
+            "output": {"elapsed_ms": round((time.perf_counter() - sync_started) * 1000, 1)},
+        })
+        status_code = getattr(exc, "status_code", 409)
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason_code": reason_code, "message": str(exc)},
+        ) from exc
+
+
+@app.get('/api/dxm-template-refs')
+def list_dxm_template_refs():
+    return E2PlanService().list_dxm_template_refs()
+
+
+@app.patch('/api/dxm-template-refs/{_ref_id}')
+def reject_dxm_template_ref_mutation(_ref_id: int, _payload: dict[str, Any]):
+    raise HTTPException(
+        status_code=405,
+        detail={
+            'reason_code': 'DXM_TEMPLATE_REF_READ_ONLY',
+            'message': '店小秘模板引用只允许从只读同步结果更新。',
+        },
+    )
+
+
+@app.post('/api/local-plan-templates', status_code=201)
+def create_local_plan_template(payload: LocalPlanTemplateRequest):
+    try:
+        return E2PlanService().create_local_plan(payload.model_dump())
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.get('/api/local-plan-templates')
+def list_local_plan_templates():
+    return E2PlanService().list_local_plans()
+
+
+@app.get('/api/local-plan-templates/{plan_id}')
+def get_local_plan_template(plan_id: int):
+    try:
+        return E2PlanService().get_local_plan(plan_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.patch('/api/local-plan-templates/{plan_id}')
+def reject_local_plan_in_place_mutation(plan_id: int, _payload: dict[str, Any]):
+    try:
+        E2PlanService().get_local_plan(plan_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    raise HTTPException(
+        status_code=409,
+        detail={
+            'reason_code': 'LOCAL_PLAN_VERSION_IMMUTABLE',
+            'message': '本地方案版本不可原地修改；请创建新版本。',
+        },
+    )
+
+
+@app.post('/api/local-plan-templates/{plan_id}/versions', status_code=201)
+def create_local_plan_template_version(plan_id: int, payload: LocalPlanTemplateRequest):
+    try:
+        return E2PlanService().create_local_plan(
+            payload.model_dump(),
+            supersedes_id=plan_id,
+        )
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.delete('/api/local-plan-templates/{plan_id}')
+def archive_local_plan_template(plan_id: int):
+    try:
+        return E2PlanService().archive_local_plan(plan_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/plan-snapshots/preview')
+def preview_plan_snapshot(payload: PlanSnapshotRequest):
+    try:
+        authoritative = _run_login_flow(
+            DxmPlanReader(workflow_adapter).build_snapshot_request,
+            local_plan_template_id=payload.local_plan_template_id,
+            shop_id=payload.shop_id,
+            product_ids=payload.product_ids,
+            expected_session_ref=payload.session_ref,
+            target_category_id=payload.target_category_id,
+            target_category_name=payload.target_category_name,
+            target_category_match=payload.target_category_match,
+            fail_if_busy=True,
+        )
+        service = E2PlanService(
+            capability_checker=WorkflowMandatoryCapabilityChecker(workflow_adapter)
+        )
+        service.sync_dxm_template_refs(
+            authoritative["template_records"],
+            shop_id=authoritative["request"]["shop_id"],
+            category_ids=authoritative["category_ids"],
+        )
+        snapshot = service.build_plan_snapshot(authoritative["request"])
+        record_best_effort({
+            'actor': 'operator',
+            'component': 'plan',
+            'action': 'preview',
+            'phase': 'completed',
+            'status': 'ok',
+            'correlation_id': f"preview-{payload.local_plan_template_id}",
+            'root_correlation_id': f"plan-{payload.local_plan_template_id}",
+            'store_id': payload.shop_id,
+            'snapshot_id': snapshot.get('snapshot_hash') if isinstance(snapshot, Mapping) else None,
+            'input': {
+                'product_count': len(payload.product_ids or []),
+                'plan_id': payload.local_plan_template_id,
+            },
+        })
+        return snapshot
+    except DxmSessionBusyError as exc:
+        record_best_effort({
+            'actor': 'operator',
+            'component': 'plan',
+            'action': 'preview',
+            'phase': 'blocked',
+            'status': 'blocked',
+            'reason': 'DXM_SESSION_BUSY',
+            'correlation_id': f"preview-{payload.local_plan_template_id}",
+            'root_correlation_id': f"plan-{payload.local_plan_template_id}",
+            'store_id': payload.shop_id,
+            'input': {
+                'product_count': len(payload.product_ids or []),
+                'plan_id': payload.local_plan_template_id,
+            },
+        })
+        raise _dxm_session_busy_http_exception() from exc
+    except (DxmPlanReaderError, DxmDraftReaderError, PlanContractError, PlanSchemaError) as exc:
+        record_best_effort({
+            'actor': 'operator',
+            'component': 'plan',
+            'action': 'preview',
+            'phase': 'blocked',
+            'status': 'blocked',
+            'reason': exc.reason_code,
+            'correlation_id': f"preview-{payload.local_plan_template_id}",
+            'root_correlation_id': f"plan-{payload.local_plan_template_id}",
+            'store_id': payload.shop_id,
+            'input': {
+                'product_count': len(payload.product_ids or []),
+                'plan_id': payload.local_plan_template_id,
+            },
+        })
+        raise HTTPException(
+            status_code=getattr(exc, "status_code", 409),
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/plan-snapshots', status_code=201)
+def freeze_plan_snapshot(payload: PlanSnapshotRequest):
+    try:
+        if payload.expected_snapshot_hash is None:
+            raise PlanContractError(
+                "PLAN_SNAPSHOT_PREVIEW_REQUIRED",
+                "冻结前必须提交刚刚预览得到的 snapshot hash",
+            )
+        if payload.idempotency_key is None:
+            raise PlanContractError(
+                "PLAN_SNAPSHOT_IDEMPOTENCY_REQUIRED",
+                "冻结与建任务必须提交稳定的 idempotency_key",
+            )
+        authoritative = _run_login_flow(
+            DxmPlanReader(workflow_adapter).build_snapshot_request,
+            local_plan_template_id=payload.local_plan_template_id,
+            shop_id=payload.shop_id,
+            product_ids=payload.product_ids,
+            expected_session_ref=payload.session_ref,
+            target_category_id=payload.target_category_id,
+            target_category_name=payload.target_category_name,
+            target_category_match=payload.target_category_match,
+            fail_if_busy=True,
+        )
+        service = E2PlanService(
+            capability_checker=WorkflowMandatoryCapabilityChecker(workflow_adapter)
+        )
+        service.sync_dxm_template_refs(
+            authoritative["template_records"],
+            shop_id=authoritative["request"]["shop_id"],
+            category_ids=authoritative["category_ids"],
+        )
+        return service.freeze_plan_snapshot(
+            authoritative["request"],
+            expected_snapshot_hash=payload.expected_snapshot_hash,
+            idempotency_key=payload.idempotency_key,
+        )
+    except DxmSessionBusyError as exc:
+        raise _dxm_session_busy_http_exception() from exc
+    except (DxmPlanReaderError, DxmDraftReaderError, PlanContractError, PlanSchemaError) as exc:
+        raise HTTPException(
+            status_code=getattr(exc, "status_code", 409),
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.get('/api/plan-snapshots/{snapshot_id}')
+def get_plan_snapshot(snapshot_id: int):
+    try:
+        return E2PlanService().get_plan_snapshot(snapshot_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/plan-snapshots/{snapshot_id}/tasks', status_code=201)
+def create_batch_draft_save_task(snapshot_id: int):
+    try:
+        return E2PlanService().create_task_from_snapshot(snapshot_id, repo)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
 @app.post('/api/templates')
 def create_template(payload: TemplateCreate):
     data = payload.model_dump()
@@ -834,13 +1761,35 @@ def import_products(payload: ProductImportRequest):
 
 
 @app.get('/api/tasks')
-def list_tasks():
-    return repo.list_tasks()
+def list_tasks(
+    mode: str | None = Query(default=None, min_length=1, max_length=64),
+    view: str = Query(default='full', pattern=r'^(?:full|summary)$'),
+):
+    if view == 'summary':
+        return repo.list_task_summaries(mode=mode)
+    tasks = repo.list_tasks()
+    if mode is not None:
+        tasks = [task for task in tasks if str(task.get('mode') or '') == mode]
+    return [_with_public_worker_control(task) for task in tasks]
 
 
 @app.get('/api/tasks/{task_id}')
 def get_task(task_id: int):
-    return repo.get_task(task_id)
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    return _with_public_worker_control(task)
+
+
+def _with_public_worker_control(task: dict | None) -> dict | None:
+    if not task:
+        return task
+    control = repo.public_task_worker_control(task)
+    if control is None:
+        return task
+    public = dict(task)
+    public['workerControl'] = control
+    return public
 
 
 @app.post('/api/tasks')
@@ -852,19 +1801,38 @@ def create_task(payload: TaskCreate):
 
 @app.patch('/api/tasks/{task_id}/config-overrides')
 def update_task_config_overrides(task_id: int, payload: TaskConfigOverrideRequest):
+    candidate = repo.get_task(task_id)
+    if not candidate:
+        raise HTTPException(status_code=404, detail='Task not found')
+    if str(candidate.get('mode') or '') == 'batch_draft_save':
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_PLAN_SNAPSHOT_IMMUTABLE',
+                'message': '冻结后的批量草稿任务不接受配置覆盖；请重新预览并冻结新快照。',
+            },
+        )
     section = payload.section.strip().lower().replace('-', '_').replace(' ', '_')
     if section not in DEFAULT_TEMPLATE_TYPES:
         raise HTTPException(status_code=400, detail=f'Unsupported config override section: {payload.section}')
     values = _normalize_config_override_values(section, payload.values)
     _assert_executable_dxm_reference_payload(section, values)
-    task = repo.update_task_template_override(task_id, section, values)
-    if not task:
-        raise HTTPException(status_code=404, detail='Task not found')
-    return task
+    return repo.update_task_template_override(task_id, section, values)
 
 
 @app.post('/api/tasks/{task_id}/manual-approval')
 def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
+    candidate = repo.get_task_private(task_id)
+    if not candidate:
+        raise HTTPException(status_code=404, detail='Task not found')
+    if str(candidate.get('mode') or '') == 'batch_draft_save':
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_APPROVAL_REQUIRES_ATOMIC_START',
+                'message': '批量草稿只保存必须使用原子“批准并开始”，不会签发可悬置令牌。',
+            },
+        )
     required_confirmation = _assert_task_can_receive_manual_approval(task_id, payload)
     task_before_approval = repo.get_task_private(task_id)
     if not task_before_approval:
@@ -915,7 +1883,25 @@ def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
                 'message': '任务已批准，但无法读取批准后的任务状态。',
             },
         )
-    approval = (task.get('payload') or {}).get('manual_approval') or {}
+    private_task = repo.get_task_private(task_id)
+    private_approval = (
+        (private_task.get('payload') or {}).get('manual_approval')
+        if isinstance(private_task, Mapping)
+        else None
+    )
+    if not isinstance(private_approval, Mapping):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'reason_code': 'TASK_APPROVAL_EVIDENCE_MISSING',
+                'message': '任务已批准，但无法读取授权租约证据。',
+            },
+        )
+    approval = {
+        key: value
+        for key, value in private_approval.items()
+        if key != 'token_hash'
+    }
     return {
         'ok': True,
         'taskId': task_id,
@@ -925,6 +1911,80 @@ def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
         'approvedAt': approval.get('approved_at'),
         'l2GateStatus': 'passed',
         'manualApproval': approval,
+    }
+
+
+@app.post('/api/tasks/{task_id}/approve-and-start')
+async def approve_and_start_task_for_real_dxm(
+    task_id: int,
+    payload: TaskManualApprovalRequest,
+):
+    required_confirmation = _assert_task_can_receive_manual_approval(task_id, payload)
+    _assert_workflow_runtime_healthy()
+    record_best_effort({
+        'actor': 'operator',
+        'component': 'task',
+        'action': 'approve_and_start',
+        'phase': 'requested',
+        'status': 'ok',
+        'correlation_id': f"approve-{task_id}",
+        'root_correlation_id': f"task-{task_id}",
+        'task_id': str(task_id),
+        'input': {'confirmation_length': len(getattr(payload, 'confirmation', '') or '')},
+    })
+    task = repo.get_task_private(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    if str(task.get('mode') or '') != 'batch_draft_save':
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'ATOMIC_START_BATCH_DRAFT_ONLY',
+                'message': '原子批准并开始当前仅供 batch_draft_save 使用。',
+            },
+        )
+    l2_gate = l2_real_probe_gate()
+    if l2_gate.get('status') != 'passed':
+        raise HTTPException(
+            status_code=403,
+            detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
+        )
+    authorization_context = _build_task_authorization_context(
+        task,
+        approved_by=payload.approved_by.strip(),
+        l2_gate=l2_gate,
+    )
+    issued_at = _authorization_now()
+    consumed_at = issued_at
+    expires_at = issued_at + timedelta(seconds=AUTHORIZATION_LEASE_TTL_SECONDS)
+    result = repo.approve_and_start_task_with_authorization(
+        task_id,
+        token=secrets.token_urlsafe(24),
+        confirmation=required_confirmation,
+        approved_by=payload.approved_by.strip(),
+        authorization_context=authorization_context,
+        lease_id=uuid.uuid4().hex,
+        issued_at=issued_at.isoformat(),
+        expires_at=expires_at.isoformat(),
+        consumed_at=consumed_at.isoformat(),
+    )
+    if not result.ok:
+        status_code = 404 if result.reason_code == 'AUTH_TASK_NOT_FOUND' else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                'reason_code': result.reason_code,
+                'message': '原子批准并开始失败；任务未被部分批准或重复派发。',
+            },
+        )
+    asyncio.create_task(runner.run_task(task_id))
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': 'running',
+        'authorizationConsumed': True,
+        'confirmation': required_confirmation,
+        'approvedBy': payload.approved_by.strip(),
     }
 
 
@@ -963,19 +2023,78 @@ def pause_task(task_id: int):
     task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
-    if task.get('mode') in REAL_WRITE_START_MODES:
-        raise HTTPException(status_code=409, detail='Real save task pause is disabled until worker pause acknowledgements are implemented')
-    if not repo.try_pause_task(task_id):
-        raise HTTPException(status_code=409, detail='Task is not running')
-    return {'ok': True, 'taskId': task_id, 'status': 'paused'}
+    result = repo.request_pause_task(task_id)
+    if not result.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': result.reason_code,
+                'message': 'Task cannot be paused in its current state',
+                'status': result.status or task.get('status'),
+            },
+        )
+    public = result.as_public_dict()
+    repo.add_log(
+        task_id,
+        None,
+        'info',
+        '操作员请求暂停；等待 worker 在商品安全点确认',
+        {
+            'reason_code': result.reason_code,
+            'status': result.status,
+            'worker_control': public.get('workerControl'),
+        },
+    )
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': result.status,
+        'reasonCode': result.reason_code,
+        'applied': result.applied,
+        'idempotent': result.idempotent,
+        'workerControl': public.get('workerControl'),
+        'message': '暂停已请求；worker 确认前任务仍可能完成当前商品',
+    }
 
 
 @app.post('/api/tasks/{task_id}/resume')
-def resume_task(task_id: int):
+async def resume_task(task_id: int):
     task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
-    raise HTTPException(status_code=409, detail='Resume is disabled until worker resume acknowledgements are implemented')
+    result = repo.request_resume_task(task_id)
+    if not result.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': result.reason_code,
+                'message': 'Task cannot be resumed until pause is worker-acked and task is paused',
+                'status': result.status or task.get('status'),
+            },
+        )
+    public = result.as_public_dict()
+    repo.add_log(
+        task_id,
+        None,
+        'info',
+        '操作员继续任务；runner 将跳过已完成商品',
+        {
+            'reason_code': result.reason_code,
+            'status': result.status,
+            'worker_control': public.get('workerControl'),
+        },
+    )
+    asyncio.create_task(runner.run_task(task_id))
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': result.status,
+        'reasonCode': result.reason_code,
+        'applied': result.applied,
+        'idempotent': result.idempotent,
+        'workerControl': public.get('workerControl'),
+        'message': '已从暂停点继续；已完成保存不会重做',
+    }
 
 
 @app.post('/api/tasks/{task_id}/stop')
@@ -983,10 +2102,38 @@ def stop_task(task_id: int):
     task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
-    if task.get('mode') in REAL_WRITE_START_MODES:
-        raise HTTPException(status_code=409, detail='Real save task stop is disabled until worker stop acknowledgements are implemented')
-    repo.update_task_status(task_id, 'cancelled')
-    return {'ok': True, 'taskId': task_id, 'status': 'cancelled'}
+    result = repo.request_stop_task(task_id)
+    if not result.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': result.reason_code,
+                'message': 'Task cannot be stopped in its current state',
+                'status': result.status or task.get('status'),
+            },
+        )
+    public = result.as_public_dict()
+    repo.add_log(
+        task_id,
+        None,
+        'warning',
+        '操作员请求停止；等待 worker 安全收敛后确认',
+        {
+            'reason_code': result.reason_code,
+            'status': result.status,
+            'worker_control': public.get('workerControl'),
+        },
+    )
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': result.status,
+        'reasonCode': result.reason_code,
+        'applied': result.applied,
+        'idempotent': result.idempotent,
+        'workerControl': public.get('workerControl'),
+        'message': '停止已请求；当前商品安全收敛后不再派发新商品',
+    }
 
 
 @app.get('/api/exceptions')
@@ -1123,6 +2270,60 @@ def _runtime_control_restart_block_detail() -> str:
     return '当前后端不是由 DXM Agent Console 或 start-mvp 启动器托管，无法通过 UI 重启服务。请关闭当前 Python 进程后重新打开免安装版 exe。'
 
 
+@app.get('/api/operation-audit/events')
+def list_operation_audit_events(
+    status: str | None = None,
+    task_id: str | None = None,
+    product_id: str | None = None,
+    component: str | None = None,
+    phase: str | None = None,
+    reason: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+):
+    listed = get_audit_service().list_events(
+        status=status,
+        task_id=task_id,
+        product_id=product_id,
+        component=component,
+        phase=phase,
+        reason=reason,
+        limit=limit,
+        offset=offset,
+    )
+    listed['chain'] = get_audit_service().verify_chain()
+    return listed
+
+
+@app.post('/api/operation-audit/client-events')
+def record_operation_audit_client_event(payload: dict[str, Any]):
+    event = dict(payload or {})
+    event.setdefault('actor', 'operator')
+    event.setdefault('component', 'workbench')
+    event.setdefault('action', 'page_switch')
+    event.setdefault('phase', 'completed')
+    event.setdefault('status', 'ok')
+    stored = record_best_effort(event)
+    if stored.get('degraded'):
+        return {'ok': False, 'audit_degraded': True, 'reason_code': 'AUDIT_DEGRADED'}
+    return {'ok': True, 'event': stored}
+
+
+@app.post('/api/operation-audit/export')
+def export_operation_audit_package():
+    export_dir = DATA_DIR / 'operation-audit'
+    export_dir.mkdir(parents=True, exist_ok=True)
+    dest = export_dir / f"dxm-audit-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
+    try:
+        result = get_audit_service().export_diagnostic_zip(dest)
+    except OperationAuditError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    return result
+
+
 @app.get('/api/runtime/status')
 def runtime_status(frontend_url: str | None = None):
     frontend_url = _runtime_frontend_url(frontend_url)
@@ -1155,6 +2356,9 @@ def runtime_status(frontend_url: str | None = None):
         'realBrowser': real_browser_status,
         'dxmLogin': {
             'status': str(dxm_state.get('status') or dxm_state.get('stage') or 'unknown'),
+            'reasonCode': dxm_state.get('reason_code'),
+            'loggedIn': dxm_state.get('logged_in') is True,
+            'readerReady': dxm_state.get('reader_ready') is True,
             'currentUrl': dxm_state.get('current_url') or dxm_state.get('url') or dxm_state.get('page_url'),
             'pageTitle': dxm_state.get('page_title') or dxm_state.get('title'),
             'browserVisible': bool(dxm_state.get('browser_visible')),
@@ -1162,6 +2366,7 @@ def runtime_status(frontend_url: str | None = None):
             'message': dxm_state.get('message'),
             'nextAction': dxm_state.get('next_action'),
         },
+        'operationAudit': get_audit_service().verify_chain(),
         'l2ReadonlyProbe': _l2_probe_lock_status(),
         'dependencies': {
             'python': {
@@ -1482,7 +2687,11 @@ def runtime_control(payload: RuntimeControlRequest):
     if action == 'clear_stuck_tasks':
         cleared: list[dict] = []
         skipped: list[dict] = []
-        candidates = [task for task in repo.list_tasks() if task.get('status') in {'running', 'paused'}]
+        candidates = [
+            task
+            for task in repo.list_tasks()
+            if task.get('status') in {'running', 'pause_requested', 'stop_requested', 'paused'}
+        ]
         for task in candidates:
             task_id = task.get('id')
             mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
@@ -2637,25 +3846,95 @@ def _current_git_summary():
     try:
         head = subprocess.check_output(
             ['git', '-C', str(REPO_ROOT), 'rev-parse', 'HEAD'],
-            text=True,
             stderr=subprocess.DEVNULL,
-        ).strip()
-        status_short = subprocess.check_output(
-            ['git', '-C', str(REPO_ROOT), 'status', '--short'],
-            text=True,
+        ).decode('utf-8', errors='strict').strip()
+        status_raw = subprocess.check_output(
+            [
+                'git', '-C', str(REPO_ROOT), 'status',
+                '--porcelain=v1', '-z', '-uall',
+            ],
             stderr=subprocess.DEVNULL,
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
+        )
+        source_paths_raw = subprocess.check_output(
+            [
+                'git', '-C', str(REPO_ROOT), 'ls-files', '-z',
+                '--cached', '--others', '--exclude-standard', '--',
+                'app/backend/src',
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+        source_paths = sorted(
+            {
+                value.decode('utf-8', errors='strict').replace('\\', '/')
+                for value in source_paths_raw.split(b'\0')
+                if value
+            }
+        )
+        source_root = (REPO_ROOT / 'app' / 'backend' / 'src').resolve()
+        tree_hasher = hashlib.sha256()
+        source_file_count = 0
+        for relative in source_paths:
+            candidate = (REPO_ROOT / Path(relative)).resolve()
+            try:
+                candidate.relative_to(source_root)
+            except ValueError as exc:
+                raise OSError('execution source path escaped app/backend/src') from exc
+            if not candidate.is_file():
+                continue
+            content_digest = hashlib.sha256(candidate.read_bytes()).digest()
+            encoded_path = relative.encode('utf-8')
+            tree_hasher.update(len(encoded_path).to_bytes(8, 'big'))
+            tree_hasher.update(encoded_path)
+            tree_hasher.update(content_digest)
+            source_file_count += 1
+        status_entries = [value for value in status_raw.split(b'\0') if value]
+    except (OSError, UnicodeError, subprocess.CalledProcessError):
         return {
             'head': None,
             'status_short': None,
             'is_dirty': None,
+            'status_count': None,
+            'status_sha256': None,
+            'execution_file_count': None,
+            'execution_tree_sha256': None,
         }
     return {
         'head': head,
-        'status_short': status_short,
-        'is_dirty': bool(status_short),
+        'status_short': status_raw.decode('utf-8', errors='replace').replace('\0', '\n').strip(),
+        'is_dirty': bool(status_entries),
+        'status_count': len(status_entries),
+        'status_sha256': hashlib.sha256(status_raw).hexdigest().upper(),
+        'execution_file_count': source_file_count,
+        'execution_tree_sha256': tree_hasher.hexdigest().upper(),
     }
+
+
+def _current_execution_worktree_identity(
+    summary: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    summary = summary if isinstance(summary, Mapping) else _current_git_summary()
+    identity = {
+        'schema': 'dxm.git-worktree.identity.v1',
+        'git_head': summary.get('head'),
+        'git_dirty': summary.get('is_dirty'),
+        'status_count': summary.get('status_count'),
+        'status_sha256': summary.get('status_sha256'),
+        'execution_file_count': summary.get('execution_file_count'),
+        'execution_tree_sha256': summary.get('execution_tree_sha256'),
+    }
+    if (
+        not isinstance(identity['git_head'], str)
+        or type(identity['git_dirty']) is not bool
+        or type(identity['status_count']) is not int
+        or not isinstance(identity['status_sha256'], str)
+        or type(identity['execution_file_count']) is not int
+        or not isinstance(identity['execution_tree_sha256'], str)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail='AUTH_WORKTREE_IDENTITY_UNAVAILABLE: exact execution worktree identity is required',
+        )
+    return identity
 
 
 def _current_real_dxm_gate_summary():
@@ -2801,10 +4080,29 @@ def _current_browser_session_id() -> str:
 def _build_task_stage_facts(task: dict[str, Any]) -> dict[str, Any]:
     payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
     jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
-    if len(jobs) != 1:
-        raise HTTPException(status_code=409, detail='AUTH_TASK_JOB_SHAPE_MISMATCH: exactly one job is required')
-    job = jobs[0]
+    mode = str(task.get('mode') or payload.get('execution_mode') or '')
     try:
+        if mode == 'batch_draft_save':
+            return build_batch_draft_save_task_facts(
+                task_id=int(task['id']),
+                store_id=int(task['store_id']),
+                product_ids=payload.get('product_ids') or [job.get('product_id') for job in jobs],
+                plan_snapshot_id=int(payload.get('plan_snapshot_id') or 0),
+                plan_snapshot_hash=str(
+                    payload.get('plan_snapshot_hash')
+                    or ((payload.get('plan_snapshot') or {}).get('snapshot_hash') if isinstance(payload.get('plan_snapshot'), dict) else '')
+                    or ''
+                ),
+                path=str(payload.get('path') or ((payload.get('plan_snapshot') or {}).get('path') if isinstance(payload.get('plan_snapshot'), dict) else 'A') or 'A'),
+            )
+        if mode != 'single_save':
+            raise HTTPException(
+                status_code=409,
+                detail='AUTH_TASK_MODE_MISMATCH: task is not an authorized save-only mode',
+            )
+        if len(jobs) != 1:
+            raise HTTPException(status_code=409, detail='AUTH_TASK_JOB_SHAPE_MISMATCH: exactly one job is required')
+        job = jobs[0]
         product = repo.get_product(int(job['product_id']))
         if not product:
             raise HTTPException(status_code=409, detail='AUTH_PRODUCT_NOT_FOUND: product-box item is unavailable')
@@ -2821,7 +4119,9 @@ def _build_task_stage_facts(task: dict[str, Any]) -> dict[str, Any]:
             product_id=int(product['id']),
             product_box_snapshot_fingerprint=str(payload['product_box_snapshot_fingerprint']),
         )
-    except (KeyError, TypeError, ValueError, SaveOnlyContractError) as exc:
+    except HTTPException:
+        raise
+    except (KeyError, TypeError, ValueError, SaveOnlyContractError, BatchDraftAuthorizationError) as exc:
         reason_code = getattr(exc, 'reason_code', 'AUTH_TASK_FACTS_INVALID')
         raise HTTPException(status_code=409, detail=f'{reason_code}: exact save-only task facts are invalid') from exc
 
@@ -2832,22 +4132,41 @@ def _build_task_authorization_context(
     approved_by: str,
     l2_gate: dict[str, Any],
 ) -> dict[str, Any]:
-    git_head = str(_current_git_summary().get('head') or '').strip()
-    try:
-        return build_authorization_context(
-            stage_task_facts=_build_task_stage_facts(task),
-            runtime_instance_id=str(runtime_identity.instance_id),
-            browser_session_id=_current_browser_session_id(),
-            git_head=git_head,
-            l2_evidence_fingerprint=_l2_authorization_fingerprint(l2_gate),
-            approved_by=approved_by,
+    git_summary = _current_git_summary()
+    git_head = str(git_summary.get('head') or '').strip()
+    mode = str(
+        task.get('mode')
+        or (
+            task.get('payload', {}).get('execution_mode')
+            if isinstance(task.get('payload'), Mapping)
+            else ''
         )
-    except SaveOnlyContractError as exc:
+        or ''
+    ).strip()
+    try:
+        common = {
+            'stage_task_facts': _build_task_stage_facts(task),
+            'runtime_instance_id': str(runtime_identity.instance_id),
+            'browser_session_id': _current_browser_session_id(),
+            'git_head': git_head,
+            'l2_evidence_fingerprint': _l2_authorization_fingerprint(l2_gate),
+            'approved_by': approved_by,
+        }
+        if mode == 'batch_draft_save':
+            return build_batch_authorization_context(
+                **common,
+                worktree_identity=_current_execution_worktree_identity(git_summary),
+            )
+        return build_save_authorization_context(**common)
+    except (SaveOnlyContractError, BatchDraftAuthorizationError) as exc:
         raise HTTPException(status_code=409, detail=f'{exc.reason_code}: authorization context is invalid') from exc
 
 
 def _verify_runner_authorization(task_id: int, mode: str, state: str) -> dict[str, Any]:
-    required_state = 'SAVE_ONLY' if mode == 'single_save' else None
+    required_state = {
+        'single_save': 'SAVE_ONLY',
+        'batch_draft_save': 'SAVE_ONLY',
+    }.get(mode)
     if required_state is None or state != required_state:
         return {'ok': False, 'reason_code': 'AUTH_MUTATION_SCOPE_MISMATCH'}
     task = repo.get_task_private(task_id)
@@ -2917,10 +4236,13 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     if task.get('status') != 'draft':
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
-    _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
-    _assert_single_save_uses_product_box_item((task.get('payload') or {}).get('product_ids') or [])
-    if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
+    if mode == 'batch_draft_save':
+        _assert_batch_draft_save_task_scope(task)
+    else:
+        _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+        _assert_single_save_uses_product_box_item((task.get('payload') or {}).get('product_ids') or [])
+        if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
     required_confirmation = L3_CONFIRMATION
     if not request.approved_by or not request.approved_by.strip():
         raise HTTPException(status_code=400, detail='approved_by is required')
@@ -2979,10 +4301,13 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> dict[str,
     _assert_workflow_runtime_healthy()
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
-    _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
-    _assert_single_save_uses_product_box_item(payload.get('product_ids') or [])
-    if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
+    if mode == 'batch_draft_save':
+        _assert_batch_draft_save_task_scope(task)
+    else:
+        _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+        _assert_single_save_uses_product_box_item(payload.get('product_ids') or [])
+        if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
 
     approval = payload.get('manual_approval') or {}
     if not isinstance(approval, dict):
@@ -3055,6 +4380,140 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
         _assert_single_save_uses_product_box_item(
             payload.product_ids,
             expected_store_id=payload.store_id,
+        )
+    if mode == 'batch_draft_save':
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'reason_code': 'BATCH_DRAFT_SAVE_CREATE_VIA_SNAPSHOT_ONLY',
+                'message': 'batch_draft_save tasks must be created from a frozen plan_snapshot, not /api/tasks',
+            },
+        )
+
+
+def _assert_batch_draft_save_task_scope(task: dict[str, Any]) -> None:
+    payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
+    if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
+        raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
+    plan = payload.get('plan_snapshot') if isinstance(payload.get('plan_snapshot'), dict) else {}
+    payload_path = str(payload.get('path') or '').strip().upper()
+    snapshot_path = str(plan.get('path') or '').strip().upper()
+    snapshot_hash = str(payload.get('plan_snapshot_hash') or plan.get('snapshot_hash') or '').strip()
+    snapshot_id = payload.get('plan_snapshot_id')
+    if (
+        not plan
+        or not snapshot_hash
+        or not isinstance(snapshot_id, int)
+        or isinstance(snapshot_id, bool)
+        or snapshot_id <= 0
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_PLAN_SNAPSHOT_REQUIRED',
+                'message': 'batch_draft_save requires a frozen plan_snapshot id and hash',
+            },
+        )
+    if plan and str(plan.get('snapshot_hash') or '').strip() and str(plan.get('snapshot_hash')).strip() != snapshot_hash:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_PLAN_SNAPSHOT_HASH_MISMATCH',
+                'message': 'task plan_snapshot_hash does not match embedded plan_snapshot',
+            },
+        )
+    if payload_path not in ('A', 'B') or snapshot_path not in ('A', 'B'):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'reason_code': 'BATCH_PATH_REQUIRED',
+                'message': 'batch_draft_save requires path=A or path=B',
+            },
+        )
+    if (
+        not is_plan_execution_path_released(payload_path)
+        or not is_plan_execution_path_released(snapshot_path)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'reason_code': 'BATCH_PATH_B_FORBIDDEN',
+                'contract_reason_code': PLAN_PATH_EXECUTION_NOT_RELEASED,
+                'message': 'Path B 双保存授权、派发、账本和证据合同尚未完整接通，真实执行保持锁定。',
+            },
+        )
+    if payload_path != snapshot_path:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_PATH_MISMATCH',
+                'message': '任务路径必须与冻结方案路径完全一致。',
+            },
+        )
+    if payload.get('publish_allowed') is True or plan.get('publish_allowed') is True:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'reason_code': 'BATCH_PUBLISH_FORBIDDEN',
+                'message': 'batch_draft_save forbids publish_allowed=true',
+            },
+        )
+    try:
+        E2PlanService().assert_task_snapshot_binding(task)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+            },
+        ) from exc
+    product_ids = payload.get('product_ids')
+    if not isinstance(product_ids, list) or not product_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_PRODUCT_IDS_REQUIRED',
+                'message': 'batch_draft_save requires one or more product_ids from the frozen snapshot',
+            },
+        )
+    if any(isinstance(item, bool) or not isinstance(item, int) or item <= 0 for item in product_ids):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_PRODUCT_IDS_INVALID',
+                'message': 'batch_draft_save product_ids must be positive integers',
+            },
+        )
+    if len(set(product_ids)) != len(product_ids):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_PRODUCT_DUPLICATE',
+                'message': 'batch_draft_save product_ids must be unique',
+            },
+        )
+    jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
+    job_product_ids = [
+        int(job['product_id'])
+        for job in jobs
+        if isinstance(job, dict) and not isinstance(job.get('product_id'), bool) and isinstance(job.get('product_id'), int)
+    ]
+    if job_product_ids != [int(value) for value in product_ids]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_JOB_PRODUCT_MISMATCH',
+                'message': 'batch_draft_save jobs must match frozen product_ids',
+            },
+        )
+    if payload.get('publish_allowed') is True:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'reason_code': 'BATCH_PUBLISH_FORBIDDEN',
+                'message': 'batch_draft_save forbids publish_allowed=true',
+            },
         )
 
 
@@ -3137,7 +4596,7 @@ def _assert_single_save_product_count(payload: dict[str, Any], *, status_code: i
     ):
         raise HTTPException(
             status_code=status_code,
-            detail='single_save requires exactly one positive product id',
+            detail='single_save requires exactly one product with a positive product id',
         )
 
 
@@ -3154,6 +4613,88 @@ def _assert_direct_real_dxm_mutation_allowed(_payload: DraftBoxActionRequest) ->
     )
 
 
+# ============================================================
+# 批量保存安全门禁
+# ============================================================
+
+
+class BatchPauseError(Exception):
+    """批量执行暂停异常"""
+    def __init__(self, reason: str, rollback_required: bool = False, field_changes: list = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.rollback_required = rollback_required
+        self.field_changes = field_changes or []
+
+
+class BatchRollbackCompleteError(Exception):
+    """批量回滚完成异常"""
+    def __init__(self, reason: str, field_changes: list):
+        super().__init__(reason)
+        self.reason = reason
+        self.field_changes = field_changes
+
+
+def _assert_semi_managed_detect_allowed(detect_result: dict) -> None:
+    """半托管检测失败门禁 - 检测失败必须暂停并回滚"""
+    if not detect_result.get("pass", False):
+        error_type = detect_result.get("error_type", "unknown")
+        error_message = detect_result.get("error_message", "未知错误")
+
+        if error_type == "product_missing":
+            raise BatchPauseError(
+                reason=f"店小秘返回：仿品检测未通过 - {error_message}",
+                rollback_required=True,
+            )
+        else:
+            raise BatchPauseError(
+                reason=f"半托管检测失败：{error_message}",
+                rollback_required=True,
+            )
+
+
+def _assert_video_generation_failure_handled(
+    error_type: str,
+    strategy: str,
+    error_message: str,
+) -> None:
+    """视频生成失败处理门禁"""
+    if error_type == "quota_exhausted":
+        if strategy == "pause":
+            raise BatchPauseError(
+                reason=f"店小秘返回：免费额度已用完，根据策略暂停执行 - {error_message}",
+                rollback_required=False,
+            )
+        # else: strategy == "ignore"，继续执行
+    elif error_type in ("program_error", "timeout", "page_error"):
+        # 程序问题失败必须暂停
+        raise BatchPauseError(
+            reason=f"视频生成失败（{error_type}）：{error_message}",
+            rollback_required=True,
+        )
+
+
+def _assert_translate_allowed(translate_result: dict) -> None:
+    """翻译失败门禁"""
+    if not translate_result.get("success", True):
+        raise BatchPauseError(
+            reason=f"翻译执行失败：{translate_result.get('error_message', '未知错误')}",
+            rollback_required=False,
+        )
+
+
+def _assert_batch_rollback_completed(
+    rollback_result: dict,
+    reason: str,
+) -> None:
+    """回滚完成门禁"""
+    if not rollback_result.get("success", True):
+        raise BatchRollbackCompleteError(
+            reason=f"回滚未完成：{rollback_result.get('error_message', '未知错误')}。原暂停原因：{reason}",
+            field_changes=rollback_result.get("field_changes", []),
+        )
+
+
 def _task_store_name(task: dict) -> str:
     payload = task.get('payload') or {}
     if payload.get('store_name'):
@@ -3167,13 +4708,37 @@ def _task_store_name(task: dict) -> str:
     return ''
 
 
-def _run_login_flow(func, *args, **kwargs):
-    return login_flow_executor.submit(func, *args, **kwargs).result()
+class DxmSessionBusyError(RuntimeError):
+    """The visible Playwright session is already serving another API call."""
+
+
+def _dxm_session_busy_http_exception() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            'reason_code': 'DXM_SESSION_BUSY',
+            'message': '真实可见浏览器正在处理上一条会话操作；请求未排队，请稍后重试。',
+        },
+    )
+
+
+def _run_login_flow(func, *args, fail_if_busy: bool = False, **kwargs):
+    acquired = login_flow_api_lock.acquire(blocking=not fail_if_busy)
+    if not acquired:
+        raise DxmSessionBusyError('DXM_SESSION_BUSY')
+    try:
+        return browser_agent_runtime.run_session_operation(func, *args, **kwargs)
+    finally:
+        login_flow_api_lock.release()
 
 
 def _login_flow_failure_state(label: str, message: str, next_action: str, raw_error: str | None = None) -> dict[str, Any]:
     return {
+        'ok': False,
         'stage': 'login_failed',
+        'reason_code': 'VISIBLE_SESSION_OPERATION_FAILED',
+        'logged_in': False,
+        'reader_ready': False,
         'label': label,
         'message': message,
         'next_action': next_action,

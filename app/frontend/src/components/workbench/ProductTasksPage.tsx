@@ -3,8 +3,11 @@ import type {
   DeliveryWorkspace,
   RuntimeStatus,
   Task,
+  TaskWorkerControl,
 } from '../../types'
+import { isTaskControlActive } from '../../taskControl'
 import { humanTaskDisplayName, humanOperatorMessage } from './workbenchCopy'
+import { TaskControlKeys } from './TaskControlKeys'
 
 type ProductTasksPageProps = {
   workspace: DeliveryWorkspace
@@ -20,6 +23,9 @@ type ProductTasksPageProps = {
   onSelectTask: (taskId: number) => void
   onRunL2Probe: () => void
   onStartTask: (taskId: number) => void
+  onPauseTask: (taskId: number) => void
+  onResumeTask: (taskId: number) => void
+  onStopTask: (taskId: number) => void
   onShowDxmAccess: () => void
   onShowConfig: () => void
   onShowDraftEdit: () => void
@@ -43,6 +49,9 @@ export function ProductTasksPage({
   onSelectTask,
   onRunL2Probe,
   onStartTask,
+  onPauseTask,
+  onResumeTask,
+  onStopTask,
   onShowDxmAccess,
   onShowConfig,
   onShowDraftEdit,
@@ -51,6 +60,7 @@ export function ProductTasksPage({
 }: ProductTasksPageProps) {
   const currentTask = selectedTask && isOperatorTask(selectedTask) ? selectedTask : firstOperatorTask(workspace.tasks)
   const taskRows = workspace.tasks.filter(isOperatorTask).slice(0, 8)
+  const showControlKeys = Boolean(currentTask && isTaskControlActive(currentTask.status))
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const currentApprover = l3ApprovedBy.trim()
@@ -134,10 +144,25 @@ export function ProductTasksPage({
         </div>
 
         <div className="action-row">
-          <button className="button button--primary" type="button" onClick={primaryAction} disabled={primaryDisabled}>
+          <button className="button button--primary" type="button" onClick={primaryAction} disabled={primaryDisabled || showControlKeys}>
             {decision.cta}
           </button>
         </div>
+
+        {currentTask && showControlKeys && (
+          <TaskControlKeys
+            taskId={currentTask.id}
+            status={currentTask.status}
+            workerControl={resolveTaskWorkerControl(currentTask)}
+            busy={busy}
+            showStart={false}
+            completedJobs={currentTask.completed_jobs}
+            totalJobs={currentTask.total_jobs}
+            onPause={onPauseTask}
+            onResume={onResumeTask}
+            onStop={onStopTask}
+          />
+        )}
 
         {currentTask?.mode === 'single_save' && l2Gate?.status !== 'passed' && (
           <div className="gate-note">
@@ -199,7 +224,7 @@ function isOperatorTask(task: Task) {
 }
 
 function isActionableSingleSaveTask(task: Task) {
-  return task.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(task.status)
+  return task.mode === 'single_save' && !['completed', 'partial_success', 'cancelled', 'stopped', 'archived'].includes(task.status)
 }
 
 function isDxmLoggedIn(runtimeStatus: RuntimeStatus | null, runtimeStatusError: string | null) {
@@ -231,11 +256,23 @@ function buildTaskDecision({
   if (!task) {
     return decision('go_draft_edit', 'warn', '还没有保存任务', '当前没有可启动的单商品只保存任务。', '直接读取商品箱现有商品并创建只保存批次。', '读取商品箱范围', false)
   }
-  if (task.status === 'completed') {
+  if (task.status === 'completed' || task.status === 'partial_success') {
     return decision('show_reports', 'ok', '任务已完成', '当前任务已经结束，不能重复启动。', '查看保存结果和未发布证明。', '查看保存结果', false)
   }
   if (task.status === 'running') {
-    return decision('none', 'ok', '任务正在运行', '系统正在控制真实浏览器，避免重复启动。', '保持当前页等待状态更新；独立诊断浏览器不是执行入口。', '任务执行中', true)
+    return decision('none', 'ok', '任务正在运行', '系统正在控制真实浏览器，避免重复启动。可用下方四键请求暂停或停止。', '保持当前页等待状态更新；暂停/停止须 worker 在商品安全点确认。', '任务执行中', true)
+  }
+  if (task.status === 'pause_requested') {
+    return decision('none', 'warn', '暂停确认中', '操作员已请求暂停，等待 worker 在当前商品结束后确认。', '确认前不能继续；如需终止可请求停止。', '等待 worker 确认暂停', true)
+  }
+  if (task.status === 'paused') {
+    return decision('none', 'ok', '任务已暂停', 'worker 已确认暂停；已完成保存不会重做。', '使用下方四键继续或停止。', '已暂停', true)
+  }
+  if (task.status === 'stop_requested') {
+    return decision('none', 'warn', '停止确认中', '操作员已请求停止，等待 worker 安全收敛后确认。', '确认前不再派发新商品。', '等待 worker 确认停止', true)
+  }
+  if (task.status === 'stopped' || task.status === 'cancelled') {
+    return decision('show_reports', 'warn', '任务已停止', 'worker 已确认停止或任务已取消，不能重复启动。', '查看已完成结果与剩余未派发商品。', '查看保存结果', false)
   }
   if (task.status !== 'draft') {
     return decision('go_draft_edit', 'warn', '当前任务不可直接启动', '这条任务不是草稿状态。', '重新从商品箱商品创建编辑保存任务。', '去商品箱编辑保存', false)
@@ -310,11 +347,25 @@ function taskStatusLabel(status: string) {
   return ({
     draft: '待启动',
     running: '运行中',
+    pause_requested: '暂停确认中',
+    paused: '已暂停',
+    stop_requested: '停止确认中',
+    stopped: '已停止',
     completed: '已完成',
+    partial_success: '部分成功',
     failed: '失败',
     cancelled: '已取消',
+    needs_manual_review: '待人工复核',
+    unknown: '结果不明',
     archived: '已归档',
   } as Record<string, string>)[status] ?? status
+}
+
+function resolveTaskWorkerControl(task: Task): TaskWorkerControl | null {
+  if (task.workerControl) return task.workerControl
+  const nested = task.payload?.worker_control
+  if (nested && typeof nested === 'object') return nested as TaskWorkerControl
+  return null
 }
 
 function taskModeLabel(mode: string) {

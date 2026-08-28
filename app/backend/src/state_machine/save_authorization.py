@@ -280,7 +280,7 @@ def is_supported_product_detail_url(value: Any) -> bool:
     if host_matches("yangkeduo.com"):
         goods_ids = parse_qs(parsed.query, keep_blank_values=True).get("goods_id", [])
         return (
-            re.fullmatch(r"/goods2?\.html", path, flags=re.IGNORECASE) is not None
+            re.fullmatch(r"/goods\d*\.html", path, flags=re.IGNORECASE) is not None
             and len(goods_ids) == 1
             and re.fullmatch(r"[0-9]+", goods_ids[0]) is not None
         )

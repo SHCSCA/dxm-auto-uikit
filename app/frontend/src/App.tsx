@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getJson, getJsonOrDefault, postJson } from './api'
+import { getJson, getJsonOrDefault, postJson, withDxmSessionBusyRetry } from './api'
 import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
 import { BatchEditPage } from './components/workbench/BatchEditPage'
 import { BatchRecordsPage } from './components/workbench/BatchRecordsPage'
+import { DraftSelectionPage } from './components/workbench/DraftSelectionPage'
+import { BatchSavePlaceholderPage } from './components/workbench/BatchSavePlaceholderPage'
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
+import { DxmTemplateLibraryPage } from './components/workbench/DxmTemplateLibraryPage'
 import { TemplateCenterPage, type TemplateCenterMode } from './components/workbench/TemplateCenterPage'
 import {
   DxmAccessPage,
@@ -16,8 +19,12 @@ import {
   ReportCenter,
   SystemSettings,
 } from './components/WorkbenchModules'
+import { OperationAuditTimeline } from './components/workbench/OperationAuditTimeline'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
-import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import { DxmShopProvider } from './dxmShopContext'
+import type { ConfirmedDraftTaskInput } from './draftSelection'
+import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, DxmDraftShop, DxmDraftShopsResponse, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import { isTaskControlActive } from './taskControl'
 import { composeWorkspace } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -31,8 +38,8 @@ const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
   draft_box: '商品箱',
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
-const REAL_DXM_MUTATION_MODES = new Set(['single_save', 'batch_save'])
-const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
+const REAL_DXM_MUTATION_MODES = new Set(['single_save', 'batch_save', 'batch_draft_save'])
+const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save', 'batch_draft_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
@@ -162,15 +169,24 @@ export default function App() {
     exceptions: [],
     reports: [],
   }))
+  const [dxmShops, setDxmShops] = useState<DxmDraftShop[]>([])
+  const [dxmShopsSnapshot, setDxmShopsSnapshot] = useState<DxmDraftShopsResponse | null>(null)
+  const [selectedDxmShopId, setSelectedDxmShopId] = useState('')
+  const [dxmShopsLoading, setDxmShopsLoading] = useState(false)
+  const [dxmShopsError, setDxmShopsError] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
   const [activeScopeSnapshot, setActiveScopeSnapshot] = useState<DraftBoxScopeSnapshot | null>(null)
+  const [draftTaskInput, setDraftTaskInput] = useState<ConfirmedDraftTaskInput | null>(null)
   const [editBatches, setEditBatches] = useState<EditBatchSummary[]>([])
+  const [localPlans, setLocalPlans] = useState<LocalPlanTemplate[]>([])
+  const [dxmTemplateRefs, setDxmTemplateRefs] = useState<DxmTemplateRef[]>([])
   const [editBatchStateAvailable, setEditBatchStateAvailable] = useState(false)
   const [templateCenterEntryMode, setTemplateCenterEntryMode] = useState<TemplateCenterMode>('sections')
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [dxmLoginRequestPending, setDxmLoginRequestPending] = useState(false)
   const [agentConsole, setAgentConsole] = useState<AgentConsoleSession | null>(null)
   const [finalCheck, setFinalCheck] = useState<FinalDeliveryCheckSummary | null>(null)
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
@@ -225,13 +241,57 @@ export default function App() {
     agent: 0,
   })
   const lastObservedL2CompletionRef = useRef<string | null>(null)
+  // refreshWorkspace is called by page entry, background polling and sync
+  // completion.  An older Promise.all can finish after a newer template sync
+  // and overwrite its 35 refs with its earlier empty snapshot.  Only the
+  // newest refresh is allowed to commit UI state.
+  const workspaceRefreshGenerationRef = useRef(0)
+  const dxmShopRefreshPromiseRef = useRef<Promise<DxmDraftShopsResponse | null> | null>(null)
 
-  const selectedTask = useMemo(
-    () => workspace.tasks.find((task) => task.id === selectedTaskId && task.mode === 'single_save')
-      ?? workspace.tasks.find((task) => task.mode === 'single_save')
-      ?? null,
-    [selectedTaskId, workspace.tasks],
-  )
+  const refreshDxmShops = useCallback(async (force = false): Promise<DxmDraftShopsResponse | null> => {
+    if (!force && dxmShopsSnapshot) return dxmShopsSnapshot
+    if (dxmShopRefreshPromiseRef.current) return dxmShopRefreshPromiseRef.current
+
+    const refreshPromise = (async (): Promise<DxmDraftShopsResponse | null> => {
+      setDxmShopsLoading(true)
+      setDxmShopsError(null)
+      try {
+        const response = await withDxmSessionBusyRetry(
+          () => getJson<DxmDraftShopsResponse>('/api/dxm/draft-reader/shops'),
+        )
+        setDxmShopsSnapshot(response)
+        setDxmShops(response.shops)
+        setSelectedDxmShopId((current) => (
+          current && response.shops.some((shop) => shop.id === current)
+            ? current
+            : response.shops[0]?.id ?? ''
+        ))
+        return response
+      } catch (error) {
+        // Keep the last verified shop list during a transient login/session
+        // busy window; an empty response must never silently switch shops.
+        setDxmShopsError(error instanceof Error ? error.message : '店铺列表读取失败，请稍后重试。')
+        return null
+      } finally {
+        setDxmShopsLoading(false)
+      }
+    })()
+    dxmShopRefreshPromiseRef.current = refreshPromise
+    try {
+      return await refreshPromise
+    } finally {
+      if (dxmShopRefreshPromiseRef.current === refreshPromise) {
+        dxmShopRefreshPromiseRef.current = null
+      }
+    }
+  }, [dxmShopsSnapshot])
+
+  const selectedTask = useMemo(() => {
+    const isCurrentOperatorTask = (task: Task) => task.mode === 'single_save' || task.mode === 'batch_draft_save'
+    return workspace.tasks.find((task) => task.id === selectedTaskId && isCurrentOperatorTask(task))
+      ?? workspace.tasks.find(isCurrentOperatorTask)
+      ?? null
+  }, [selectedTaskId, workspace.tasks])
   const selectedTaskCompleted = selectedTask?.status === 'completed'
   const visibleOperationError = selectedTaskCompleted && operationError?.includes('保存前安全检查')
     ? null
@@ -243,7 +303,21 @@ export default function App() {
     }
   }, [operationError, selectedTaskCompleted])
 
+  useEffect(() => {
+    void postJson('/api/operation-audit/client-events', {
+      action: 'page_switch',
+      component: 'workbench',
+      phase: 'completed',
+      status: 'ok',
+      correlation_id: `page-${activeSection}`,
+      root_correlation_id: 'workbench',
+      input: { section: activeSection },
+    }).catch(() => undefined)
+  }, [activeSection])
+
   const refreshWorkspace = useCallback(async (options?: { silent?: boolean }) => {
+    const refreshGeneration = workspaceRefreshGenerationRef.current + 1
+    workspaceRefreshGenerationRef.current = refreshGeneration
     const deliveryPath = selectedTaskId ? `/api/delivery/workspace?task_id=${selectedTaskId}` : '/api/delivery/workspace'
     const failures: ApiFailure[] = []
     const loadOrFallback = async <T,>(path: string, fallback: T): Promise<T> => {
@@ -275,6 +349,8 @@ export default function App() {
       exceptions,
       reports,
       batchSummaries,
+      fetchedLocalPlans,
+      fetchedDxmTemplateRefs,
       consoleStatus,
       finalCheckSummary,
     ] = await Promise.all([
@@ -288,6 +364,8 @@ export default function App() {
       loadOrFallback<ExceptionItem[]>('/api/exceptions', []),
       loadOrFallback<Report[]>('/api/reports', []),
       loadOrFallback<EditBatchSummary[]>('/api/edit-batches', []),
+      loadOrFallback<LocalPlanTemplate[]>('/api/local-plan-templates', []),
+      loadOrFallback<DxmTemplateRef[]>('/api/dxm-template-refs', []),
       loadOrFallback<AgentConsoleSession | null>('/api/agent-console/status', null),
       loadOrFallback<FinalDeliveryCheckSummary | null>('/api/delivery/final-check', null),
     ])
@@ -302,9 +380,14 @@ export default function App() {
       exceptions,
       reports,
     })
+    if (refreshGeneration !== workspaceRefreshGenerationRef.current) {
+      return nextWorkspace
+    }
     const editBatchStateFailed = failures.some((failure) => failure.path === '/api/edit-batches')
     setWorkspace(nextWorkspace)
     if (!editBatchStateFailed) setEditBatches(batchSummaries)
+    setLocalPlans(fetchedLocalPlans)
+    setDxmTemplateRefs(fetchedDxmTemplateRefs)
     setEditBatchStateAvailable(!editBatchStateFailed)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
@@ -340,10 +423,10 @@ export default function App() {
     void refreshWorkspace()
   }, [refreshWorkspace])
 
-  const workspaceHasRunningTask = workspace.tasks.some((task) => task.status === 'running')
+  const workspaceHasRunningTask = workspace.tasks.some((task) => isTaskControlActive(task.status))
   const workspaceHasRunningBatch = editBatches.some((batch) => batch.status === 'running' || batch.status === 'stop_requested')
   const runningEditBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
-  const runningMutationTask = workspace.tasks.find((task) => task.status === 'running' && REAL_DXM_MUTATION_MODES.has(task.mode)) ?? null
+  const runningMutationTask = workspace.tasks.find((task) => isTaskControlActive(task.status) && REAL_DXM_MUTATION_MODES.has(task.mode)) ?? null
 
   useEffect(() => {
     if (!workspaceHasRunningTask && !workspaceHasRunningBatch && !agentConsole?.active) return
@@ -670,6 +753,13 @@ export default function App() {
       ? workspace.tasks.find((task) => task.id === taskId) ?? null
       : selectedTask
     if (!taskToStart) return
+    if (taskToStart.mode === 'batch_draft_save') {
+      setSelectedTaskId(taskToStart.id)
+      syncSelectedTaskIdUrl(taskToStart.id)
+      setOperationError('batch_draft_save 不能使用旧 manual-approval/start；请在“开始批量保存”核对冻结事实并一次原子批准。')
+      setActiveSection('start_save')
+      return
+    }
     setBusy(true)
     setOperationError(null)
     try {
@@ -755,6 +845,39 @@ export default function App() {
     }
   }
 
+  async function controlTask(taskId: number, action: 'pause' | 'resume' | 'stop') {
+    setBusy(true)
+    setOperationError(null)
+    try {
+      const result = await postJson<{
+        ok?: boolean
+        status?: string
+        message?: string
+        reasonCode?: string
+        workerControl?: Task['workerControl']
+      }>(`/api/tasks/${taskId}/${action}`, {})
+      setSelectedTaskId(taskId)
+      syncSelectedTaskIdUrl(taskId)
+      const statusLabel = result.status || action
+      const message = result.message
+        || (action === 'pause'
+          ? '暂停已请求，等待 worker 确认'
+          : action === 'resume'
+            ? '已从暂停点继续'
+            : '停止已请求，等待 worker 确认')
+      setWorkspaceNotice({
+        kind: 'degraded',
+        title: `任务 #${taskId} · ${statusLabel}`,
+        detail: message,
+      })
+      await refreshWorkspace()
+    } catch (error) {
+      setOperationError(humanOperationError(error instanceof Error ? error.message : `任务${action}失败`))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function openDxmLogin() {
     const username = dxmLoginDraft.username.trim()
     if (!username) {
@@ -768,8 +891,16 @@ export default function App() {
       return
     }
     setBusy(true)
+    setDxmLoginRequestPending(true)
     setOperationError(null)
     try {
+      // Never reuse a previous account's shop snapshot while a new visible
+      // login is being opened.  The successful continuation below is the
+      // only place that repopulates this account-scoped source of truth.
+      setDxmShops([])
+      setDxmShopsSnapshot(null)
+      setSelectedDxmShopId('')
+      setDxmShopsError(null)
       if (dxmLoginDraft.rememberCredential) {
         const saver = window.dxmDesktop?.saveDxmCredential
         if (saver) {
@@ -790,12 +921,16 @@ export default function App() {
         username,
         password: dxmLoginDraft.password,
       })
+      // The backend has handed the visible browser to the operator.  Release
+      // the global UI lock before the read-only refresh fan-out below; a slow
+      // log/workspace refresh must not disable the captcha-complete action.
+      setBusy(false)
+      setDxmLoginRequestPending(false)
       setOperationNotice(humanDxmLoginFlowNotice(loginStart, '已打开真实店小秘登录页；请在弹出的真实浏览器中完成验证码。'))
       if (!dxmLoginDraft.rememberCredential) {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
-      const stage = String(loginStart.stage ?? '')
-      setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'start_save')
+      setActiveSection('dxm_access')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
@@ -810,6 +945,7 @@ export default function App() {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
       setBusy(false)
+      setDxmLoginRequestPending(false)
     }
   }
 
@@ -853,20 +989,76 @@ export default function App() {
     }
   }
 
+  async function logoutDxm(clearAccount = false) {
+    setBusy(true)
+    setDxmLoginRequestPending(true)
+    setOperationError(null)
+    setOperationNotice(null)
+    try {
+      const result = await postJson<Record<string, unknown>>('/api/dxm/logout', {})
+      if (clearAccount) {
+        await clearSavedDxmCredential(false)
+      }
+      setDxmLoginDraft((current) => ({
+        ...current,
+        username: clearAccount ? '' : current.username,
+        password: '',
+        rememberCredential: clearAccount ? false : current.rememberCredential,
+      }))
+      // A logout invalidates every shop-scoped reader/template/plan view. Do
+      // not leave the previous account's shop selected while the next login
+      // is being established.
+      setDxmShops([])
+      setDxmShopsSnapshot(null)
+      setSelectedDxmShopId('')
+      setDxmShopsError(null)
+      setOperationNotice(String(result.message ?? (clearAccount ? '已退出并清除当前账号，可以切换新账号。' : '已退出店小秘登录态。')))
+      setActiveSection('dxm_access')
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+      await refreshWorkspace()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '退出店小秘登录态失败'
+      setOperationError(humanDxmLoginError(message))
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+    } finally {
+      setBusy(false)
+      setDxmLoginRequestPending(false)
+    }
+  }
+
   async function continueDxmLogin() {
     setBusy(true)
+    setDxmLoginRequestPending(true)
     setOperationError(null)
     try {
       const loginResult = await postJson<Record<string, unknown>>('/api/dxm/login/continue', { confirm: true })
       const stage = String(loginResult.stage ?? '')
+      const reasonCode = String(loginResult.reason_code ?? '')
+      const readerReady = loginResult.logged_in === true
+        && loginResult.reader_ready === true
+        && reasonCode === 'LOGIN_READER_READY'
       const message = humanDxmLoginFlowNotice(loginResult, '已检测店小秘登录态。')
-      const loginFailed = stage === 'login_failed' || stage.includes('failed')
+      const loginFailed = stage === 'login_failed' || stage.includes('failed') || !readerReady
       if (loginFailed) {
         setOperationError(message)
         setActiveSection('dxm_access')
       } else {
-        setOperationNotice(message)
-        setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'start_save')
+        // Login success is the boundary at which the account's shopMap becomes
+        // authoritative. Read it before entering any shop-scoped page; the
+        // sidebar selector is the single source of truth afterwards.
+        const shops = await refreshDxmShops(true)
+        if (!shops) {
+          setOperationError('店小秘已登录，但店铺列表暂未读到。不会把它误判成“暂无店铺”；请留在本页点击“重新读取店铺”后再进入采集箱。')
+          setActiveSection('dxm_access')
+        } else if (!shops.shops.length) {
+          setOperationError('店小秘已登录且店铺列表读取成功，但该账号没有返回可用店铺。请在真实店小秘确认店铺授权后再重试。')
+          setActiveSection('dxm_access')
+        } else {
+          setOperationNotice(`${message} 已读取 ${shops.shops.length} 个店铺，正在进入真实采集箱选品；不会保存或发布。`)
+          setActiveSection('draft_selection')
+        }
       }
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -879,6 +1071,7 @@ export default function App() {
       await refreshRuntimeLogs()
     } finally {
       setBusy(false)
+      setDxmLoginRequestPending(false)
     }
   }
 
@@ -1121,9 +1314,11 @@ export default function App() {
 
   const currentSection = normalizeWorkbenchSection(activeSection)
   const showGlobalSafetyStatus = currentSection !== 'home'
+    && currentSection !== 'draft_selection'
     && currentSection !== 'draft_edit_save'
     && currentSection !== 'task_history'
     && currentSection !== 'template_center'
+    && currentSection !== 'dxm_templates'
     && currentSection !== 'template_management'
     && currentSection !== 'results'
     && currentSection !== 'issues'
@@ -1151,7 +1346,7 @@ export default function App() {
     setActiveSection('issues')
   }
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
-    if (section === 'template_center') setTemplateCenterEntryMode('batch_bundle')
+    if (section === 'template_center') setTemplateCenterEntryMode('e2_plan')
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
   const content = (() => {
@@ -1163,6 +1358,18 @@ export default function App() {
       case 'config_images':
       case 'config_logistics':
       case 'config_compliance':
+      case 'dxm_templates':
+        return (
+          <DxmTemplateLibraryPage
+            refs={dxmTemplateRefs}
+            onChanged={async () => { await refreshWorkspace() }}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowPlans={() => {
+              setTemplateCenterEntryMode('e2_plan')
+              setActiveSection('template_center')
+            }}
+          />
+        )
       case 'template_center':
       case 'template_management':
         return (
@@ -1177,6 +1384,8 @@ export default function App() {
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             batchScopeStoreName={activeScopeSnapshot?.store_identity.store_name ?? null}
+            localPlans={localPlans}
+            dxmTemplateRefs={dxmTemplateRefs}
             initialMode={templateCenterEntryMode}
           />
         )
@@ -1188,12 +1397,30 @@ export default function App() {
             dxmLoginDraft={dxmLoginDraft}
             dxmCredentialState={dxmCredentialState}
             busy={busy}
+            loginRequestPending={dxmLoginRequestPending}
             onDxmLoginDraftChange={setDxmLoginDraft}
             onClearSavedDxmCredential={() => { void clearSavedDxmCredential() }}
             onOpenDxmLogin={openDxmLogin}
             onContinueDxmLogin={continueDxmLogin}
+            onLogoutDxm={() => { void logoutDxm(false) }}
+            onSwitchDxmAccount={() => { void logoutDxm(true) }}
             onNavigateDxmTarget={navigateDxmTarget}
-            onShowConsole={() => setActiveSection('start_save')}
+            onShowConsole={() => setActiveSection('draft_selection')}
+          />
+        )
+      case 'draft_selection':
+        return (
+          <DraftSelectionPage
+            plans={workspace.templates}
+            localPlans={localPlans}
+            taskInput={draftTaskInput}
+            onTaskInputChange={setDraftTaskInput}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowPlans={() => {
+              setTemplateCenterEntryMode('e2_plan')
+              setActiveSection('template_center')
+            }}
+            onReviewSnapshot={() => { setActiveSection('start_save'); return true }}
           />
         )
       case 'product_tasks':
@@ -1212,6 +1439,9 @@ export default function App() {
             onL3ApprovedByChange={setL3ApprovedBy}
             onRunL2Probe={runL2ReadonlyProbe}
             onStartTask={(taskId) => startSelectedTask(taskId)}
+            onPauseTask={(taskId) => { void controlTask(taskId, 'pause') }}
+            onResumeTask={(taskId) => { void controlTask(taskId, 'resume') }}
+            onStopTask={(taskId) => { void controlTask(taskId, 'stop') }}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onSelectTask={(taskId) => {
               setActiveEditBatchId(null)
@@ -1276,6 +1506,28 @@ export default function App() {
           />
         )
       case 'start_save':
+        return (
+          <BatchSavePlaceholderPage
+            taskInput={draftTaskInput}
+            controlledTask={selectedTask?.mode === 'batch_draft_save' ? selectedTask : null}
+            busy={busy}
+            onShowSelection={() => setActiveSection('draft_selection')}
+            onShowPlans={() => {
+              setTemplateCenterEntryMode('e2_plan')
+              setActiveSection('template_center')
+            }}
+            onTaskSelected={(task) => {
+              setSelectedTaskId(task.id)
+              syncSelectedTaskIdUrl(task.id)
+              void refreshWorkspace({ silent: true })
+            }}
+            onPauseTask={(taskId) => { void controlTask(taskId, 'pause') }}
+            onResumeTask={(taskId) => { void controlTask(taskId, 'resume') }}
+            onStopTask={(taskId) => { void controlTask(taskId, 'stop') }}
+            onShowTaskMonitor={() => setActiveSection('product_tasks')}
+            onShowResults={() => setActiveSection('results')}
+          />
+        )
       case 'preflight':
       case 'real_browser':
       case 'manual_takeover':
@@ -1339,7 +1591,12 @@ export default function App() {
           />
         )
       case 'results':
-        return <ReportCenter workspace={workspace} editBatches={editBatches} activeBatchId={activeEditBatchId} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={startNewEditBatch} onShowBatchRecords={showBatchRecords} onOpenBatch={openBatchForApproval} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={showSelectedTaskIssues} />
+        return (
+          <>
+            <OperationAuditTimeline />
+            <ReportCenter workspace={workspace} editBatches={editBatches} activeBatchId={activeEditBatchId} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={startNewEditBatch} onShowBatchRecords={showBatchRecords} onOpenBatch={openBatchForApproval} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={showSelectedTaskIssues} />
+          </>
+        )
       case 'help':
         return (
           <HelpPage
@@ -1363,7 +1620,12 @@ export default function App() {
             editBatches={editBatches}
             selectedTask={selectedTask}
             runtimeStatus={runtimeStatus}
+            currentShopId={selectedDxmShopId}
+            currentShopName={dxmShops.find((shop) => shop.id === selectedDxmShopId)?.name ?? null}
+            shopLoading={dxmShopsLoading}
+            shopError={dxmShopsError}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onRefreshShops={() => { void refreshDxmShops(true) }}
             onShowDraftEdit={startNewEditBatch}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConsole={() => setActiveSection('start_save')}
@@ -1375,13 +1637,24 @@ export default function App() {
   })()
 
   return (
-    <AppShell
-      activeSection={currentSection}
-      onSectionChange={setWorkbenchSection}
-      sidebarCollapsed={sidebarCollapsed}
-      onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
-      sourceLabel={sourceLabels[workspace.source]}
+    <DxmShopProvider
+      value={{
+        shops: dxmShops,
+        snapshot: dxmShopsSnapshot,
+        selectedShopId: selectedDxmShopId,
+        loading: dxmShopsLoading,
+        error: dxmShopsError,
+        setSelectedShopId: setSelectedDxmShopId,
+        refresh: refreshDxmShops,
+      }}
     >
+      <AppShell
+        activeSection={currentSection}
+        onSectionChange={setWorkbenchSection}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+        sourceLabel={sourceLabels[workspace.source]}
+      >
       {showGlobalSafetyStatus && (
         <SafetyStatusBar
           workspace={workspace}
@@ -1439,7 +1712,8 @@ export default function App() {
         )}
       </div>
       {content}
-    </AppShell>
+      </AppShell>
+    </DxmShopProvider>
   )
 }
 
@@ -1555,6 +1829,9 @@ function humanDxmLoginError(message: string) {
   const commonTail = '账号密码不会用于保存或发布；可在右侧实时日志查看后端和启动器细节。'
   const browserRuntimeMessage = humanBrowserRuntimeError(message)
   if (browserRuntimeMessage) return `${browserRuntimeMessage}${commonTail}`
+  if (normalized.includes('dxm_account_switch_failed') || normalized.includes('账号会话未能安全清理')) {
+    return `当前真实浏览器仍绑定旧店小秘账号，系统没有把它冒充成新账号。请关闭旧的真实浏览器窗口后，再点击“切换账号”或重新打开登录页。${commonTail}`
+  }
   if (
     message.includes('Internal Server Error')
     || normalized.includes('post /api/dxm/login/start failed')

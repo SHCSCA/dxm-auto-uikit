@@ -1,10 +1,13 @@
 import json
+import re
+import tomllib
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DESKTOP_DIR = REPO_ROOT / "app" / "desktop"
 DESKTOP_PACKAGE = DESKTOP_DIR / "package.json"
+DESKTOP_PACKAGE_LOCK = DESKTOP_DIR / "package-lock.json"
 DESKTOP_PORTABLE_PATCH = DESKTOP_DIR / "scripts" / "patch-electron-builder-portable.cjs"
 DESKTOP_BUILD_MANIFEST = DESKTOP_DIR / "scripts" / "generate-build-manifest.cjs"
 DESKTOP_RUNTIME_IDENTITY = DESKTOP_DIR / "src" / "runtime-identity.cjs"
@@ -24,12 +27,45 @@ START_DESKTOP = REPO_ROOT / "scripts" / "start-desktop.bat"
 VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 FRONTEND_VITE_CONFIG = REPO_ROOT / "app" / "frontend" / "vite.config.ts"
 README = REPO_ROOT / "README.md"
+DOCS_INDEX = REPO_ROOT / "docs" / "README.md"
 USER_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
 PORTABLE_QUICK_GUIDE = REPO_ROOT / "docs" / "product" / "免安装版快速使用说明-20260615.md"
+MVP_CONTRACT = REPO_ROOT / "docs" / "product" / "MVP-竖切-草稿箱批量只保存.md"
 APP_TSX = REPO_ROOT / "app" / "frontend" / "src" / "App.tsx"
 SAFETY_STATUS_BAR = REPO_ROOT / "app" / "frontend" / "src" / "components" / "SafetyStatusBar.tsx"
 WORKBENCH_MODULES_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 TYPES_TS = REPO_ROOT / "app" / "frontend" / "src" / "types.ts"
+BACKEND_PYPROJECT = REPO_ROOT / "app" / "backend" / "pyproject.toml"
+BACKEND_MAIN = REPO_ROOT / "app" / "backend" / "src" / "main.py"
+FRONTEND_PACKAGE = REPO_ROOT / "app" / "frontend" / "package.json"
+FRONTEND_PACKAGE_LOCK = REPO_ROOT / "app" / "frontend" / "package-lock.json"
+
+
+def test_public_package_versions_are_exactly_aligned():
+    desktop_version = json.loads(DESKTOP_PACKAGE.read_text(encoding="utf-8"))["version"]
+    desktop_lock = json.loads(DESKTOP_PACKAGE_LOCK.read_text(encoding="utf-8"))
+    frontend_version = json.loads(FRONTEND_PACKAGE.read_text(encoding="utf-8"))["version"]
+    frontend_lock = json.loads(FRONTEND_PACKAGE_LOCK.read_text(encoding="utf-8"))
+    backend_project_version = tomllib.loads(
+        BACKEND_PYPROJECT.read_text(encoding="utf-8")
+    )["project"]["version"]
+    backend_main_match = re.search(
+        r"^APP_VERSION = ['\"]([^'\"]+)['\"]$",
+        BACKEND_MAIN.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+
+    assert backend_main_match is not None
+    assert {
+        desktop_version,
+        desktop_lock["version"],
+        desktop_lock["packages"][""]["version"],
+        frontend_version,
+        frontend_lock["version"],
+        frontend_lock["packages"][""]["version"],
+        backend_project_version,
+        backend_main_match.group(1),
+    } == {desktop_version}
 
 
 def test_desktop_package_declares_electron_entrypoints_and_build_scripts():
@@ -751,7 +787,7 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "trap {" in source
     assert "exit 1" in source[source.index("trap {"):source.index("$RepoRoot =")]
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
-    assert "DXM-Agent-Console-Portable-0.1.0.exe" in source
+    assert "DXM-Agent-Console-Portable-$DesktopVersion.exe" in source
     assert "[switch]$CheckPortable" in source
     assert "desktop-main.log" in source
     assert "Loaded frontend" in source
@@ -794,48 +830,37 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "Portable smoke skipped. Current delivery target is the verified directory免安装版" in source
 
 
-def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
+def test_historical_delivery_guides_are_not_current_authority():
     readme = README.read_text(encoding="utf-8")
-    user_guide = USER_GUIDE.read_text(encoding="utf-8")
-
-    assert "DXM Agent Console 桌面版" in readme
-    assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in readme
-    assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in readme
-    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in readme
-    assert "portable 首次启动会解包 Electron 与 Python 运行时" in readme
-    assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in readme
-    assert "scripts\\start-desktop.bat" in readme
-    assert "scripts\\verify-desktop-package.ps1" in readme
-    assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in readme
-
-    assert "商品箱中已经存在的商品" in user_guide
-    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in user_guide
-    assert "%APPDATA%\\DXM Agent Console\\data\\desktop-main.log" in user_guide
-    assert "只保存、不发布" in user_guide
+    index = DOCS_INDEX.read_text(encoding="utf-8")
+    for guide in (USER_GUIDE, PORTABLE_QUICK_GUIDE):
+        relative_path = f"product/{guide.name}"
+        assert f"]({relative_path})" not in index
+        assert f"`{relative_path}`" in index
+    assert "不是当前真相、可执行任务或有效链接" in index
+    assert MVP_CONTRACT.exists()
+    assert "MVP-竖切-草稿箱批量只保存.md" in readme
+    assert "E3_OPEN" in readme and "BLOCKED" in readme
 
 
-def test_portable_quick_guide_uses_verified_portable_entry():
-    source = PORTABLE_QUICK_GUIDE.read_text(encoding="utf-8")
+def test_current_mvp_contract_supersedes_removed_portable_quick_guide():
+    source = MVP_CONTRACT.read_text(encoding="utf-8")
 
-    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "当前合并后 Git HEAD 新构建并完成 smoke" in source
-    assert "同时提供 SHA-256 与构建 Git HEAD" in source
-    assert "必须保留整个目录" in source
-    assert "建议保留至少 1 GB" in source
+    assert "E1–E4 的唯一产品主合同" in source
+    assert "batch_draft_save" in source
+    assert "真实可见浏览器" in source
+    assert "只保存" in source and "不发布" in source
+    assert source.count("`MVP_READY`") >= 2
+    assert source.count("`PROD_READY`") >= 2
 
 
-def test_delivery_docs_describe_product_box_single_stage_real_browser_scope():
-    docs = [
-        README,
-        PORTABLE_QUICK_GUIDE,
-        USER_GUIDE,
-    ]
+def test_delivery_docs_describe_current_batch_save_only_scope():
+    docs = [README, MVP_CONTRACT]
     for path in docs:
         source = path.read_text(encoding="utf-8")
-        assert "商品箱" in source
         assert "只保存" in source
         assert "不发布" in source
-        assert "真实浏览器" in source
+        assert "真实" in source and "浏览器" in source
         assert "本地测试商品" not in source
         assert "待认领入箱" not in source
 
@@ -857,7 +882,7 @@ def test_frontend_vite_proxy_uses_runtime_backend_target_for_isolated_qa():
     assert "target: 'ws://127.0.0.1:8000'" not in source
 
 
-def test_app_shell_presents_agent_console_as_user_first_navigation():
+def test_app_shell_presents_frozen_mvp_navigation():
     source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     index_html = (REPO_ROOT / "app" / "frontend" / "index.html").read_text(encoding="utf-8")
 
@@ -865,10 +890,10 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "type PrimaryNavigationItem" in source
     assert "const primaryNavigation" in source
     primary_block = source[source.index("const primaryNavigation"):source.index("const sectionLabels")]
-    for label in ["编辑工作台", "模板中心", "浏览器诊断", "批次记录", "系统设置"]:
+    for label in ["工作台", "连接店小秘", "采集箱选品", "店小秘模板", "普货方案", "开始批量保存", "保存结果", "设置"]:
         assert label in primary_block
-    assert primary_block.count("{ id: '") == 5
-    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "报告与证据", "问题与证据"]:
+    assert primary_block.count("{ id: '") == 8
+    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "问题与证据"]:
         assert hidden_label not in primary_block
     assert "nav-subitem" in source
     assert "Agent 控制台" not in source

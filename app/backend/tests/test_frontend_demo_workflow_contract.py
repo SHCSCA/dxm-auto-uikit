@@ -50,13 +50,27 @@ def test_active_frontend_has_no_removed_claim_flow_contract():
         assert forbidden not in source
 
 
-def test_app_releases_only_single_save_real_task_mode():
+def test_app_releases_current_controlled_save_modes_without_claim():
     source = read(APP_TSX)
-    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in source
+    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save', 'batch_draft_save'])" in source
     assert "mode: 'probe' | 'single_save'" in read(TYPES_TS)
     assert "request.mode === 'single_save' && products.length !== 1" in source
+    assert "taskToStart.mode === 'batch_draft_save'" in source
+    assert "batch_draft_save 不能使用旧 manual-approval/start" in source
     assert "'/api/tasks'" in source
     assert "source: 'user_created_real_task'" in source
+
+
+def test_current_batch_workbench_keeps_reader_selection_and_frozen_plan_models():
+    app = read(APP_TSX)
+    shell = read(APP_SHELL_TSX)
+    types = read(TYPES_TS)
+    assert "case 'draft_selection':" in app
+    assert "<DraftSelectionPage" in app
+    assert "draft_selection: '采集箱选品'" in shell
+    assert "export type LocalPlanTemplate" in types
+    assert "export type PlanSnapshot" in types
+    assert "mode: 'batch_draft_save'" in types
 
 
 def test_navigation_exposes_product_box_batch_edit_as_the_primary_workflow():

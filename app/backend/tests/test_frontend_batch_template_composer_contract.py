@@ -25,9 +25,11 @@ def test_template_center_defaults_to_section_mode_and_exposes_batch_mode():
     source = TEMPLATE_CENTER_TSX.read_text(encoding="utf-8")
 
     assert "from './BatchTemplateComposer'" in source
-    assert "useState<TemplateCenterMode>('sections')" in source
-    assert ">分区模板</button>" in source
-    assert ">整批模板</button>" in source
+    assert "initialMode?: TemplateCenterMode" in source
+    assert "initialMode = 'sections'" in source
+    assert "useState<TemplateCenterMode>(initialMode)" in source
+    assert ">普货模板库 · 分区</button>" in source
+    assert ">普货模板库 · 整批</button>" in source
     assert "templateCenterMode === 'batch_bundle'" in source
     assert "<BatchTemplateComposer" in source
     assert "onEditSection={(section) =>" in source
@@ -42,14 +44,14 @@ def test_batch_composer_uses_fixed_live_options_and_exact_create_request():
         assert f"'{section}'" in source
     assert "new URLSearchParams" in source
     assert "store_id: String(selectedStoreId)" in source
-    assert "if (categoryName.trim()) params.set('category_name', categoryName.trim())" in source
+    assert "params.set('category_name'" not in source
     assert "getJson<EditBatchBundleOptions>(`/api/template-center/edit-batch-bundle-options?${params.toString()}`)" in source
     assert "postJson<Template>('/api/template-center/edit-batch-bundles'" in source
     for field in (
         "template_name: templateName.trim()",
         "version: version.trim()",
         "store_id: selectedStoreId",
-        "category_name: categoryName.trim() || null",
+        "category_name: null",
         "section_templates: sectionTemplates",
     ):
         assert field in source
@@ -84,7 +86,8 @@ def test_batch_composer_refreshes_template_list_and_returns_to_batch_draft_after
     assert "回到批次草稿" in source
     assert "模板列表已更新" in source
     assert "workspace 已刷新" not in source
-    assert "message?.text || optionsError" in source
+    assert "message && !optionsError" in source
+    assert "{message.text}" in source
 
 
 def test_batch_composer_keeps_digest_technical_details_out_of_the_ui():
@@ -107,8 +110,9 @@ def test_batch_composer_allows_store_level_bundle_without_category():
 
     assert "categoryName.trim()" not in form_ready
     assert "categoryName.trim()" not in disabled
-    assert "category_name: categoryName.trim() || null" in source
-    assert "留空则生成店铺级模板" in source
+    assert "category_name: null" in source
+    assert "整批模板固定按店铺绑定" in source
+    assert "result.category_name !== null" in source
 
 
 def test_batch_composer_types_preserve_backend_readiness_contract():

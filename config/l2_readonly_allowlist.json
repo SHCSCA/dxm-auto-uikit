@@ -198,6 +198,28 @@
       "rationale": "Reviewed DXM SMT AI freight gray-configuration query; endpoint is a query/read during L2 run l2-real-20260527T081621Z."
     },
     {
+      "id": "dxm-crawl-new-task-gray",
+      "decision": "approve",
+      "method": "GET",
+      "host": "www.dianxiaomi.com",
+      "path": "/api/crawl/crawlNewTaskGray.json",
+      "resource_type": "xhr",
+      "allowed_reasons": ["active_or_unknown_resource_type:xhr"],
+      "allow_forbidden_keywords": [],
+      "rationale": "Reviewed DXM crawl new-task gray-user status GET from L2 run l2-real-20260813T052337206605Z-0f114d35. Read-only bootstrap flag, no save or publish."
+    },
+    {
+      "id": "dxm-crawl-count-readonly",
+      "decision": "approve",
+      "method": "GET",
+      "host": "www.dianxiaomi.com",
+      "path": "/api/crawl/count.json",
+      "resource_type": "xhr",
+      "allowed_reasons": ["active_or_unknown_resource_type:xhr", "forbidden_url_keywords:claim"],
+      "allow_forbidden_keywords": ["claim"],
+      "rationale": "Reviewed DXM crawl list count GET from L2 run l2-real-20260813T052337206605Z-0f114d35. Query may contain claim as a filter name; action is count/read only."
+    },
+    {
       "id": "dxm-static-publish-detection-script",
       "decision": "approve",
       "method": "GET",
@@ -207,6 +229,116 @@
       "allowed_reasons": ["forbidden_url_keywords:publish"],
       "allow_forbidden_keywords": ["publish"],
       "rationale": "Reviewed passive date-stamped static JS chunk required by DXM SPA bootstrap. The narrow host/path/resource_type scope avoids allowing publish endpoints."
+    },
+    {
+      "id": "dxm-static-publish-detection-script-s10",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s10.dianxiaomi.com",
+      "path_regex": "/dxm-web/20[0-9]{2}-(0[1-9]|1[0-2])/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:publish"],
+      "allow_forbidden_keywords": ["publish"],
+      "rationale": "Same reviewed publishDetection bootstrap chunk as dxm-static-publish-detection-script; CDN host rotated to s10 during L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-publish-detection-script-s11",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s11.dianxiaomi.com",
+      "path_regex": "/dxm-web/20[0-9]{2}-(0[1-9]|1[0-2])/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:publish"],
+      "allow_forbidden_keywords": ["publish"],
+      "rationale": "Same reviewed publishDetection bootstrap chunk; CDN host s11 from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-publish-detection-script-s12",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s12.dianxiaomi.com",
+      "path_regex": "/dxm-web/20[0-9]{2}-(0[1-9]|1[0-2])/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:publish"],
+      "allow_forbidden_keywords": ["publish"],
+      "rationale": "Same reviewed publishDetection bootstrap chunk; CDN host s12 from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-publish-detection-script-s13",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s13.dianxiaomi.com",
+      "path_regex": "/dxm-web/20[0-9]{2}-(0[1-9]|1[0-2])/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:publish"],
+      "allow_forbidden_keywords": ["publish"],
+      "rationale": "Same reviewed publishDetection bootstrap chunk; CDN host s13 from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-publish-detection-script-s16",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s16.dianxiaomi.com",
+      "path_regex": "/dxm-web/20[0-9]{2}-(0[1-9]|1[0-2])/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:publish"],
+      "allow_forbidden_keywords": ["publish"],
+      "rationale": "Same reviewed publishDetection bootstrap chunk; CDN host s16 from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-file-saver-s10",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s10.dianxiaomi.com",
+      "path": "/fe-res/extendPlugins/file-saver@2.0.5-dist-FileSaver.min.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:save"],
+      "allow_forbidden_keywords": ["save"],
+      "rationale": "Reviewed passive FileSaver 2.0.5 static plugin GET. Filename contains save but is not a DXM save endpoint. Evidence from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-file-saver-s11",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s11.dianxiaomi.com",
+      "path": "/fe-res/extendPlugins/file-saver@2.0.5-dist-FileSaver.min.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:save"],
+      "allow_forbidden_keywords": ["save"],
+      "rationale": "Same reviewed FileSaver static plugin; CDN host s11 from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-file-saver-s12",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s12.dianxiaomi.com",
+      "path": "/fe-res/extendPlugins/file-saver@2.0.5-dist-FileSaver.min.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:save"],
+      "allow_forbidden_keywords": ["save"],
+      "rationale": "Same reviewed FileSaver static plugin; CDN host s12 from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-file-saver-s13",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s13.dianxiaomi.com",
+      "path": "/fe-res/extendPlugins/file-saver@2.0.5-dist-FileSaver.min.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:save"],
+      "allow_forbidden_keywords": ["save"],
+      "rationale": "Same reviewed FileSaver static plugin; CDN host s13 from L2 run l2-real-20260813T051225163761Z-48eae27f."
+    },
+    {
+      "id": "dxm-static-file-saver-s16",
+      "decision": "approve",
+      "method": "GET",
+      "host": "s16.dianxiaomi.com",
+      "path": "/fe-res/extendPlugins/file-saver@2.0.5-dist-FileSaver.min.js",
+      "resource_type": "script",
+      "allowed_reasons": ["forbidden_url_keywords:save"],
+      "allow_forbidden_keywords": ["save"],
+      "rationale": "Same reviewed FileSaver static plugin; CDN host s16 from L2 run l2-real-20260813T051225163761Z-48eae27f."
     }
   ]
 }

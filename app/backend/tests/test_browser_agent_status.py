@@ -13,14 +13,56 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
-from src.execution.browser_agent_protocol import BrowserAgentCommand, browser_agent_command_from_worker_request
+from src.execution.browser_agent_protocol import (
+    BrowserAgentCommand,
+    browser_agent_command_from_worker_request,
+    build_frozen_product_target_identity,
+    canonical_frozen_target_identity,
+)
 import src.execution.browser_agent_worker as browser_agent_worker
 from src.execution.browser_agent_worker import BrowserAgentRuntime
 from src.services.browser_agent_status import build_browser_hud
 
 
+_TEST_STORE_NAME = "Dang Kang"
+_TEST_SOURCE_URL = "https://detail.1688.com/offer/70001.html"
+_TEST_FROZEN_TARGET = build_frozen_product_target_identity(
+    product_id="70001",
+    store_name=_TEST_STORE_NAME,
+    source_urls=[_TEST_SOURCE_URL],
+)
+_FROZEN_TEST_ACTIONS = {
+    "open_editor",
+    "verify_edit_ownership",
+    "fill_editor_required_defaults",
+    "fill_editor_variants",
+    "fill_media_assets",
+    "fill_compliance_defaults",
+    "enable_semi_managed",
+    "open_semi_managed_page",
+    "fill_semi_managed_defaults",
+    "save_only",
+    "verify_not_published",
+}
+
+
+def _test_action_params(action: str) -> dict:
+    if action in _FROZEN_TEST_ACTIONS:
+        return {
+            "product_query": "70001",
+            "store_name": _TEST_STORE_NAME,
+            "target_source_urls": [_TEST_SOURCE_URL],
+            "target_identity": _TEST_FROZEN_TARGET,
+        }
+    return {}
+
+
 def _runtime_command(runtime, **kwargs):
     action = str(kwargs.get("action") or "")
+    if action in {"save_only", "verify_not_published"}:
+        execution_mode = "single_save"
+    else:
+        execution_mode = ""
     if action == "check_login_state":
         expected_page = "authenticated_dxm"
     elif action == "open_draft_box":
@@ -39,6 +81,12 @@ def _runtime_command(runtime, **kwargs):
     kwargs.setdefault("deadline", (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat())
     kwargs.setdefault("expected_page", expected_page)
     kwargs.setdefault("runtime_id", runtime.runtime_id)
+    kwargs.setdefault("execution_mode", execution_mode)
+    provided_params = kwargs.get("params")
+    kwargs["params"] = {
+        **_test_action_params(action),
+        **(provided_params if isinstance(provided_params, dict) else {}),
+    }
     return BrowserAgentCommand(**kwargs)
 
 
@@ -48,8 +96,13 @@ def _complete_open_editor_raw(**overrides):
         "action": "open_editor",
         "page_url": "https://www.dianxiaomi.com/web/smt/edit",
         "page_title": "编辑商品",
+        "store_name": _TEST_STORE_NAME,
+        "target_identity": _TEST_FROZEN_TARGET,
         "contract_facts": {
-            "before_values": {"target": "product-1"},
+            "before_values": {
+                "store_name": _TEST_STORE_NAME,
+                "target_identity": _TEST_FROZEN_TARGET,
+            },
             "after_values": {"editor": "product-1"},
             "postconditions": {
                 "expected_editor_page": True,
@@ -149,9 +202,24 @@ def _legacy_runtime_adapter_contract_bridge(monkeypatch, tmp_path):
                 for postcondition in contract.required_postconditions
             }
         )
+        before_values = {"legacy_test_fixture": True}
+        if action in _FROZEN_TEST_ACTIONS:
+            command_params = params if isinstance(params, dict) else {}
+            store_name = command_params.get("store_name")
+            target_identity = canonical_frozen_target_identity(
+                command_params.get("target_identity"),
+                store_name=store_name,
+            )
+            before_values = {
+                "store_name": store_name,
+                "target_identity": target_identity,
+            }
         if raw["ok"] is True:
+            if action in _FROZEN_TEST_ACTIONS:
+                raw["store_name"] = store_name
+                raw["target_identity"] = target_identity
             raw["contract_facts"] = {
-                "before_values": {"legacy_test_fixture": True},
+                "before_values": before_values,
                 "after_values": {"legacy_test_fixture": True},
                 "postconditions": {
                     postcondition: True
@@ -168,9 +236,13 @@ def _legacy_runtime_adapter_contract_bridge(monkeypatch, tmp_path):
             }
             if action in {"save_only", "verify_not_published"}:
                 raw.setdefault("evidence_ref", proof_ref)
+            if action == "save_only":
+                raw.setdefault("save_evidence_ref", proof_ref)
+            if action == "verify_not_published":
+                raw.setdefault("unpublished_evidence_ref", proof_ref)
         else:
             raw["contract_facts"] = {
-                "before_values": {"legacy_test_fixture": True},
+                "before_values": before_values,
                 "after_values": {},
                 "postconditions": {
                     postcondition: False
@@ -340,7 +412,7 @@ def test_browser_agent_open_edit_page_rejects_ok_without_contract_facts():
         job_id=102,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     with pytest.raises(RuntimeError, match="BROWSER_AGENT_ACTION_RESULT_CONTRACT_FAILURE"):
@@ -364,7 +436,7 @@ def test_browser_agent_builds_and_validates_exact_canonical_action_result_envelo
         job_id=104,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     result = runtime.run(command)
@@ -387,7 +459,10 @@ def test_browser_agent_builds_and_validates_exact_canonical_action_result_envelo
         "ok": True,
         "action": "open_editor",
         "attempted_state": "OPEN_EDIT_PAGE",
-        "before_values": {"target": "product-1"},
+        "before_values": {
+            "store_name": _TEST_STORE_NAME,
+            "target_identity": _TEST_FROZEN_TARGET,
+        },
         "after_values": {"editor": "product-1"},
         "postconditions": {
             "expected_editor_page": True,
@@ -442,7 +517,7 @@ def test_browser_agent_rejects_conflicting_producer_identity(raw_overrides):
         job_id=106,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     with pytest.raises(RuntimeError, match="BROWSER_AGENT_ACTION_RESULT_CONTRACT_FAILURE"):
@@ -509,7 +584,10 @@ def test_browser_agent_returns_a_valid_explicit_failure_envelope():
         def open_editor(self, **_kwargs):
             result = _complete_open_editor_raw(ok=False)
             result["contract_facts"] = {
-                "before_values": {"target": "product-1"},
+                "before_values": {
+                    "store_name": _TEST_STORE_NAME,
+                    "target_identity": _TEST_FROZEN_TARGET,
+                },
                 "after_values": {},
                 "postconditions": {"editor_ready": False},
                 "evidence_observations": {},
@@ -703,7 +781,7 @@ def test_browser_agent_runtime_explicit_cancel_revokes_only_matching_command_and
     run_thread.join(timeout=2)
 
     assert not run_thread.is_alive()
-    assert errors and "BROWSER_AGENT_COMMAND_REVOKED" in str(errors[0])
+    assert errors and "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(errors[0])
     assert runtime.status()["active"] is False
     assert runtime.status()["status"] != "idle"
     runtime.shutdown()
@@ -758,7 +836,7 @@ def test_browser_agent_runtime_does_not_accept_semi_managed_page_as_plain_editor
         job_id=25,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     with pytest.raises(
@@ -946,7 +1024,7 @@ def test_browser_agent_status_maps_save_steps_to_chinese_hud():
     })
     assert editor["title"] == "正在打开编辑页"
     assert editor["line1"] == "进入商品编辑页"
-    assert editor["phase"] == "第二段：商品箱编辑保存"
+    assert editor["phase"] == "商品箱编辑保存"
 
     fill = build_browser_hud({
         "task_name": "商品箱编辑保存",
@@ -1045,6 +1123,209 @@ def test_browser_agent_status_hides_unknown_technical_step_from_default_copy():
     assert "SOME_INTERNAL_STEP" not in hud["title"]
     assert "Cannot switch" not in hud["line1"]
     assert "Cannot switch" in hud["maintenance_detail"]
+
+
+@pytest.mark.parametrize(
+    "page_url",
+    [
+        "http://www.dianxiaomi.com/web/smt/edit",
+        "https://www.dianxiaomi.com:444/web/smt/edit",
+        "https://evil.dianxiaomi.com/web/smt/edit",
+    ],
+)
+def test_browser_agent_rejects_non_production_editor_origin_before_jit(page_url):
+    operation_calls = []
+
+    class Adapter:
+        requires_persistent_browser_agent = True
+
+        def __init__(self):
+            self.authorization_result = None
+
+        def browser_session_id(self):
+            return "strict-editor-session"
+
+        def current_mutation_identity(self):
+            return {
+                "browser_session_id": "strict-editor-session",
+                "page_url": page_url,
+                "page_kind": "editor",
+                "target_hash": "a" * 64,
+            }
+
+        def set_mutation_authorizer(self, authorizer, command_context=None):
+            self.authorizer = authorizer
+            self.command_context = dict(command_context or {})
+
+        def clear_mutation_authorizer(self):
+            self.authorizer = None
+
+        def save_only(self, **_kwargs):
+            self.authorization_result = self.authorizer(
+                {**self.command_context, "mutation_action": "save_only_click"},
+                lambda: operation_calls.append("clicked") or {"dispatched": True},
+            )
+            return {"ok": False}
+
+    adapter = Adapter()
+    runtime = BrowserAgentRuntime(adapter, mutation_ledger=object())
+    runtime.set_mutation_authorizer(lambda _command, _context: {"ok": True})
+    command = _runtime_command(
+        runtime,
+        task_id=919,
+        job_id=920,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        params={},
+        target_hash="a" * 64,
+    )
+
+    with pytest.raises(RuntimeError):
+        runtime.run(command, timeout_seconds=1)
+
+    assert operation_calls == []
+    assert adapter.authorization_result["ok"] is False
+    assert adapter.authorization_result["reason"] == "browser_agent_mutation_page_url_drift"
+    runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("batch_execution", "wrong_page"),
+    [
+        (True, "semi_managed"),
+        (False, "editor"),
+    ],
+)
+def test_browser_agent_save_command_page_is_isolated_by_execution_mode(
+    batch_execution,
+    wrong_page,
+):
+    runtime = BrowserAgentRuntime()
+    params = {}
+    command = _runtime_command(
+        runtime,
+        task_id=921,
+        job_id=922,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page=wrong_page,
+        execution_mode=("batch_draft_save" if batch_execution else "single_save"),
+        params=params,
+    )
+
+    with pytest.raises(RuntimeError, match="BROWSER_AGENT_COMMAND_CONTRACT_MISMATCH"):
+        runtime.reserve_command(command)
+
+    runtime.shutdown()
+
+
+def test_batch_reservation_samples_account_and_enters_ledger_on_browser_owner_thread():
+    calls: list[tuple[str, str]] = []
+
+    class Adapter:
+        requires_persistent_browser_agent = True
+
+        def refresh_account_context_hash(self):
+            calls.append(("account", threading.current_thread().name))
+            return "A" * 64
+
+    class Decision:
+        ok = True
+        reason_code = "OK"
+        entry = None
+
+    class Ledger:
+        def reserve_command(self, _command):
+            calls.append(("ledger", threading.current_thread().name))
+            return Decision()
+
+    runtime = BrowserAgentRuntime(Adapter(), mutation_ledger=Ledger())
+    command = _runtime_command(
+        runtime,
+        task_id=923,
+        job_id=924,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        params={},
+        target_hash="a" * 64,
+    )
+
+    try:
+        assert runtime.reserve_command(command)["ok"] is True
+        assert calls
+        assert {name for _kind, name in calls} == {calls[0][1]}
+        assert calls[0][1].startswith("dxm-browser-agent")
+        assert [kind for kind, _name in calls] == ["account", "ledger"]
+    finally:
+        runtime.shutdown()
+
+
+def test_visible_session_operations_share_the_browser_agent_owner_thread():
+    runtime = BrowserAgentRuntime()
+    calls: list[tuple[str, str]] = []
+
+    def record(label: str) -> str:
+        calls.append((label, threading.current_thread().name))
+        return label
+
+    try:
+        assert runtime.run_session_operation(record, "login") == "login"
+        assert runtime.run_session_operation(record, "reader") == "reader"
+        assert [label for label, _thread in calls] == ["login", "reader"]
+        assert {thread for _label, thread in calls} == {calls[0][1]}
+        assert calls[0][1].startswith("dxm-browser-agent")
+    finally:
+        runtime.shutdown()
+
+
+def test_visible_session_operations_revive_after_runtime_shutdown():
+    runtime = BrowserAgentRuntime()
+    first = runtime.run_session_operation(lambda: threading.current_thread().name)
+    assert first.startswith("dxm-browser-agent")
+    shutdown = runtime.shutdown()
+    assert shutdown["ok"] is True
+    revived = runtime.run_session_operation(lambda: threading.current_thread().name)
+    assert revived.startswith("dxm-browser-agent")
+    assert runtime.status()["status"] == "idle"
+    runtime.shutdown()
+
+
+def test_batch_reservation_fails_closed_without_owner_account_sampler():
+    class Adapter:
+        requires_persistent_browser_agent = True
+
+    class Decision:
+        ok = True
+        reason_code = "OK"
+        entry = None
+
+    class Ledger:
+        def reserve_command(self, _command):
+            return Decision()
+
+    runtime = BrowserAgentRuntime(Adapter(), mutation_ledger=Ledger())
+    command = _runtime_command(
+        runtime,
+        task_id=925,
+        job_id=926,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        params={},
+        target_hash="b" * 64,
+    )
+
+    try:
+        result = runtime.reserve_command(command)
+        assert result["ok"] is False
+        assert result["reasonCode"] == "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE"
+    finally:
+        runtime.shutdown()
 
 
 def test_browser_agent_runtime_idle_shutdown_is_singleflight_and_replays_terminal_result():
@@ -1369,6 +1650,43 @@ def test_browser_agent_runtime_keeps_execution_owned_after_worker_returns_until_
         runtime.shutdown()
 
 
+def test_browser_agent_runtime_normalizes_workflow_trace_step_copy():
+    class LegacyTraceAdapter:
+        def __init__(self):
+            self.listener = None
+
+        def set_workflow_event_listener(self, listener):
+            self.listener = listener
+
+        def recent_workflow_events(self):
+            return [{"human_step": "进入店小秘采集箱"}]
+
+        def open_draft_box(self):
+            if self.listener:
+                self.listener({"human_step": "进入店小秘采集箱"})
+            time.sleep(0.2)
+            return {"ok": True}
+
+    runtime = BrowserAgentRuntime(LegacyTraceAdapter())
+    command = _runtime_command(runtime,
+        task_id=42,
+        job_id=42,
+        state="OPEN_DRAFT_LIST",
+        action="open_draft_box",
+        params={},
+        step_label="打开采集箱",
+    )
+
+    with pytest.raises(TimeoutError):
+        runtime.run(command, timeout_seconds=0.02)
+
+    status = runtime.status()
+    assert status["currentStep"] == "进入店小秘商品箱"
+    assert "进入店小秘商品箱" in status["lastError"]
+    assert any(event["step"] == "进入店小秘商品箱" for event in status["events"])
+    runtime.shutdown()
+
+
 def test_browser_agent_runtime_does_not_write_page_hud_for_navigation_actions():
     class HudRecordingAdapter:
         def __init__(self):
@@ -1480,11 +1798,11 @@ def test_browser_agent_runtime_defers_page_hud_for_editor_and_save_actions(actio
 
         def save_only(self, **kwargs):
             self.calls.append(("save_only", kwargs.get("product_query")))
-            return {"ok": True, "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
+            return {"ok": False, "reason": "intentional HUD-only probe", "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
 
         def verify_not_published(self, **kwargs):
             self.calls.append(("verify_not_published", kwargs.get("product_query")))
-            return {"ok": True, "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
+            return {"ok": False, "reason": "intentional HUD-only probe", "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
 
     adapter = HudRecordingAdapter()
     runtime = BrowserAgentRuntime(adapter)
@@ -1499,7 +1817,7 @@ def test_browser_agent_runtime_defers_page_hud_for_editor_and_save_actions(actio
 
     result = runtime.run(command, timeout_seconds=1)
 
-    assert result["ok"] is True
+    assert result["ok"] is (action not in {"save_only", "verify_not_published"})
     assert all(call[0] != "hud" for call in adapter.calls)
     assert adapter.calls == [(action, "目标商品")]
     runtime.shutdown()

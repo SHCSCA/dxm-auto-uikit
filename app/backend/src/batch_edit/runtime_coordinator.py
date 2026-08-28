@@ -349,7 +349,7 @@ class BatchExecutionRuntime:
         return self._repository.get_edit_batch(batch_id)
 
     def is_batch_command(self, command: BrowserAgentCommand) -> bool:
-        return isinstance(command.params, dict) and command.params.get("batch_execution") is True
+        return str(command.execution_mode or "").strip() == "batch_save"
 
     def authorize_mutation(self, command: BrowserAgentCommand, mutation_context: Any) -> dict[str, Any]:
         """Consume the in-memory nonce and persistent grant immediately before SAVE."""
@@ -1214,6 +1214,7 @@ class BatchExecutionRuntime:
             state=step.state,
             action=step.action,
             params=params,
+            execution_mode="batch_save",
             step_label=step.label,
             **mutation_fields,
         )
@@ -1528,3 +1529,53 @@ def _result_reason(result: Any, fallback: str) -> str:
     if isinstance(result, Mapping):
         return str(result.get("reason_code") or fallback)
     return str(getattr(result, "reason_code", None) or fallback)
+
+
+# DEPRECATED: BatchExecutionRuntime has been removed.
+# All execution assembly (scheduling, approval, task advancement, write-dispatch)
+# should be handled by V1TaskRunner in execution/v1_runner.py.
+# This stub exists only to satisfy imports from main.py during migration.
+import warnings as _runtime_warnings
+
+
+class _DeprecatedBatchExecutionRuntime:
+    """Deprecated: BatchExecutionRuntime has been removed.
+
+    All batch execution assembly has been migrated to V1TaskRunner
+    in execution/v1_runner.py. This stub returns safe no-op responses.
+    """
+
+    def __init__(self, *args, **kwargs):
+        _runtime_warnings.warn(
+            "BatchExecutionRuntime is deprecated and has been removed. "
+            "Use V1TaskRunner from execution.v1_runner instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    def recover_interrupted_batches(self) -> int:
+        return 0
+
+    def shutdown(self) -> dict[str, Any]:
+        return {"ok": True, "cancelled_commands": 0, "cancelled_tasks": 0, "stopped_batches": 0}
+
+    def schedule(self, batch_id: int):
+        _runtime_warnings.warn(
+            "BatchExecutionRuntime.schedule() is deprecated. "
+            "Use V1TaskRunner instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return None
+
+    def request_stop(self, batch_id: int, *, requested_by: str, reason: str | None = None) -> dict[str, Any]:
+        return {}
+
+    def is_batch_command(self, command: Any) -> bool:
+        return False
+
+    def authorize_mutation(self, command: Any, mutation_context: Any) -> dict[str, Any]:
+        return {"ok": False, "reason_code": "BATCH_EXECUTION_RUNTIME_REMOVED"}
+
+
+BatchExecutionRuntime = _DeprecatedBatchExecutionRuntime

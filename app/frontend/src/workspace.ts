@@ -543,12 +543,16 @@ export function humanTaskStatus(status: string) {
   return ({
     draft: '待启动',
     running: '运行中',
+    pause_requested: '暂停确认中',
+    paused: '已暂停',
+    stop_requested: '停止确认中',
+    stopped: '已停止',
     completed: '已完成',
     partial_success: '部分成功',
-    paused: '已暂停',
     failed: '失败',
-    cancelled: '已停止',
+    cancelled: '已取消',
     needs_manual_review: '待人工复核',
+    unknown: '结果不明',
   } as Record<string, string>)[status] ?? status
 }
 

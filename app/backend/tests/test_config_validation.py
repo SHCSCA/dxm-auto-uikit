@@ -4,13 +4,10 @@ from src.services.config_validation import ConfigValidationService
 def _dxm_reference_templates():
     return {
         "attribute_info": {"names": ["立牌类谷子"]},
-        "description": {"names": ["详情模板"]},
         "freight": {"names": ["40g普货包裹"]},
         "service": {"names": ["Service Template for New Sellers"]},
         "eu_responsible": {"names": ["Jacqueiline Marti"]},
         "manufacturer": {"names": ["jiyang county thunder"]},
-        "compliance": {"names": ["合规模板"]},
-        "semi_managed": {"names": ["半托管模板"]},
     }
 
 
@@ -216,16 +213,7 @@ def test_single_save_accepts_new_dxm_reference_templates():
                 **template,
                 "payload": {
                     **template["payload"],
-                    "dxm_reference_templates": {
-                        "attribute_info": {"names": ["立牌类谷子"]},
-                        "description": {"names": ["详情模板"]},
-                        "freight": {"names": ["40g普货包裹"]},
-                        "service": {"names": ["Service Template for New Sellers"]},
-                        "eu_responsible": {"names": ["Jacqueiline Marti"]},
-                        "manufacturer": {"names": ["jiyang county thunder"]},
-                        "compliance": {"names": ["合规模板"]},
-                        "semi_managed": {"names": ["半托管模板"], "required": True},
-                    },
+                    "dxm_reference_templates": _dxm_reference_templates(),
                 },
             }
             if template["template_type"] == "category"
@@ -245,6 +233,34 @@ def test_single_save_accepts_new_dxm_reference_templates():
 
     assert result["ok"] is True
     assert result["missing"] == []
+
+
+def test_single_save_rejects_reference_sections_without_real_control_readback():
+    templates = _required_templates()
+    category = next(
+        item for item in templates if item["template_type"] == "category"
+    )
+    category["payload"]["dxm_reference_templates"].update({
+        "description": {"names": ["详情模板"]},
+        "compliance": {"names": ["合规模板"]},
+        "semi_managed": {"names": ["半托管模板"]},
+    })
+
+    result = ConfigValidationService().validate_task(
+        {
+            "mode": "single_save",
+            "store_id": 1001,
+            "payload": {"product_ids": [501], "publish": False},
+        },
+        templates,
+    )
+
+    assert result["ok"] is False
+    assert result["missing"] == [
+        "dxm_reference_templates.description.unsupported",
+        "dxm_reference_templates.compliance.unsupported",
+        "dxm_reference_templates.semi_managed.unsupported",
+    ]
 
 
 def test_single_save_new_dxm_reference_templates_take_priority_over_legacy_fields():

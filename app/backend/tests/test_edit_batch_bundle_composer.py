@@ -58,7 +58,10 @@ def _source_payloads(store_name="DXM Shop A", category_name="车载用品"):
         "platform": "AliExpress",
     }
     references = {
-        name: {"names": [f"{name}-template"], "required": True}
+        name: {
+            "names": [] if name in {"description", "compliance", "semi_managed"} else [f"{name}-template"],
+            "required": name not in {"description", "compliance", "semi_managed"},
+        }
         for name in (
             "attribute_info",
             "description",
@@ -126,6 +129,16 @@ def _setup_composer(tmp_path, monkeypatch, *, db_name="bundle-composer.db"):
     return TestClient(app), repository, store, sources
 
 
+def _make_sources_store_only(repository, sources):
+    for section, source in sources.items():
+        payload = _source_payloads()[section]
+        payload["binding"].pop("category_name")
+        repository.update_template(
+            source["id"],
+            {"binding_scope": "DXM Shop A", "payload": payload},
+        )
+
+
 def _selection_from_options(options):
     return {
         section["section"]: {
@@ -136,15 +149,82 @@ def _selection_from_options(options):
     }
 
 
-def test_operator_can_compose_complete_frozen_bundle_from_eight_source_templates(
+def test_old_batch_bundle_options_fail_closed_for_unverifiable_category_scope(
     tmp_path,
     monkeypatch,
 ):
     client, _repository, store, _sources = _setup_composer(tmp_path, monkeypatch)
 
-    options_response = client.get(
+    response = client.get(
         "/api/template-center/edit-batch-bundle-options",
         params={"store_id": store["id"], "category_name": "车载用品"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "BATCH_CATEGORY_SCOPE_UNVERIFIABLE"
+
+
+def test_repository_quarantines_category_bound_old_batch_bundle_on_write(
+    tmp_path,
+    monkeypatch,
+):
+    _client, repository, store, _sources = _setup_composer(
+        tmp_path,
+        monkeypatch,
+        db_name="category-bound-quarantine.db",
+    )
+    references = {
+        name: {"names": [], "required": False}
+        for name in (
+            "attribute_info",
+            "description",
+            "freight",
+            "service",
+            "eu_responsible",
+            "manufacturer",
+            "compliance",
+            "semi_managed",
+        )
+    }
+    bundle = repository.create_template(
+        {
+            "template_type": "edit_batch_bundle",
+            "template_name": "旧类目绑定编辑包",
+            "binding_scope": "DXM Shop A / 车载用品",
+            "payload": {
+                "schema_version": "dxm_edit_template_bundle.v1",
+                "version": "1.0.0",
+                "required_sections": list(SECTIONS),
+                "binding": {
+                    "store_id": store["id"],
+                    "store_name": store["name"],
+                    "category_name": "车载用品",
+                    "platform": store["platform"],
+                },
+                "source_templates": {section: {} for section in SECTIONS},
+                "sections": {
+                    **{section: {} for section in SECTIONS if section != "dxm_reference"},
+                    "dxm_reference": {"dxm_reference_templates": references},
+                },
+            },
+            "is_enabled": True,
+        }
+    )
+
+    assert bundle["is_enabled"] is False
+    assert repository.get_template(bundle["id"])["is_enabled"] is False
+
+
+def test_operator_can_compose_complete_frozen_bundle_from_eight_source_templates(
+    tmp_path,
+    monkeypatch,
+):
+    client, repository, store, sources = _setup_composer(tmp_path, monkeypatch)
+    _make_sources_store_only(repository, sources)
+
+    options_response = client.get(
+        "/api/template-center/edit-batch-bundle-options",
+        params={"store_id": store["id"]},
     )
     assert options_response.status_code == 200
     options = options_response.json()
@@ -160,7 +240,7 @@ def test_operator_can_compose_complete_frozen_bundle_from_eight_source_templates
             "template_name": "车载商品编辑包",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": _selection_from_options(options),
         },
     )
@@ -183,7 +263,7 @@ def test_operator_can_compose_complete_frozen_bundle_from_eight_source_templates
     assert bundle["payload"]["binding"] == {
         "store_id": store["id"],
         "store_name": "DXM Shop A",
-        "category_name": "车载用品",
+        "category_name": None,
         "platform": "AliExpress",
     }
     assert set(bundle["payload"]["source_templates"]) == set(SECTIONS)
@@ -202,7 +282,9 @@ def test_composer_normalizes_grouped_dxm_reference_source(tmp_path, monkeypatch)
         monkeypatch,
         db_name="bundle-grouped-dxm-reference.db",
     )
+    _make_sources_store_only(repository, sources)
     original = _source_payloads()["dxm_reference"]
+    original["binding"].pop("category_name")
     repository.update_template(
         sources["dxm_reference"]["id"],
         {
@@ -216,7 +298,7 @@ def test_composer_normalizes_grouped_dxm_reference_source(tmp_path, monkeypatch)
     )
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
 
     response = client.post(
@@ -225,7 +307,7 @@ def test_composer_normalizes_grouped_dxm_reference_source(tmp_path, monkeypatch)
             "template_name": "grouped-reference",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": _selection_from_options(options),
         },
     )
@@ -245,13 +327,7 @@ def test_bundle_composer_supports_store_only_binding_when_category_is_omitted(
         monkeypatch,
         db_name="bundle-null-category.db",
     )
-    for section, source in sources.items():
-        payload = _source_payloads()[section]
-        payload["binding"].pop("category_name")
-        repository.update_template(
-            source["id"],
-            {"binding_scope": "DXM Shop A", "payload": payload},
-        )
+    _make_sources_store_only(repository, sources)
 
     options_response = client.get(
         "/api/template-center/edit-batch-bundle-options",
@@ -277,14 +353,15 @@ def test_bundle_composer_supports_store_only_binding_when_category_is_omitted(
 
 
 def test_bundle_composer_requires_existing_store(tmp_path, monkeypatch):
-    client, _repository, store, _sources = _setup_composer(
+    client, repository, store, sources = _setup_composer(
         tmp_path,
         monkeypatch,
         db_name="bundle-store-required.db",
     )
+    _make_sources_store_only(repository, sources)
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
 
     missing_options = client.get(
@@ -297,7 +374,7 @@ def test_bundle_composer_requires_existing_store(tmp_path, monkeypatch):
             "template_name": "missing-store",
             "version": "1.0.0",
             "store_id": 999999,
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": _selection_from_options(options),
         },
     )
@@ -312,14 +389,15 @@ def test_bundle_composer_requires_exact_eight_section_selection_shape(
     monkeypatch,
     shape_error,
 ):
-    client, _repository, store, _sources = _setup_composer(
+    client, repository, store, sources = _setup_composer(
         tmp_path,
         monkeypatch,
         db_name=f"bundle-shape-{shape_error}.db",
     )
+    _make_sources_store_only(repository, sources)
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     selection = _selection_from_options(options)
     if shape_error == "missing_section":
@@ -335,7 +413,7 @@ def test_bundle_composer_requires_exact_eight_section_selection_shape(
             "template_name": "shape-check",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": selection,
         },
     )
@@ -352,9 +430,10 @@ def test_bundle_composer_reloads_sources_in_transaction_and_rejects_digest_drift
         monkeypatch,
         db_name="bundle-source-digest-drift.db",
     )
+    _make_sources_store_only(repository, sources)
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     selection = _selection_from_options(options)
     changed_payload = _source_payloads()["pricing"]
@@ -367,7 +446,7 @@ def test_bundle_composer_reloads_sources_in_transaction_and_rejects_digest_drift
             "template_name": "digest-drift",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": selection,
         },
     )
@@ -400,9 +479,10 @@ def test_bundle_composer_rejects_disabled_wrong_type_or_incompatible_source(
         monkeypatch,
         db_name=f"bundle-invalid-source-{invalid_source}.db",
     )
+    _make_sources_store_only(repository, sources)
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     selection = _selection_from_options(options)
     source_id = sources["category"]["id"]
@@ -412,6 +492,7 @@ def test_bundle_composer_rejects_disabled_wrong_type_or_incompatible_source(
         repository.update_template(source_id, {"template_type": "pricing"})
     else:
         payload = _source_payloads()["category"]
+        payload["binding"].pop("category_name")
         payload["binding"]["store_name"] = "Other Store"
         repository.update_template(source_id, {"payload": payload})
     current = repository.get_template(source_id)
@@ -426,7 +507,7 @@ def test_bundle_composer_rejects_disabled_wrong_type_or_incompatible_source(
             "template_name": f"invalid-{invalid_source}",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": selection,
         },
     )
@@ -444,9 +525,10 @@ def test_binding_scope_requires_exact_tokens_and_rejects_store_name_substrings(
         monkeypatch,
         db_name="bundle-binding-token-boundary.db",
     )
+    _make_sources_store_only(repository, sources)
     valid_options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     selection = _selection_from_options(valid_options)
     category_id = sources["category"]["id"]
@@ -454,7 +536,7 @@ def test_binding_scope_requires_exact_tokens_and_rejects_store_name_substrings(
     repository.update_template(
         category_id,
         {
-            "binding_scope": "notDXM Shop A / 车载用品",
+            "binding_scope": "notDXM Shop A",
             "payload": category_payload,
         },
     )
@@ -462,7 +544,7 @@ def test_binding_scope_requires_exact_tokens_and_rejects_store_name_substrings(
 
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     category = next(section for section in options["sections"] if section["section"] == "category")
     assert category["candidates"][0]["ready"] is False
@@ -474,7 +556,7 @@ def test_binding_scope_requires_exact_tokens_and_rejects_store_name_substrings(
             "template_name": "substring-binding",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": selection,
         },
     )
@@ -491,12 +573,14 @@ def test_options_report_missing_fields_and_composer_rejects_incomplete_configura
         monkeypatch,
         db_name="bundle-required-field-missing.db",
     )
+    _make_sources_store_only(repository, sources)
     valid_options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     selection = _selection_from_options(valid_options)
     payload = _source_payloads()["logistics"]
+    payload["binding"].pop("category_name")
     payload["logistics"].pop("weight")
     source_id = sources["logistics"]["id"]
     repository.update_template(source_id, {"payload": payload})
@@ -508,7 +592,7 @@ def test_options_report_missing_fields_and_composer_rejects_incomplete_configura
 
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     logistics = next(section for section in options["sections"] if section["section"] == "logistics")
     assert logistics["ready_count"] == 0
@@ -522,7 +606,7 @@ def test_options_report_missing_fields_and_composer_rejects_incomplete_configura
             "template_name": "missing-required-field",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": selection,
         },
     )
@@ -538,17 +622,20 @@ def test_ordinary_source_section_must_be_a_non_empty_nested_object(tmp_path, mon
         monkeypatch,
         db_name="bundle-flat-source-rejected.db",
     )
+    _make_sources_store_only(repository, sources)
     valid_options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     selection = _selection_from_options(valid_options)
     category_id = sources["category"]["id"]
+    binding = _source_payloads()["category"]["binding"]
+    binding.pop("category_name")
     repository.update_template(
         category_id,
         {
             "payload": {
-                "binding": _source_payloads()["category"]["binding"],
+                "binding": binding,
                 "category_keyword": "flat-is-not-accepted",
             }
         },
@@ -561,7 +648,7 @@ def test_ordinary_source_section_must_be_a_non_empty_nested_object(tmp_path, mon
             "template_name": "flat-source",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": selection,
         },
     )
@@ -596,12 +683,14 @@ def test_bundle_composer_recursively_rejects_every_publish_directive(
         monkeypatch,
         db_name=f"bundle-publish-{field}.db",
     )
+    _make_sources_store_only(repository, sources)
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     selection = _selection_from_options(options)
     payload = _source_payloads()["category"]
+    payload["binding"].pop("category_name")
     payload["category"]["deep"] = {"items": [{field: value}]}
     source_id = sources["category"]["id"]
     repository.update_template(source_id, {"payload": payload})
@@ -613,7 +702,7 @@ def test_bundle_composer_recursively_rejects_every_publish_directive(
             "template_name": f"publish-{field}",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": selection,
         },
     )
@@ -631,15 +720,16 @@ def test_bundle_composer_is_idempotent_but_rejects_same_identity_with_new_conten
         monkeypatch,
         db_name="bundle-idempotency.db",
     )
+    _make_sources_store_only(repository, sources)
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     request = {
         "template_name": "stable-identity",
         "version": "1.2.3",
         "store_id": store["id"],
-        "category_name": "车载用品",
+        "category_name": None,
         "section_templates": _selection_from_options(options),
     }
 
@@ -664,6 +754,7 @@ def test_bundle_composer_is_idempotent_but_rejects_same_identity_with_new_conten
     assert reactivated.json()["reactivated"] is True
 
     changed_payload = _source_payloads()["pricing"]
+    changed_payload["binding"].pop("category_name")
     changed_payload["pricing"]["retail_price_strategy"] = "new-but-valid-strategy"
     pricing_id = sources["pricing"]["id"]
     repository.update_template(pricing_id, {"payload": changed_payload})
@@ -687,11 +778,12 @@ def test_generic_template_api_cannot_create_convert_or_mutate_bundle_content(
     tmp_path,
     monkeypatch,
 ):
-    client, _repository, store, _sources = _setup_composer(
+    client, repository, store, sources = _setup_composer(
         tmp_path,
         monkeypatch,
         db_name="bundle-generic-api-guard.db",
     )
+    _make_sources_store_only(repository, sources)
     direct_create = client.post(
         "/api/templates",
         json={
@@ -722,7 +814,7 @@ def test_generic_template_api_cannot_create_convert_or_mutate_bundle_content(
 
     options = client.get(
         "/api/template-center/edit-batch-bundle-options",
-        params={"store_id": store["id"], "category_name": "车载用品"},
+        params={"store_id": store["id"]},
     ).json()
     bundle = client.post(
         "/api/template-center/edit-batch-bundles",
@@ -730,7 +822,7 @@ def test_generic_template_api_cannot_create_convert_or_mutate_bundle_content(
             "template_name": "guarded-bundle",
             "version": "1.0.0",
             "store_id": store["id"],
-            "category_name": "车载用品",
+            "category_name": None,
             "section_templates": _selection_from_options(options),
         },
     ).json()

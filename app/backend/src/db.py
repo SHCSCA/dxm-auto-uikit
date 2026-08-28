@@ -159,6 +159,25 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS canonical_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                product_id INTEGER,
+                mode TEXT NOT NULL,
+                claim_mark TEXT NOT NULL,
+                canonical_receipt_sha256 TEXT NOT NULL UNIQUE,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                job_status TEXT,
+                error_code TEXT,
+                error_detail TEXT,
+                needs_manual_review INTEGER NOT NULL DEFAULT 0,
+                receipt_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ownership_locks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 lock_token TEXT NOT NULL UNIQUE,
@@ -184,6 +203,28 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_ownership_locks_token
                 ON ownership_locks (lock_token);
 
+            CREATE TABLE IF NOT EXISTS writer_fences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                writer_fence_id TEXT NOT NULL UNIQUE,
+                shop_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 0,
+                acquired_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                released_at TEXT,
+                invalidated_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_writer_fences_shop_active
+                ON writer_fences (shop_id, status, expires_at);
+
+            CREATE INDEX IF NOT EXISTS idx_writer_fences_fence_id
+                ON writer_fences (writer_fence_id);
+
             CREATE TABLE IF NOT EXISTS mutation_dispatch_ledger (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 mutation_id TEXT NOT NULL UNIQUE,
@@ -195,6 +236,8 @@ def init_db() -> None:
                 task_id TEXT NOT NULL,
                 job_id TEXT NOT NULL,
                 authorization_lease_id TEXT NOT NULL,
+                authorization_lease_fingerprint TEXT,
+                snapshot_row_authority_sha256 TEXT,
                 stage_task_facts_fingerprint TEXT NOT NULL,
                 target_hash TEXT NOT NULL,
                 authorization_fingerprint TEXT NOT NULL,
@@ -203,6 +246,13 @@ def init_db() -> None:
                 page_kind TEXT,
                 status TEXT NOT NULL,
                 command_id TEXT,
+                command_sha256 TEXT,
+                command_json TEXT,
+                save_action_result_sha256 TEXT,
+                save_action_result_json TEXT,
+                save_authority_sha256 TEXT,
+                save_authority_json TEXT,
+                save_success_recorded_at TEXT,
                 runtime_id TEXT,
                 outcome_json TEXT,
                 reserved_at TEXT NOT NULL,
@@ -230,6 +280,69 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_draft_box_scope_snapshots_created
                 ON draft_box_scope_snapshots (created_at DESC, id DESC);
+
+            CREATE TABLE IF NOT EXISTS dxm_template_refs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ref_type TEXT NOT NULL,
+                dxm_template_id TEXT NOT NULL,
+                shop_id TEXT NOT NULL,
+                category_id TEXT,
+                observed_display_name TEXT NOT NULL,
+                source_api TEXT NOT NULL,
+                availability TEXT NOT NULL,
+                source_digest TEXT NOT NULL,
+                resolved_values_json TEXT NOT NULL DEFAULT '{}',
+                resolved_values_hash TEXT NOT NULL DEFAULT '44136FA355B3678A1146AD16F7E8649E94FB4FC21FE77E8310C060F61CAFF8A',
+                audit_items_json TEXT NOT NULL DEFAULT '[]',
+                audit_items_hash TEXT NOT NULL DEFAULT '4F53CDA18C2BAA0C0354BB5F9A3ECBE5ED12AB4D8E10F13D464B1CD0DEBDF735',
+                synced_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_dxm_template_refs_identity
+                ON dxm_template_refs (
+                    ref_type,
+                    dxm_template_id,
+                    shop_id,
+                    COALESCE(category_id, '')
+                );
+
+            CREATE TABLE IF NOT EXISTS local_plan_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lineage_id INTEGER,
+                version TEXT NOT NULL,
+                name TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                supersedes_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_local_plan_version
+                ON local_plan_templates (lineage_id, version);
+
+            CREATE TABLE IF NOT EXISTS plan_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_plan_template_id INTEGER NOT NULL,
+                snapshot_hash TEXT NOT NULL UNIQUE,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_plan_snapshots_plan
+                ON plan_snapshots (local_plan_template_id, id DESC);
+
+            CREATE TABLE IF NOT EXISTS plan_snapshot_idempotency_keys (
+                idempotency_key TEXT PRIMARY KEY,
+                snapshot_id INTEGER NOT NULL,
+                snapshot_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_plan_snapshot_idempotency_snapshot
+                ON plan_snapshot_idempotency_keys (snapshot_id);
 
             CREATE TABLE IF NOT EXISTS edit_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -298,6 +411,72 @@ def init_db() -> None:
         )
         _ensure_columns(
             conn,
+            "mutation_dispatch_ledger",
+            {
+                # Keep this projection complete. Older E3 databases predate
+                # the command/page identity columns; CREATE TABLE IF NOT
+                # EXISTS never upgrades those tables, while recovery queries
+                # require the complete current contract at process import.
+                "mutation_id": "TEXT",
+                "mutation_scope_id": "TEXT",
+                "mutation_action": "TEXT",
+                "ordinal": "INTEGER",
+                "command_state": "TEXT",
+                "command_action": "TEXT",
+                "task_id": "TEXT",
+                "job_id": "TEXT",
+                "authorization_lease_id": "TEXT",
+                "authorization_lease_fingerprint": "TEXT",
+                "snapshot_row_authority_sha256": "TEXT",
+                "stage_task_facts_fingerprint": "TEXT",
+                "target_hash": "TEXT",
+                "authorization_fingerprint": "TEXT",
+                "browser_session_id": "TEXT",
+                "page_url": "TEXT",
+                "page_kind": "TEXT",
+                "status": "TEXT",
+                "command_id": "TEXT",
+                "command_sha256": "TEXT",
+                "command_json": "TEXT",
+                "save_action_result_sha256": "TEXT",
+                "save_action_result_json": "TEXT",
+                "save_authority_sha256": "TEXT",
+                "save_authority_json": "TEXT",
+                "save_success_recorded_at": "TEXT",
+                "runtime_id": "TEXT",
+                "outcome_json": "TEXT",
+                "reserved_at": "TEXT",
+                "dispatch_started_at": "TEXT",
+                "dispatched_at": "TEXT",
+                "unknown_at": "TEXT",
+                "updated_at": "TEXT",
+            },
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_mutation_dispatch_ledger_mutation_id
+            ON mutation_dispatch_ledger (mutation_id)
+            """
+        )
+        _ensure_columns(
+            conn,
+            "dxm_template_refs",
+            {
+                "resolved_values_json": "TEXT NOT NULL DEFAULT '{}'",
+                "resolved_values_hash": (
+                    "TEXT NOT NULL DEFAULT "
+                    "'44136FA355B3678A1146AD16F7E8649E94FB4FC21FE77E8310C060F61CAFF8A'"
+                ),
+                "audit_items_json": "TEXT NOT NULL DEFAULT '[]'",
+                "audit_items_hash": (
+                    "TEXT NOT NULL DEFAULT "
+                    "'4F53CDA18C2BAA0C0354BB5F9A3ECBE5ED12AB4D8E10F13D464B1CD0DEBDF735'"
+                ),
+            },
+        )
+        _ensure_columns(
+            conn,
             "edit_batches",
             {
                 "approval_token_hash": "TEXT",
@@ -360,6 +539,11 @@ def init_db() -> None:
                 ON edit_batch_items (mutation_scope_id)
                 WHERE mutation_scope_id IS NOT NULL;
 
+            DROP TRIGGER IF EXISTS trg_tasks_single_running_browser_update;
+            DROP TRIGGER IF EXISTS trg_tasks_single_running_browser_insert;
+            DROP TRIGGER IF EXISTS trg_edit_batches_single_browser_update;
+            DROP TRIGGER IF EXISTS trg_edit_batches_single_browser_insert;
+
             CREATE TRIGGER IF NOT EXISTS trg_tasks_single_running_browser_update
             BEFORE UPDATE OF status ON tasks
             WHEN NEW.status='running' AND OLD.status<>'running'
@@ -367,7 +551,8 @@ def init_db() -> None:
                 SELECT RAISE(ABORT, 'AUTH_ANOTHER_TASK_ACTIVE')
                  WHERE EXISTS (
                     SELECT 1 FROM tasks
-                     WHERE status='running' AND id<>NEW.id
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                       AND id<>NEW.id
                  );
                 SELECT RAISE(ABORT, 'AUTH_EDIT_BATCH_ACTIVE')
                  WHERE EXISTS (
@@ -381,7 +566,10 @@ def init_db() -> None:
             WHEN NEW.status='running'
             BEGIN
                 SELECT RAISE(ABORT, 'AUTH_ANOTHER_TASK_ACTIVE')
-                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
+                 WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                 );
                 SELECT RAISE(ABORT, 'AUTH_EDIT_BATCH_ACTIVE')
                  WHERE EXISTS (
                     SELECT 1 FROM edit_batches
@@ -395,7 +583,10 @@ def init_db() -> None:
              AND OLD.status NOT IN ('running', 'stop_requested')
             BEGIN
                 SELECT RAISE(ABORT, 'LEGACY_TASK_ACTIVE')
-                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
+                 WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                 );
             END;
 
             CREATE TRIGGER IF NOT EXISTS trg_edit_batches_single_browser_insert
@@ -403,8 +594,53 @@ def init_db() -> None:
             WHEN NEW.status IN ('running', 'stop_requested')
             BEGIN
                 SELECT RAISE(ABORT, 'LEGACY_TASK_ACTIVE')
-                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
-            END;
+                 WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                 );
+             END;
+
+            CREATE TABLE IF NOT EXISTS operation_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seq INTEGER NOT NULL UNIQUE,
+                recorded_at TEXT NOT NULL,
+                event_id TEXT NOT NULL UNIQUE,
+                correlation_id TEXT NOT NULL,
+                causation_id TEXT,
+                root_correlation_id TEXT NOT NULL,
+                session_id TEXT,
+                runtime_id TEXT,
+                browser_id TEXT,
+                actor TEXT NOT NULL,
+                component TEXT NOT NULL,
+                action TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                task_id TEXT,
+                job_id TEXT,
+                batch_id TEXT,
+                item_id TEXT,
+                product_id TEXT,
+                store_id TEXT,
+                category_id TEXT,
+                snapshot_id TEXT,
+                command_id TEXT,
+                mutation_id TEXT,
+                lease_id TEXT,
+                build_id TEXT,
+                reason TEXT,
+                status TEXT NOT NULL,
+                input_summary_json TEXT NOT NULL,
+                output_summary_json TEXT NOT NULL,
+                evidence_refs_json TEXT NOT NULL,
+                prev_hash TEXT NOT NULL,
+                event_hash TEXT NOT NULL,
+                idempotency_key TEXT UNIQUE,
+                degraded INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_operation_audit_events_recorded
+                ON operation_audit_events (recorded_at, seq);
+            CREATE INDEX IF NOT EXISTS idx_operation_audit_events_corr
+                ON operation_audit_events (root_correlation_id, seq);
             """
         )
         _ensure_columns(
@@ -435,7 +671,40 @@ def init_db() -> None:
                 "summary_json": "TEXT NOT NULL DEFAULT '{}'",
             },
         )
+        _ensure_columns(
+            conn,
+            "plan_snapshots",
+            {
+                "idempotency_key": "TEXT",
+                "task_id": "INTEGER",
+            },
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_snapshots_idempotency
+                ON plan_snapshots (idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_snapshots_task
+                ON plan_snapshots (task_id)
+                WHERE task_id IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO plan_snapshot_idempotency_keys (
+                idempotency_key, snapshot_id, snapshot_hash, created_at
+            )
+            SELECT idempotency_key, id, snapshot_hash, created_at
+              FROM plan_snapshots
+             WHERE idempotency_key IS NOT NULL
+            """
+        )
         migrate_reports_published_to_tristate(conn)
+        migrate_canonical_receipts(conn)
         migrate_legacy_product_box_rows(conn)
         migrate_legacy_claim_tasks(conn)
         disable_legacy_generated_starter_templates(conn)
@@ -451,6 +720,39 @@ def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str
     for column_name, column_definition in columns.items():
         if column_name not in existing:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def migrate_canonical_receipts(conn: sqlite3.Connection) -> bool:
+    """Create the canonical_receipts table if it does not exist (safe for existing DBs)."""
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(canonical_receipts)").fetchall()
+    }
+    if "canonical_receipt_sha256" not in existing:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                product_id INTEGER,
+                mode TEXT NOT NULL,
+                claim_mark TEXT NOT NULL,
+                canonical_receipt_sha256 TEXT NOT NULL UNIQUE,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                job_status TEXT,
+                error_code TEXT,
+                error_detail TEXT,
+                needs_manual_review INTEGER NOT NULL DEFAULT 0,
+                receipt_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        return True
+    return False
 
 
 def migrate_legacy_ownership_tags(conn: sqlite3.Connection) -> bool:
@@ -962,7 +1264,6 @@ def disable_unexecutable_edit_batch_bundles(conn: sqlite3.Connection) -> list[in
             continue
         category_name = binding.get("category_name")
         category_bound = isinstance(category_name, str) and bool(category_name.strip())
-
         dxm_reference = sections.get("dxm_reference")
         references = (
             dxm_reference.get("dxm_reference_templates")

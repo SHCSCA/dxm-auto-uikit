@@ -454,6 +454,55 @@ def _real_mode_release_plan(
                 ],
             },
             {
+                "mode": "controlled_edit_batch",
+                "label": "受控整批编辑",
+                "status": controlled_batch_status,
+                "allowed": controlled_batch_currently_allowed,
+                "release_scope": "frozen visible draft-box scope; serial save-only execution",
+                "required_evidence": [
+                    "fresh L2 readonly proof bound to approval and every item dispatch",
+                    "immutable ordered scope and store-level template bundle",
+                    "per-item exact identity and required-field readback",
+                    "per-item exact SAVE receipt and independent unpublished proof",
+                    "UNKNOWN stop and manual reconciliation evidence",
+                ],
+                "required_controls": [
+                    "one atomic approve-and-start operation for the frozen batch",
+                    "global concurrency one and strict serial dispatch",
+                    "60-second one-time item mutation grant",
+                    "pre-save zero-write failures may isolate; dispatch uncertainty stops the batch",
+                    "legacy unattended task mode remains forbidden",
+                ],
+                "blockers": controlled_batch_blockers,
+                "readiness_checklist": [
+                    checklist(
+                        "l2_batch_binding",
+                        "L2 与整批批准及逐商品派发绑定",
+                        status=l2_check_status,
+                        evidence_source="L2 gate",
+                        blocker=l2_check_blocker,
+                    ),
+                    checklist(
+                        "immutable_scope",
+                        "当前可见商品箱范围与顺序冻结",
+                        status="enforced_by_runtime",
+                        evidence_source="edit-batch contract",
+                    ),
+                    checklist(
+                        "serial_jit_dispatch",
+                        "全局单并发与逐商品即时授权",
+                        status="enforced_by_runtime",
+                        evidence_source="edit-batch runtime",
+                    ),
+                    checklist(
+                        "unknown_manual_reconciliation",
+                        "UNKNOWN 停批且禁止自动重试",
+                        status="enforced_by_runtime",
+                        evidence_source="mutation dispatch ledger",
+                    ),
+                ],
+            },
+            {
                 "mode": "batch_save",
                 "label": "旧批量任务模式",
                 "status": "blocked_unreleased",
@@ -2221,6 +2270,8 @@ def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
         and audit.get("save_request_count") == 1
         and type(audit.get("other_mutation_request_count")) is int
         and audit.get("other_mutation_request_count") == 0
+        and type(audit.get("read_only_schema_request_count")) is int
+        and audit.get("read_only_schema_request_count") >= 0
         and type(audit.get("publish_request_count")) is int
         and audit.get("publish_request_count") == 0
     ):

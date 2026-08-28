@@ -42,12 +42,19 @@ def test_batch_builder_uses_only_live_backend_scope_and_enabled_bundle_templates
     assert "template.is_enabled" in source
     assert "scope_snapshot_id: scopeSnapshot.id" in source
     assert "template_id: selectedTemplate.id" in source
-    assert "批次草稿已冻结，批准与执行尚未开放" in source
-    assert "前往模板中心" in source
+    assert "范围已冻结，等待一次批准" in source
+    assert "CONFIRM_DXM_BATCH_SAVE_ONLY" in source
+    assert "一次批准后严格串行处理，每件只保存、不发布" in source
+    assert "检查模板中心" in source
     assert "localStorage" not in source
     assert "mock" not in source.lower()
-    assert "/approve" not in source
-    assert "/start" not in source
+    assert "/approve-and-start" in source
+    # No publish API call or action handler (publishguard CSS class is a safe guard)
+    import re as _re
+    publish_action = _re.findall(
+        r"(?<!publishguard-)publish(?![a-z])", source, _re.IGNORECASE
+    )
+    assert not publish_action, f"Unexpected publish references: {publish_action[:5]}"
 
 
 def test_batch_builder_shows_frozen_order_and_live_scope_evidence():
@@ -59,13 +66,12 @@ def test_batch_builder_shows_frozen_order_and_live_scope_evidence():
         "scopeSnapshot.filter_state",
         "scopeSnapshot.sort_state",
         "scopeSnapshot.page_state",
-        "scopeSnapshot.evidence",
         "scopeSnapshot.zero_write_proof",
     ]:
         assert field in source
     assert "item.ordinal" in source
     assert "item.title" in source
-    assert "item.target_identity_sha256" in source
+    assert "item.dxm_product_id" in source
 
 
 def test_batch_builder_handles_nullable_page_facts_and_proves_all_zero_write_dimensions():
@@ -80,7 +86,7 @@ def test_batch_builder_handles_nullable_page_facts_and_proves_all_zero_write_dim
         assert f"proof.{field} === false" in zero_write
     assert "if (!selectedTemplate)" not in capture
     assert "不影响只读范围读取" in page_source
-    assert '<details className="batch-evidence-details">' in page_source
+    assert '<details className="batch-scope-review">' in page_source
     assert "第 {scopeSnapshot.page_state.current_page} 页" not in page_source
 
 
@@ -99,7 +105,8 @@ def test_batch_records_loads_real_summaries_and_details_without_fake_success():
 
     assert "getJson<EditBatchSummary[]>('/api/edit-batches')" in source
     assert "getJson<EditBatchDetail>(`/api/edit-batches/${batchId}`)" in source
-    assert "批次草稿已冻结，批准与执行尚未开放" in source
+    assert "范围和模板已冻结，尚未开始处理商品" in source
+    assert "结果不确定待对账" in source
     assert "localStorage" not in source
     assert "mock" not in source.lower()
     assert "status === 'success'" not in source
@@ -116,18 +123,15 @@ def test_frontend_batch_types_preserve_backend_immutable_contract_fields():
         "EditBatchItem",
     ]:
         assert f"export type {type_name}" in source
-    for field in [
-        "scope_snapshot_digest",
-        "template_snapshot_digest",
-        "policy_digest",
-        "target_identity_sha256",
-    ]:
+    for field in ["scope_snapshot_id", "template_id", "item_snapshot", "publish_allowed"]:
         assert field in source
+    for internal_digest in ["scope_snapshot_digest", "template_snapshot_digest", "policy_digest"]:
+        assert internal_digest not in source
 
 
 def test_frontend_api_extracts_fastapi_nested_detail_message_through_safety_filter():
     source = API_TS.read_text(encoding="utf-8")
-    response_error = source[source.index("async function responseErrorMessage") : source.index("function safeApiErrorMessage")]
+    response_error = source[source.index("async function responseError(") : source.index("function safeApiErrorMessage")]
 
     assert "payload?.detail?.message" in response_error
     assert "safeApiErrorMessage(payload.detail.message" in response_error

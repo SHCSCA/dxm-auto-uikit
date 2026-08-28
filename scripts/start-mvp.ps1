@@ -586,7 +586,8 @@ function Write-ServiceLogUpdates {
 
 $backendGate = Join-Path $dataDir "backend-start.gate"
 $frontendGate = Join-Path $dataDir "frontend-start.gate"
-$backendCommand = New-ManagedProcessCommand -WorkingDirectory $backendDir -FilePath $pythonExe -Arguments "-m uvicorn src.main:app --host 127.0.0.1 --port $backendPort" -StartMessage "Starting backend on http://127.0.0.1:$backendPort" -ExitName "Backend" -Environment @{ DXM_LOGIN_HEADED = "1"; DXM_BACKEND_PORT = "$backendPort"; DXM_BACKEND_URL = "http://127.0.0.1:$backendPort"; DXM_FRONTEND_PORT = "$frontendPort"; DXM_FRONTEND_URL = "http://127.0.0.1:$frontendPort"; DXM_RUNTIME_CONTROL_COMMAND_FILE = $runtimeControlCommand } -GatePath $backendGate
+$workflowProfileDir = Join-Path $dataDir "browser_profiles\dxm_workflow"
+$backendCommand = New-ManagedProcessCommand -WorkingDirectory $backendDir -FilePath $pythonExe -Arguments "-m uvicorn src.main:app --host 127.0.0.1 --port $backendPort" -StartMessage "Starting backend on http://127.0.0.1:$backendPort" -ExitName "Backend" -Environment @{ DXM_LOGIN_HEADED = "1"; DXM_WORKFLOW_ACTION_RUNTIME = "browser_agent"; DXM_WORKFLOW_PROFILE_DIR = $workflowProfileDir; DXM_WORKFLOW_PERSISTENT_PROFILE = "1"; DXM_BACKEND_PORT = "$backendPort"; DXM_BACKEND_URL = "http://127.0.0.1:$backendPort"; DXM_FRONTEND_PORT = "$frontendPort"; DXM_FRONTEND_URL = "http://127.0.0.1:$frontendPort"; DXM_RUNTIME_CONTROL_COMMAND_FILE = $runtimeControlCommand } -GatePath $backendGate
 $frontendCommand = New-ManagedProcessCommand -WorkingDirectory $frontendDir -FilePath $viteCmd -Arguments "--host 127.0.0.1 --port $frontendPort" -StartMessage "Starting frontend on http://127.0.0.1:$frontendPort" -ExitName "Frontend" -Environment @{} -GatePath $frontendGate
 
 $managedServices = @()

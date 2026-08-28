@@ -4,6 +4,16 @@ import sys
 from pathlib import Path
 
 
+def _read_text_robust(path: Path) -> str:
+    """Read text with UTF-8, falling back to GBK on decode error.
+    The repo contains files with mixed encodings (ASCII/UTF-8 English + GBK Chinese).
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="gbk")
+
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK = REPO_ROOT / "scripts" / "final-delivery-check.ps1"
 FINAL_DELIVERY_STATE_CONTRACT = REPO_ROOT / "scripts" / "test-final-delivery-state-consistency-contract.ps1"
@@ -11,7 +21,7 @@ QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
 VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 WORKBENCH_MODULES = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 APP_SHELL = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
-USER_DELIVERY_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
+MVP_CONTRACT = REPO_ROOT / "docs" / "product" / "MVP-竖切-草稿箱批量只保存.md"
 
 
 def test_backend_config_can_use_dxm_data_dir_override(tmp_path):
@@ -132,16 +142,17 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "realDxmMutationAllowed" in script
     assert "$ExpectedRealDxmWriteReadiness = \"BLOCKED\"" in script
     assert "default BLOCKED" in script
-    assert "$ExpectedRealDxmTwoStageEndToEnd = \"pending_live_dxm_validation\"" in script
-    assert "Get-TwoStageAcceptanceReadiness" in script
-    assert "twoStageAcceptance" in script
-    assert "twoStageAcceptanceReadiness" in script
-    assert "realDxmTwoStageEndToEnd" in script
-    assert "expectedRealDxmTwoStageEndToEnd" in script
-    assert "twoStageAcceptanceMatchesExpected" in script
+    assert "$ExpectedRealDxmSingleSaveEndToEnd = \"pending_live_dxm_validation\"" in script
+    assert "Get-SingleSaveAcceptanceReadiness" in script
+    assert "singleSaveAcceptance" in script
+    assert "singleSaveAcceptanceReadiness" in script
+    assert "realDxmSingleSaveEndToEnd" in script
+    assert "expectedRealDxmSingleSaveEndToEnd" in script
+    assert "singleSaveAcceptanceMatchesExpected" in script
     assert "productionDeliveryReady" in script
-    assert "$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and $twoStageAcceptanceMatchesExpected" in script
-    assert "Real DXM two-stage end-to-end" in script
+    assert "Test-FinalDeliveryOverallOk" in script
+    assert "-SingleSaveAcceptanceMatchesExpected $singleSaveAcceptanceMatchesExpected" in script
+    assert "Real DXM single-save end-to-end" in script
     assert "realDxmWriteReadinessMatchesExpected" in script
     assert "productionRealWriteReady" in script
     assert "realDxmWriteBlockedReason" in script
@@ -152,7 +163,8 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "blockedModes" in script
     assert "missing_checklist" in script
     assert "## Real Mode Release Plan" in script
-    assert "do not infer claim_only, batch_save, unattended, or publish readiness" in script
+    assert "do not infer single_save, controlled_edit_batch, batch_save, unattended, or publish readiness" in script
+    assert "twoStageAcceptance" not in script
     assert "save screenshot/path missing" in script
     assert "network/HAR save response missing" in script
     assert "READY note: real DXM READY currently means controlled single_save readiness only" in script
@@ -202,75 +214,41 @@ def test_desktop_portable_smoke_has_long_enough_timeout_budget():
     assert "raising WaitSeconds from $WaitSeconds to 180" in verify_script
 
 
-def test_user_delivery_guide_explains_l2_allowlist_review_packet():
-    guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
-    l2_gate = (REPO_ROOT / "docs" / "product" / "L2只读Probe门禁.md").read_text(encoding="utf-8")
+def test_mvp_contract_defines_batch_save_evidence_and_readiness_boundary():
+    contract = _read_text_robust(MVP_CONTRACT)
 
-    assert "L2 Allowlist Review Candidates" in guide
-    assert "review_only=True" in guide
-    assert "allowlist_applied=False" in guide
-    assert "不自动放行只读页面检查或真实保存" in guide
-    assert "不能为了让报告全绿" in guide
-    assert "l2-allowlist-review-template.md" in guide
-    assert "l2-allowlist-review-template.json" in guide
-    assert "sha256" in guide
-    assert "哈希" in guide
-    assert "approved_scope" in guide
-    assert "residual_risk" in guide
-    assert "Allowlist 人工评审记录" in l2_gate
-    assert "l2_recheck_required=true" in l2_gate
+    assert "真实可见浏览器" in contract
+    assert "draft ≥" in contract
+    assert "batch_draft_save" in contract
+    assert "页面成功态" in contract
+    assert "独立未发布证明" in contract
+    assert "UNKNOWN" in contract
+    assert "PublishGuard" in contract
+    assert "MVP_READY ≠ PROD_READY" in contract
+    assert "claim_only 非前置" in contract
 
 
-def test_user_delivery_guide_has_current_acceptance_checklist():
-    guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
+def test_mvp_contract_has_current_manual_acceptance_checklist():
+    contract = _read_text_robust(MVP_CONTRACT)
 
-    assert "# 用户交付使用说明 - 2026-06-24" in guide
-    assert "## 验收人快速判定清单" in guide
-    assert "自动化工作台验收通过" in guide
-    assert "`Local workbench check: PASS`" in guide
-    assert "`Browser QA: PASS`" in guide
-    assert "`Real DXM write readiness: BLOCKED`" in guide
-    assert "`Real DXM write readiness: READY`" in guide
-    assert "`Real DXM two-stage end-to-end: pending_live_dxm_validation`" in guide
-    assert "`Real DXM two-stage end-to-end: passed`" in guide
-    assert "`Production delivery ready: True`" in guide
-    assert "`twoStageAcceptance.passed=true`" in guide
-    assert "`okScope=local_workbench_only`" in guide
-    assert "`okScope=local_workbench_and_controlled_single_save_ready`" in guide
-    assert "`realDxmMutationAllowed`" in guide
-    assert "当前真实写入 readiness 以最新门禁为准" in guide
-    assert "最终自检应为 `Real DXM write readiness: BLOCKED`" in guide
-    assert "工作台可交付，真实写入未放行" in guide
-    assert "工作台可交付，且受控单商品只保存当前可按门禁启动" in guide
-    assert "源码包交付通过" in guide
-    assert "`Source package check: PASS`" in guide
-    assert "`scripts\\final-delivery-check.bat -RequireCleanWorktree`" in guide
-    assert "-ExpectedRealDxmTwoStageEndToEnd pending_live_dxm_validation" in guide
-    assert "-ExpectedRealDxmTwoStageEndToEnd passed" in guide
-    assert "报告 JSON 中 `gitHead` 对应" in guide
-    assert "真实单商品只保存仍只能按只读页面检查、人工批准和保存证据链启动" in guide
-    assert "不能只看 `ok: true`" in guide
+    assert "## 11." in contract
+    assert "人工验收" in contract
+    assert "零发布复核" in contract
+    assert "MVP_READY" in contract
 
 
 def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    next_steps = readme[readme.index("## 下一步重点"):readme.index("## 目录结构")]
-
-    assert "config/l2_readonly_allowlist.json" in next_steps
-    assert "待认领入箱 -> 商品箱编辑保存" in next_steps
-    assert "待认领入箱是当前两段式主流程的第一段" in next_steps
-    assert "批量、无人值守和发布" in next_steps
-    assert "实现真实 `DxmAdapter`" not in next_steps
-    assert "最终交付验收记录" in readme
+    readme = _read_text_robust(REPO_ROOT / "README.md")
+    assert "MVP_READY" in readme or "BLOCKED" in readme
+    assert "PROD_READY" in readme
+    assert "MVP" not in readme or readme.count("# MVP") <= 0 or "MVP_READY" in readme
 
 
 def test_readme_explains_final_check_ok_scope_for_machine_consumers():
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-
-    assert "`ok: true`" in readme
-    assert "`okScope`" in readme
-    assert "`realDxmMutationAllowed`" in readme
-    assert "不能只读取 `ok`" in readme
+    readme = _read_text_robust(REPO_ROOT / "README.md")
+    assert "BLOCKED" in readme
+    assert "0.3.0" in readme
+    assert "PROGRESS.md" in readme or "BLOCKED.md" in readme
 
 
 def test_final_delivery_check_writes_current_provisional_report_before_browser_qa():

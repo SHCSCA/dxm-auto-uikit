@@ -6,10 +6,12 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from src.core.config import SCREENSHOT_DIR
 from src.db import (
     connection,
     disable_edit_batch_bundles_with_quarantined_sources,
@@ -17,6 +19,7 @@ from src.db import (
     disable_unexecutable_edit_batch_bundles,
     dumps,
     loads,
+    migrate_canonical_receipts,
     recover_interrupted_edit_batches as recover_edit_batches_in_db,
 )
 from src.batch_edit.execution_state import (
@@ -42,13 +45,27 @@ from src.batch_edit.execution_contract import (
 from src.batch_edit.batch_contract import BatchContractError, freeze_template_bundle
 from src.batch_edit.scope_contract import canonical_sha256
 from src.execution.browser_agent_protocol import canonical_frozen_target_identity, mutation_target_hash
+from src.execution.task_worker_control import (
+    ACTIVE_TASK_STATUSES,
+    PAYLOAD_KEY as WORKER_CONTROL_PAYLOAD_KEY,
+    TaskControlResult,
+    build_ack_control,
+    build_request_control,
+    empty_worker_control,
+    normalize_worker_control,
+    public_worker_control,
+)
+from src.services.evidence_ref import validate_evidence_ref
 from src.state_machine.save_authorization import (
     SaveOnlyContractError,
     build_product_box_snapshot,
     canonical_source_identity,
     canonical_sha256 as canonical_contract_sha256,
-    compare_authorization_context,
+    compare_authorization_context as compare_save_authorization_context,
     verify_product_box_snapshot,
+)
+from src.state_machine.batch_draft_authorization import (
+    compare_authorization_context as compare_batch_authorization_context,
 )
 from src.core.config import EVIDENCE_DIR
 from src.utils import now_iso
@@ -1612,15 +1629,18 @@ class Repository:
 
     @staticmethod
     def _running_task_exists(conn: Any) -> bool:
+        placeholders = ", ".join("?" for _ in ACTIVE_TASK_STATUSES)
         return conn.execute(
-            "SELECT 1 AS active FROM tasks WHERE status='running' LIMIT 1"
+            f"SELECT 1 AS active FROM tasks WHERE status IN ({placeholders}) LIMIT 1",
+            tuple(ACTIVE_TASK_STATUSES),
         ).fetchone() is not None
 
     @staticmethod
     def _other_running_task_exists(conn: Any, task_id: int) -> bool:
+        placeholders = ", ".join("?" for _ in ACTIVE_TASK_STATUSES)
         return conn.execute(
-            "SELECT 1 AS active FROM tasks WHERE status='running' AND id<>? LIMIT 1",
-            (task_id,),
+            f"SELECT 1 AS active FROM tasks WHERE status IN ({placeholders}) AND id<>? LIMIT 1",
+            (*ACTIVE_TASK_STATUSES, task_id),
         ).fetchone() is not None
 
     @staticmethod
@@ -2442,6 +2462,24 @@ class Repository:
                 row['payload'] = self._public_task_payload(loads(row.pop('payload_json'), {}))
             return rows
 
+    def list_task_summaries(self, *, mode: str | None = None):
+        """List task metadata without reading or decoding frozen task payloads."""
+
+        normalized_mode = str(mode or '').strip()
+        sql = """
+            SELECT id, name, store_id, status, mode, publish_scene,
+                   total_jobs AS item_count, completed_jobs, failed_jobs,
+                   created_at, updated_at
+              FROM tasks
+        """
+        params: tuple[Any, ...] = ()
+        if normalized_mode:
+            sql += " WHERE mode=?"
+            params = (normalized_mode,)
+        sql += " ORDER BY id DESC"
+        with connection() as conn:
+            return conn.execute(sql, params).fetchall()
+
     def get_task(self, task_id: int, *, include_private: bool = False):
         with connection() as conn:
             task = conn.execute(
@@ -2957,6 +2995,48 @@ class Repository:
             )
             return cur.rowcount == 1
 
+    def try_claim_task_runner_dispatch(self, task_id: int) -> bool:
+        """Claim one durable runner dispatch for a draft or API-started task."""
+
+        claimed_at = now_iso()
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = conn.execute(
+                'SELECT status, payload_json FROM tasks WHERE id=?',
+                (task_id,),
+            ).fetchone()
+            if not task or task.get('status') not in {'draft', 'running'}:
+                return False
+            if self._active_edit_batch_exists(conn):
+                return False
+            if self._other_running_task_exists(conn, task_id):
+                return False
+            payload = loads(task['payload_json'], {})
+            dispatch = payload.get('runner_dispatch')
+            if isinstance(dispatch, dict) and dispatch.get('claimed') is True:
+                return False
+            next_payload = dict(payload)
+            next_payload['runner_dispatch'] = {
+                'schema': 'dxm.task-runner-dispatch.v1',
+                'claimed': True,
+                'claimed_at': claimed_at,
+            }
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='running', payload_json=?, updated_at=?
+                 WHERE id=? AND status=? AND payload_json=?
+                """,
+                (
+                    dumps(next_payload),
+                    claimed_at,
+                    task_id,
+                    task['status'],
+                    task['payload_json'],
+                ),
+            )
+            return updated.rowcount == 1
+
     def try_start_task_with_authorization(
         self,
         task_id: int,
@@ -2994,7 +3074,12 @@ class Repository:
             except ValueError:
                 expiry = None
             stored_context = approval.get('authorization_context')
-            context_check = compare_authorization_context(stored_context, authorization_context)
+            compare_context = (
+                compare_batch_authorization_context
+                if str(task.get('mode') or '') == 'batch_draft_save'
+                else compare_save_authorization_context
+            )
+            context_check = compare_context(stored_context, authorization_context)
             edit_batch_active = self._active_edit_batch_exists(conn)
             another_task_active = self._other_running_task_exists(conn, task_id)
             if task.get('status') != 'draft':
@@ -3049,6 +3134,109 @@ class Repository:
             self._public_authorization_lease(next_approval),
         )
 
+    def approve_and_start_task_with_authorization(
+        self,
+        task_id: int,
+        *,
+        token: str,
+        confirmation: str,
+        approved_by: str,
+        authorization_context: dict[str, Any],
+        lease_id: str,
+        issued_at: str,
+        expires_at: str,
+        consumed_at: str,
+    ) -> AuthorizationLeaseResult:
+        """Atomically issue, consume, and start one real-write task authorization."""
+
+        try:
+            issued = datetime.fromisoformat(str(issued_at).replace('Z', '+00:00'))
+            expiry = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
+            consumed = datetime.fromisoformat(str(consumed_at).replace('Z', '+00:00'))
+            issued = issued if issued.tzinfo else issued.replace(tzinfo=timezone.utc)
+            expiry = expiry if expiry.tzinfo else expiry.replace(tzinfo=timezone.utc)
+            consumed = consumed if consumed.tzinfo else consumed.replace(tzinfo=timezone.utc)
+        except (AttributeError, TypeError, ValueError):
+            return AuthorizationLeaseResult(False, 'AUTH_TIME_INVALID', self.get_task(task_id), None)
+        if (
+            not isinstance(token, str)
+            or not token
+            or not isinstance(confirmation, str)
+            or not confirmation
+            or not isinstance(approved_by, str)
+            or not approved_by.strip()
+            or not isinstance(lease_id, str)
+            or not lease_id.strip()
+            or not isinstance(authorization_context, dict)
+            or not authorization_context
+        ):
+            return AuthorizationLeaseResult(False, 'TASK_APPROVAL_INPUT_INVALID', self.get_task(task_id), None)
+        if not (issued <= consumed < expiry) or (expiry - issued).total_seconds() > 5 * 60:
+            return AuthorizationLeaseResult(False, 'TASK_APPROVAL_TIME_INVALID', self.get_task(task_id), None)
+
+        next_approval = {
+            'approved': True,
+            'token_hash': hashlib.sha256(token.encode('utf-8')).hexdigest(),
+            'approved_by': approved_by.strip(),
+            'approved_at': issued_at,
+            'source': 'server',
+            'lease_id': lease_id,
+            'confirmation': confirmation,
+            'stage_task_facts': dict(authorization_context.get('stage_task_facts') or {}),
+            'authorization_context': dict(authorization_context),
+            'issued_at': issued_at,
+            'expires_at': expires_at,
+            'consumed': True,
+            'consumed_at': consumed_at,
+        }
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+            if not task:
+                return AuthorizationLeaseResult(False, 'AUTH_TASK_NOT_FOUND', None, None)
+            if task.get('status') != 'draft':
+                return AuthorizationLeaseResult(
+                    False,
+                    'AUTH_TASK_NOT_DRAFT',
+                    self.get_task(task_id),
+                    None,
+                )
+            if self._active_edit_batch_exists(conn):
+                return AuthorizationLeaseResult(False, 'AUTH_EDIT_BATCH_ACTIVE', self.get_task(task_id), None)
+            if self._other_running_task_exists(conn, task_id):
+                return AuthorizationLeaseResult(False, 'AUTH_ANOTHER_TASK_ACTIVE', self.get_task(task_id), None)
+            payload = loads(task['payload_json'], {})
+            if isinstance(payload.get('manual_approval'), dict):
+                return AuthorizationLeaseResult(
+                    False,
+                    'TASK_APPROVAL_ALREADY_ISSUED',
+                    self.get_task(task_id),
+                    None,
+                )
+            next_payload = dict(payload)
+            next_payload['manual_approval'] = next_approval
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='running', payload_json=?, updated_at=?
+                 WHERE id=? AND status='draft' AND payload_json=?
+                """,
+                (dumps(next_payload), consumed_at, task_id, task['payload_json']),
+            )
+            if updated.rowcount != 1:
+                return AuthorizationLeaseResult(
+                    False,
+                    'AUTH_START_CAS_CONFLICT',
+                    self.get_task(task_id),
+                    None,
+                )
+        return AuthorizationLeaseResult(
+            True,
+            'OK',
+            self.get_task(task_id),
+            self._public_authorization_lease(next_approval),
+        )
+
     def verify_consumed_task_authorization(
         self,
         task_id: int,
@@ -3076,7 +3264,12 @@ class Repository:
         except ValueError:
             expiry = None
         stored_context = approval.get('authorization_context')
-        context_check = compare_authorization_context(stored_context, authorization_context)
+        compare_context = (
+            compare_batch_authorization_context
+            if str(task.get('mode') or '') == 'batch_draft_save'
+            else compare_save_authorization_context
+        )
+        context_check = compare_context(stored_context, authorization_context)
         if task.get('status') != 'running':
             reason_code = 'AUTH_TASK_NOT_RUNNING'
         elif approval.get('approved') is not True or approval.get('source') != 'server':
@@ -3099,16 +3292,414 @@ class Repository:
         )
 
     def try_pause_task(self, task_id: int) -> bool:
-        now = now_iso()
-        with connection() as conn:
-            cur = conn.execute(
-                "UPDATE tasks SET status='paused', updated_at=? WHERE id=? AND status='running'",
-                (now, task_id),
-            )
-            return cur.rowcount == 1
+        """Backward-compatible alias: request pause (not yet worker-acked)."""
+        return self.request_pause_task(task_id).ok
 
     def try_resume_task(self, task_id: int) -> bool:
-        return False
+        return self.request_resume_task(task_id).ok
+
+    def get_task_worker_control(self, task_id: int) -> dict[str, Any] | None:
+        task = self.get_task_private(task_id)
+        if not task:
+            return None
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        return normalize_worker_control(payload.get(WORKER_CONTROL_PAYLOAD_KEY))
+
+    def request_pause_task(self, task_id: int, *, detail: str | None = None) -> TaskControlResult:
+        now = now_iso()
+        control = build_request_control(
+            request="pause",
+            requested_at=now,
+            reason_code="OPERATOR_PAUSE_REQUESTED",
+            detail=detail,
+        )
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            if status == "pause_requested":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "PAUSE_ALREADY_REQUESTED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status == "paused":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "PAUSE_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status == "stop_requested":
+                return TaskControlResult(False, "TASK_STOP_PENDING", status=status)
+            if status != "running":
+                return TaskControlResult(False, "TASK_NOT_RUNNING", status=status)
+            payload = loads(row["payload_json"], {})
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='pause_requested', payload_json=?, updated_at=?
+                 WHERE id=? AND status='running' AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, row["payload_json"]),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "PAUSE_REQUEST_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="pause_requested",
+            applied=True,
+            worker_control=control,
+        )
+
+    def acknowledge_pause_task(
+        self,
+        task_id: int,
+        *,
+        completed_jobs: int | None = None,
+        failed_jobs: int | None = None,
+        detail: str | None = None,
+    ) -> TaskControlResult:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json, completed_jobs, failed_jobs FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            payload = loads(row["payload_json"], {})
+            if status == "paused":
+                existing = normalize_worker_control(payload.get(WORKER_CONTROL_PAYLOAD_KEY))
+                return TaskControlResult(
+                    True,
+                    "PAUSE_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status != "pause_requested":
+                return TaskControlResult(False, "TASK_NOT_PAUSE_REQUESTED", status=status)
+            control = build_ack_control(
+                payload.get(WORKER_CONTROL_PAYLOAD_KEY),
+                ack="paused",
+                acked_at=now,
+                reason_code="WORKER_PAUSE_ACKED",
+                detail=detail or "worker acked pause at product safe point",
+            )
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                payload.get("runner_dispatch"),
+                released_at=now,
+                reason="pause_acked",
+            )
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='paused',
+                       payload_json=?,
+                       completed_jobs=COALESCE(?, completed_jobs),
+                       failed_jobs=COALESCE(?, failed_jobs),
+                       updated_at=?
+                 WHERE id=? AND status='pause_requested' AND payload_json=?
+                """,
+                (
+                    dumps(next_payload),
+                    completed_jobs,
+                    failed_jobs,
+                    now,
+                    task_id,
+                    row["payload_json"],
+                ),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "PAUSE_ACK_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="paused",
+            applied=True,
+            worker_control=control,
+        )
+
+    def request_resume_task(self, task_id: int, *, detail: str | None = None) -> TaskControlResult:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if self._active_edit_batch_exists(conn):
+                return TaskControlResult(False, "AUTH_EDIT_BATCH_ACTIVE")
+            if self._other_running_task_exists(conn, task_id):
+                return TaskControlResult(False, "AUTH_ANOTHER_TASK_ACTIVE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            if status != "paused":
+                if status == "running":
+                    return TaskControlResult(
+                        False,
+                        "TASK_ALREADY_RUNNING",
+                        status=status,
+                    )
+                if status == "pause_requested":
+                    return TaskControlResult(
+                        False,
+                        "PAUSE_ACK_REQUIRED",
+                        status=status,
+                    )
+                return TaskControlResult(False, "TASK_NOT_PAUSED", status=status)
+            payload = loads(row["payload_json"], {})
+            control = empty_worker_control()
+            control["reason_code"] = "OPERATOR_RESUME_REQUESTED"
+            control["detail"] = " ".join(str(detail or "operator resume from paused").split())
+            control["requested_at"] = now
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            next_payload["runner_dispatch"] = {
+                "schema": "dxm.task-runner-dispatch.v1",
+                "claimed": False,
+                "released_at": now,
+                "resume_requested_at": now,
+            }
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='running', payload_json=?, updated_at=?
+                 WHERE id=? AND status='paused' AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, row["payload_json"]),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "RESUME_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="running",
+            applied=True,
+            worker_control=control,
+        )
+
+    def request_stop_task(self, task_id: int, *, detail: str | None = None) -> TaskControlResult:
+        now = now_iso()
+        control = build_request_control(
+            request="stop",
+            requested_at=now,
+            reason_code="OPERATOR_STOP_REQUESTED",
+            detail=detail,
+        )
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            if status == "stop_requested":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "STOP_ALREADY_REQUESTED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status == "stopped":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "STOP_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status not in {"running", "pause_requested", "paused"}:
+                return TaskControlResult(False, "TASK_NOT_STOPPABLE", status=status)
+            payload = loads(row["payload_json"], {})
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            updated = conn.execute(
+                f"""
+                UPDATE tasks
+                   SET status='stop_requested', payload_json=?, updated_at=?
+                 WHERE id=? AND status=? AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, status, row["payload_json"]),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "STOP_REQUEST_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="stop_requested",
+            applied=True,
+            worker_control=control,
+        )
+
+    def acknowledge_stop_task(
+        self,
+        task_id: int,
+        *,
+        completed_jobs: int | None = None,
+        failed_jobs: int | None = None,
+        detail: str | None = None,
+    ) -> TaskControlResult:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            payload = loads(row["payload_json"], {})
+            if status == "stopped":
+                existing = normalize_worker_control(payload.get(WORKER_CONTROL_PAYLOAD_KEY))
+                return TaskControlResult(
+                    True,
+                    "STOP_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status != "stop_requested":
+                return TaskControlResult(False, "TASK_NOT_STOP_REQUESTED", status=status)
+            control = build_ack_control(
+                payload.get(WORKER_CONTROL_PAYLOAD_KEY),
+                ack="stopped",
+                acked_at=now,
+                reason_code="WORKER_STOP_ACKED",
+                detail=detail or "worker acked stop; no further products dispatched",
+            )
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                payload.get("runner_dispatch"),
+                released_at=now,
+                reason="stop_acked",
+            )
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='stopped',
+                       payload_json=?,
+                       completed_jobs=COALESCE(?, completed_jobs),
+                       failed_jobs=COALESCE(?, failed_jobs),
+                       updated_at=?
+                 WHERE id=? AND status='stop_requested' AND payload_json=?
+                """,
+                (
+                    dumps(next_payload),
+                    completed_jobs,
+                    failed_jobs,
+                    now,
+                    task_id,
+                    row["payload_json"],
+                ),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "STOP_ACK_CAS_CONFLICT")
+            # Leave remaining pending jobs untouched so operators can audit the queue.
+            conn.execute(
+                """
+                UPDATE jobs
+                   SET current_step_code=COALESCE(current_step_code, 'STOPPED'),
+                       current_step_name=COALESCE(current_step_name, '已停止，未派发'),
+                       updated_at=?
+                 WHERE task_id=? AND status='pending'
+                """,
+                (now, task_id),
+            )
+        return TaskControlResult(
+            True,
+            "OK",
+            status="stopped",
+            applied=True,
+            worker_control=control,
+        )
+
+    def release_task_runner_dispatch(self, task_id: int, *, reason: str) -> bool:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return False
+            payload = loads(row["payload_json"], {})
+            next_payload = dict(payload)
+            next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                payload.get("runner_dispatch"),
+                released_at=now,
+                reason=reason,
+            )
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET payload_json=?, updated_at=?
+                 WHERE id=? AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, row["payload_json"]),
+            )
+            return updated.rowcount == 1
+
+    @staticmethod
+    def _released_runner_dispatch(previous: Any, *, released_at: str, reason: str) -> dict[str, Any]:
+        base = dict(previous) if isinstance(previous, dict) else {}
+        return {
+            "schema": "dxm.task-runner-dispatch.v1",
+            "claimed": False,
+            "released_at": released_at,
+            "release_reason": reason,
+            "previous_claimed_at": base.get("claimed_at"),
+        }
+
+    def public_task_worker_control(self, task: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(task, Mapping):
+            return None
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        raw = payload.get(WORKER_CONTROL_PAYLOAD_KEY)
+        if raw is None and str(task.get("status") or "") not in ACTIVE_TASK_STATUSES | {"stopped"}:
+            return None
+        return public_worker_control(raw)
 
     def _public_task_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         public_payload = {
@@ -3215,6 +3806,7 @@ class Repository:
                 next_status = str(requested_status or "")
                 failure_terminal = {
                     "failed",
+                    "unknown",
                     "cancelled",
                     "needs_manual_review",
                     "stopped_uncertain",
@@ -3281,6 +3873,77 @@ class Repository:
             for row in rows:
                 row['meta'] = loads(row.pop('meta_json'), {})
             return rows
+
+    def add_receipt(self, receipt: dict[str, Any]) -> int:
+        """
+        Persist a CanonicalReceipt dict to the canonical_receipts table.
+        Returns the inserted row id.
+        """
+        now = now_iso()
+        with connection() as conn:
+            migrate_canonical_receipts(conn)
+            cursor = conn.execute(
+                """
+                INSERT INTO canonical_receipts (
+                    task_id, job_id, product_id, mode, claim_mark,
+                    canonical_receipt_sha256, started_at, completed_at,
+                    job_status, error_code, error_detail, needs_manual_review,
+                    receipt_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt.get("task_id"),
+                    receipt.get("job_id"),
+                    receipt.get("product_id"),
+                    receipt.get("mode"),
+                    receipt.get("claim_mark"),
+                    receipt.get("canonical_receipt_sha256"),
+                    receipt.get("started_at"),
+                    receipt.get("completed_at"),
+                    receipt.get("job_status"),
+                    receipt.get("error_code"),
+                    receipt.get("error_detail"),
+                    1 if receipt.get("needs_manual_review") else 0,
+                    dumps(receipt),
+                    now,
+                    now,
+                ),
+            )
+            return cursor.lastrowid or 0
+
+    def get_receipt(self, task_id: int, job_id: int) -> dict[str, Any] | None:
+        """Retrieve the canonical receipt for a specific job, if it exists."""
+        with connection() as conn:
+            row = conn.execute(
+                """
+                SELECT receipt_json FROM canonical_receipts
+                WHERE task_id=? AND job_id=?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (task_id, job_id),
+            ).fetchone()
+            if row:
+                return loads(row["receipt_json"], {})
+            return None
+
+    def list_receipts(self, task_id: int) -> list[dict[str, Any]]:
+        """List all canonical receipts for a task."""
+        with connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM canonical_receipts
+                WHERE task_id=?
+                ORDER BY id DESC
+                """,
+                (task_id,),
+            ).fetchall()
+            results = []
+            for row in rows:
+                r = dict(row)
+                r["receipt"] = loads(r.pop("receipt_json"), {})
+                r["needs_manual_review"] = bool(r["needs_manual_review"])
+                results.append(r)
+            return results
 
     def add_exception(self, task_id: int, job_id: int | None, error_code: str, field_domain: str, title: str, detail: str, suggestion: str):
         now = now_iso()
@@ -3534,6 +4197,128 @@ class Repository:
             report=self.get_report(report_id) if report_id is not None else None,
         )
 
+    def finalize_job_unknown(
+        self,
+        task_id: int,
+        job_id: int,
+        product_id: int | None,
+        *,
+        error_code: str,
+        field_domain: str,
+        title: str,
+        detail: str,
+        suggestion: str,
+        save_result: dict[str, Any],
+        summary: dict[str, Any],
+    ) -> JobFinalizationResult:
+        """Persist a non-retryable unknown mutation outcome without counting it failed."""
+
+        now = now_iso()
+        report_id: int | None = None
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute(
+                "SELECT status FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not task:
+                conflict_code = "TASK_NOT_FOUND"
+                reason = "task does not exist"
+            else:
+                job = conn.execute(
+                    "SELECT status FROM jobs WHERE id=? AND task_id=?",
+                    (job_id, task_id),
+                ).fetchone()
+                if not job:
+                    conflict_code = "JOB_NOT_FOUND"
+                    reason = "job does not exist for task"
+                else:
+                    existing_report = conn.execute(
+                        "SELECT id, status FROM reports WHERE task_id=? AND job_id IS ? ORDER BY id LIMIT 1",
+                        (task_id, job_id),
+                    ).fetchone()
+                    already_terminal = bool(
+                        existing_report
+                        and existing_report.get("status") == "unknown"
+                        and job.get("status") == "unknown"
+                    )
+                    if already_terminal:
+                        conflict_code = TerminalReportConflictError.conflict_code
+                        reason = "unknown report and unknown job are already terminal"
+                        report_id = int(existing_report["id"])
+                    elif existing_report:
+                        conflict_code = TerminalReportConflictError.conflict_code
+                        reason = "an existing report prevents unknown finalization"
+                        report_id = int(existing_report["id"])
+                    else:
+                        report_id = self._upsert_report(
+                            conn,
+                            task_id,
+                            job_id,
+                            product_id,
+                            "unknown",
+                            None,
+                            save_result,
+                            summary,
+                            now,
+                        )
+                        updated = conn.execute(
+                            """
+                            UPDATE jobs
+                               SET status='unknown', current_step_code='UNKNOWN',
+                                   current_step_name='保存结果待人工核对', error_code=?,
+                                   error_message=?, updated_at=?
+                             WHERE id=? AND task_id=? AND status IN ('pending', 'running')
+                            """,
+                            (error_code, detail, now, job_id, task_id),
+                        )
+                        if updated.rowcount != 1:
+                            raise RuntimeError("job unknown compare-and-set failed")
+                        conn.execute(
+                            """
+                            INSERT INTO exceptions (
+                                task_id, job_id, error_code, field_domain, title,
+                                detail, suggestion, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                task_id,
+                                job_id,
+                                error_code,
+                                field_domain,
+                                title,
+                                detail,
+                                suggestion,
+                                now,
+                                now,
+                            ),
+                        )
+                        conn.execute(
+                            """
+                            UPDATE tasks
+                               SET status='needs_manual_review',
+                                   completed_jobs=(
+                                       SELECT COUNT(*) FROM jobs
+                                        WHERE task_id=? AND status IN ('succeeded', 'completed')
+                                   ),
+                                   failed_jobs=(
+                                       SELECT COUNT(*) FROM jobs
+                                        WHERE task_id=? AND status='failed'
+                                   ),
+                                   updated_at=?
+                             WHERE id=? AND status IN ('running', 'paused', 'completed', 'partial_success')
+                            """,
+                            (task_id, task_id, now, task_id),
+                        )
+                        conflict_code = None
+                        reason = None
+        return JobFinalizationResult(
+            applied=conflict_code is None,
+            conflict_code=conflict_code,
+            reason=reason,
+            report=self.get_report(report_id) if report_id is not None else None,
+        )
+
     def _upsert_report(
         self,
         conn,
@@ -3551,8 +4336,8 @@ class Repository:
             "SELECT id, status FROM reports WHERE task_id=? AND job_id IS ? ORDER BY id LIMIT 1",
             (task_id, job_id),
         ).fetchone()
-        if existing and existing.get('status') == 'failed':
-            if status != 'failed':
+        if existing and existing.get('status') in {'failed', 'unknown'}:
+            if status != existing.get('status'):
                 raise TerminalReportConflictError(task_id, job_id)
             return int(existing['id'])
         if existing:

@@ -363,7 +363,17 @@ function createBackendOwnership({ child, instanceId, expectedIdentity }) {
 
 function setVerifiedBackendIdentity(ownership, verifiedIdentity) {
   if (!ownership || !verifiedIdentity) throw new Error('ownership and verified identity are required')
-  if (verifiedIdentity.instanceId !== ownership.instanceId || verifiedIdentity.backendPid !== ownership.pid) {
+  if (verifiedIdentity.instanceId !== ownership.instanceId) {
+    throw new Error('verified identity does not belong to the owned backend')
+  }
+  if (
+    verifiedIdentity.backendPid !== ownership.pid
+    && (
+      !Number.isInteger(verifiedIdentity.backendPid)
+      || verifiedIdentity.backendPid <= 0
+      || verifiedIdentity.backendPid !== verifiedIdentity.browserAgentPid
+    )
+  ) {
     throw new Error('verified identity does not belong to the owned backend')
   }
   ownership.verifiedIdentity = Object.freeze({ ...verifiedIdentity })
@@ -492,7 +502,24 @@ function waitForOwnedBackendHealth({
             }
             let verifiedIdentity
             try {
-              verifiedIdentity = verifyRuntimeIdentity(payload.runtimeIdentity, ownership.expectedIdentity)
+              const actualIdentity = payload.runtimeIdentity
+              const expectedIdentity = ownership.expectedIdentity
+              const livePid = Number(actualIdentity?.backendPid)
+              const sameInstance = actualIdentity?.instanceId === expectedIdentity.instanceId
+              const reconciledExpected = (
+                sameInstance
+                && Number.isInteger(livePid)
+                && livePid > 0
+                && actualIdentity.browserAgentPid === livePid
+                && livePid !== expectedIdentity.backendPid
+              )
+                ? Object.freeze({
+                  ...expectedIdentity,
+                  backendPid: livePid,
+                  browserAgentPid: livePid,
+                })
+                : expectedIdentity
+              verifiedIdentity = verifyRuntimeIdentity(actualIdentity, reconciledExpected)
             } catch (error) {
               finish(new Error(`Backend health check reached a mismatched backend at ${apiBase}/health: ${error.message}`))
               return

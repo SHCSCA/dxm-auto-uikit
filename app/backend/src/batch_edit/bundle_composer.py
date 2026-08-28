@@ -112,6 +112,11 @@ class EditBatchBundleComposer:
                 template = _decode_template(row)
                 snapshot = source_template_snapshot(template)
                 digest = canonical_sha256(snapshot)
+                if not isinstance(selection["source_digest"], str) or selection["source_digest"].upper() != digest:
+                    _reject(
+                        "TEMPLATE_SOURCE_DIGEST_DRIFT",
+                        f"source template {section} changed after the operator selected it",
+                    )
                 if template["is_enabled"] is not True:
                     _reject("TEMPLATE_SOURCE_DISABLED", f"source template {section} is disabled")
                 if template.get("requires_manual_configuration") is True:
@@ -255,6 +260,7 @@ class EditBatchBundleComposer:
             "template_name": template["template_name"],
             "template_type": template["template_type"],
             "binding_scope": template["binding_scope"],
+            "source_digest": canonical_sha256(snapshot),
             "missing_fields": list(dict.fromkeys(missing)),
             "ready": not missing,
         }
@@ -403,3 +409,141 @@ def _reject(
     missing: list[str] | None = None,
 ) -> None:
     raise BundleComposerError(reason_code, detail, status_code=status_code, missing=missing)
+
+
+class ContentFinalizeOrder:
+    """Enforces the hard sequence for ContentFinalize steps.
+
+    Hard sequence: Step 1=wholesale, Step 2=video, Step 3=translation
+    Each step runs HVD checkpoint after completion.
+    If Step N fails → subsequent steps are blocked_pre_write.
+    No reordering allowed.
+    """
+
+    STEP_SEQUENCE = ["wholesale", "video", "translation"]
+
+    def __init__(self) -> None:
+        self._step_results: dict[str, dict[str, Any]] = {}
+        self._failed_at_step: str | None = None
+
+    def execute_step(
+        self,
+        step: str,
+        executor: Any,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute one ContentFinalize step if not already blocked.
+
+        Args:
+            step: one of "wholesale", "video", "translation"
+            executor: the section executor (BatchVideoGenerator, WholesaleFiller, BatchTranslator)
+            context: execution context
+
+        Returns:
+            dict with keys: status ("success", "blocked_pre_write", "failed"), checkpoint, result
+        """
+        if self._failed_at_step is not None:
+            idx_failed = self.STEP_SEQUENCE.index(self._failed_at_step)
+            idx_current = self._get_step_index(step)
+            if idx_current > idx_failed:
+                return {
+                    "status": "blocked_pre_write",
+                    "blocked_by": self._failed_at_step,
+                    "blocked_reason": f"Step '{step}' blocked because '{self._failed_at_step}' failed",
+                    "checkpoint": None,
+                    "result": None,
+                }
+
+        if step not in self.STEP_SEQUENCE:
+            return {
+                "status": "failed",
+                "error": f"Unknown ContentFinalize step: {step}",
+                "checkpoint": None,
+                "result": None,
+            }
+
+        idx_current = self.STEP_SEQUENCE.index(step)
+        for prev_step in self.STEP_SEQUENCE[:idx_current]:
+            if self._failed_at_step == prev_step:
+                return {
+                    "status": "blocked_pre_write",
+                    "blocked_by": prev_step,
+                    "blocked_reason": f"Step '{step}' blocked because '{prev_step}' failed",
+                    "checkpoint": None,
+                    "result": None,
+                }
+
+        try:
+            result = executor(context)
+        except Exception as exc:
+            self._failed_at_step = step
+            self._step_results[step] = {"success": False, "error": str(exc)}
+            return {
+                "status": "failed",
+                "error": str(exc),
+                "checkpoint": self._run_hvd_checkpoint(step),
+                "result": None,
+            }
+
+        if not result.get("success", False):
+            self._failed_at_step = step
+            self._step_results[step] = result
+            return {
+                "status": "failed",
+                "error": result.get("error_message") or result.get("error") or "unknown error",
+                "checkpoint": self._run_hvd_checkpoint(step),
+                "result": result,
+            }
+
+        self._step_results[step] = result
+        return {
+            "status": "success",
+            "checkpoint": self._run_hvd_checkpoint(step),
+            "result": result,
+        }
+
+    def is_step_blocked(self, step: str) -> bool:
+        """Check if a step is blocked by a prior failure."""
+        if self._failed_at_step is None:
+            return False
+        idx_failed = self.STEP_SEQUENCE.index(self._failed_at_step)
+        idx_current = self._get_step_index(step)
+        return idx_current > idx_failed
+
+    def get_blocked_steps(self) -> list[str]:
+        """Get list of blocked steps."""
+        if self._failed_at_step is None:
+            return []
+        idx_failed = self.STEP_SEQUENCE.index(self._failed_at_step)
+        return self.STEP_SEQUENCE[idx_failed + 1:]
+
+    def get_step_results(self) -> dict[str, dict[str, Any]]:
+        """Get results for all executed steps."""
+        return dict(self._step_results)
+
+    def is_complete(self) -> bool:
+        """Check if all steps completed successfully."""
+        if self._failed_at_step is not None:
+            return False
+        return all(step in self._step_results for step in self.STEP_SEQUENCE)
+
+    def _get_step_index(self, step: str) -> int:
+        try:
+            return self.STEP_SEQUENCE.index(step)
+        except ValueError:
+            return -1
+
+    def _run_hvd_checkpoint(self, completed_step: str) -> dict[str, Any]:
+        """Run HVD checkpoint after step completion."""
+        return {
+            "checkpoint_step": completed_step,
+            "checkpoint_type": "HVD",
+            "completed_steps": list(self._step_results.keys()),
+            "failed_step": self._failed_at_step,
+            "blocked_steps": self.get_blocked_steps(),
+        }
+
+    def reset(self) -> None:
+        """Reset all step results and failure state."""
+        self._step_results.clear()
+        self._failed_at_step = None

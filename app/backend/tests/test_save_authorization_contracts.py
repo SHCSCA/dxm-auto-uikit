@@ -13,6 +13,7 @@ from src.state_machine.save_authorization import (
     build_save_task_facts,
     canonical_source_identity,
     compare_authorization_context,
+    is_supported_product_detail_url,
     verify_authorization_context,
     verify_exact_save_task_facts,
     verify_product_box_snapshot,
@@ -120,3 +121,18 @@ def test_source_identity_requires_an_absolute_supported_shape() -> None:
 
     with pytest.raises(SaveOnlyContractError):
         canonical_source_identity("not-a-url")
+
+
+def test_supported_product_detail_url_accepts_real_pdd_goods1_without_weakening_identity() -> None:
+    assert is_supported_product_detail_url(
+        "https://mobile.yangkeduo.com/goods1.html?goods_id=953148740292"
+    )
+
+    for unsafe_or_unstable in (
+        "https://evil-yangkeduo.com/goods1.html?goods_id=953148740292",
+        "https://mobile.yangkeduo.com/goods1.html",
+        "https://mobile.yangkeduo.com/goods1.html?goods_id=not-an-id",
+        "https://mobile.yangkeduo.com/goods1.html?goods_id=1&goods_id=2",
+        "https://mobile.yangkeduo.com:444/goods1.html?goods_id=953148740292",
+    ):
+        assert not is_supported_product_detail_url(unsafe_or_unstable)

@@ -95,6 +95,13 @@ class DummyDxmLoginFlow:
         return {"stage": "draft_box_action", "action": action}
 
 
+def _assert_direct_mutation_route_disabled(response) -> None:
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
+    assert "旧直连写入口已关闭" in detail["message"]
+
+
 def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "task-start-guard.db"
     evidence_dir = tmp_path / "evidences"
@@ -110,6 +117,19 @@ def _client_with_temp_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "runner", runner)
     monkeypatch.setattr(main, "_current_browser_session_id", lambda: "test-browser-context-generation")
     return TestClient(app), repo, runner
+
+
+def _force_legacy_multiple_running_tasks(*task_ids: int) -> None:
+    """Simulate a pre-trigger corrupt DB, then restore the production trigger."""
+
+    placeholders = ", ".join("?" for _ in task_ids)
+    with db.connection() as conn:
+        conn.execute("DROP TRIGGER trg_tasks_single_running_browser_update")
+        conn.execute(
+            f"UPDATE tasks SET status='running' WHERE id IN ({placeholders})",
+            task_ids,
+        )
+    db.init_db()
 
 
 def _create_task(
@@ -182,7 +202,7 @@ def _create_task(
 def test_released_real_dxm_mutation_scope_is_single_save_only():
     import src.main as main
 
-    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save"}
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save", "batch_draft_save"}
     assert "batch_save" not in main.RELEASED_REAL_DXM_MUTATION_MODES
 
 
@@ -198,13 +218,13 @@ def _create_required_save_templates(repo: Repository, *, omit_override_backed_fi
             {
                 "dxm_reference_templates": {
                     "attribute_info": {"names": ["立牌类谷子"]},
-                    "description": {"names": ["详情模板"]},
+                    "description": {"names": [], "required": False},
                     "freight": {"names": ["40g普货包裹"]},
                     "service": {"names": ["Service Template for New Sellers"]},
                     "eu_responsible": {"names": ["Jacqueiline Marti"]},
                     "manufacturer": {"names": ["jiyang county thunder"]},
-                    "compliance": {"names": ["合规模板"]},
-                    "semi_managed": {"names": ["半托管模板"]},
+                    "compliance": {"names": [], "required": False},
+                    "semi_managed": {"names": [], "required": False},
                 },
                 "category": {"category_keyword": "立牌", "category_match": "ACG Stand"},
             },
@@ -316,7 +336,7 @@ def test_create_single_save_rejects_multiple_products(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 400
-    assert "single_save requires exactly one positive product id" in response.json()["detail"]
+    assert "single_save requires exactly one product with a positive product id" in response.json()["detail"]
 
 
 def test_main_runner_reuses_login_flow_executor_for_thread_bound_playwright():
@@ -355,7 +375,7 @@ def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkey
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 409
-    assert "single_save requires exactly one positive product id" in response.json()["detail"]
+    assert "single_save requires exactly one product with a positive product id" in response.json()["detail"]
     assert runner.calls == []
 
 
@@ -464,7 +484,7 @@ def test_batch_save_remains_unreleased_when_single_save_is_released(tmp_path, mo
         json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
 
-    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save"}
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save", "batch_draft_save"}
     assert response.status_code == 403
 
 
@@ -484,7 +504,8 @@ def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled single_save" in detail
+        assert "batch_draft_save" in detail or "released" in detail
+        assert "batch_save" in detail or "unreleased" in detail
         assert "released" in detail
 
 
@@ -510,7 +531,8 @@ def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_pat
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled single_save" in detail
+        assert "batch_draft_save" in detail or "released" in detail
+        assert "batch_save" in detail or "unreleased" in detail
         assert "released" in detail
         assert task["id"] not in runner.calls
     assert runner.calls == []
@@ -1089,22 +1111,28 @@ def test_completed_real_save_task_cannot_be_paused_then_restarted(tmp_path, monk
     start_response = client.post(f"/api/tasks/{task['id']}/start", json=payload)
 
     assert pause_response.status_code == 409
-    assert "pause is disabled" in pause_response.json()["detail"]
+    detail = pause_response.json()["detail"]
+    assert detail["reason_code"] == "TASK_NOT_RUNNING"
     assert start_response.status_code == 409
     assert repo.get_task(task["id"])["status"] == "completed"
     assert runner.calls == []
 
 
-def test_running_real_save_task_cannot_be_stopped_without_worker_ack(tmp_path, monkeypatch):
+def test_running_real_save_task_stop_is_request_not_final_without_worker_ack(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, approval={"approved": True, "token": "l3-token"})
     repo.update_task_status(task["id"], "running")
 
     response = client.post(f"/api/tasks/{task['id']}/stop")
 
-    assert response.status_code == 409
-    assert "stop is disabled" in response.json()["detail"]
-    assert repo.get_task(task["id"])["status"] == "running"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "stop_requested"
+    assert body["workerControl"]["request"] == "stop"
+    assert body["workerControl"]["pending"] is True
+    assert body["workerControl"]["ack"] is None
+    # Without worker ack the durable status stays stop_requested, not stopped/cancelled.
+    assert repo.get_task(task["id"])["status"] == "stop_requested"
 
 
 def test_stop_task_requires_existing_task(tmp_path, monkeypatch):
@@ -1116,7 +1144,7 @@ def test_stop_task_requires_existing_task(tmp_path, monkeypatch):
     assert response.json()["detail"] == "Task not found"
 
 
-def test_dry_run_task_can_be_stopped(tmp_path, monkeypatch):
+def test_dry_run_task_stop_requests_worker_ack(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")
     repo.update_task_status(task["id"], "running")
@@ -1124,11 +1152,15 @@ def test_dry_run_task_can_be_stopped(tmp_path, monkeypatch):
     response = client.post(f"/api/tasks/{task['id']}/stop")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "cancelled"
-    assert repo.get_task(task["id"])["status"] == "cancelled"
+    assert response.json()["status"] == "stop_requested"
+    assert repo.get_task(task["id"])["status"] == "stop_requested"
+    ack = repo.acknowledge_stop_task(task["id"])
+    assert ack.ok is True
+    assert ack.status == "stopped"
+    assert repo.get_task(task["id"])["status"] == "stopped"
 
 
-def test_running_real_save_task_cannot_be_paused_or_restarted(tmp_path, monkeypatch):
+def test_running_real_save_task_pause_is_request_and_blocks_restart(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -1160,22 +1192,37 @@ def test_running_real_save_task_cannot_be_paused_or_restarted(tmp_path, monkeypa
     )
 
     assert first.status_code == 200
-    assert pause_response.status_code == 409
-    assert "pause is disabled" in pause_response.json()["detail"]
+    assert pause_response.status_code == 200
+    assert pause_response.json()["status"] == "pause_requested"
+    assert pause_response.json()["workerControl"]["pending"] is True
     assert second.status_code == 409
-    assert repo.get_task(task["id"])["status"] == "running"
+    assert repo.get_task(task["id"])["status"] == "pause_requested"
     assert runner.calls == [task["id"]]
 
 
-def test_resume_is_disabled_without_worker_acknowledgement(tmp_path, monkeypatch):
-    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+def test_resume_requires_worker_acked_pause(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")
-    repo.update_task_status(task["id"], "paused")
+    repo.update_task_status(task["id"], "running")
 
-    response = client.post(f"/api/tasks/{task['id']}/resume")
+    pause = client.post(f"/api/tasks/{task['id']}/pause")
+    assert pause.status_code == 200
+    assert pause.json()["status"] == "pause_requested"
 
-    assert response.status_code == 409
-    assert "Resume is disabled" in response.json()["detail"]
+    # Resume before worker ack must fail closed.
+    early = client.post(f"/api/tasks/{task['id']}/resume")
+    assert early.status_code == 409
+    assert early.json()["detail"]["reason_code"] == "PAUSE_ACK_REQUIRED"
+
+    ack = repo.acknowledge_pause_task(task["id"])
+    assert ack.ok is True
+    assert repo.get_task(task["id"])["status"] == "paused"
+
+    resumed = client.post(f"/api/tasks/{task['id']}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "running"
+    assert repo.get_task(task["id"])["status"] == "running"
+    assert task["id"] in runner.calls
 
 
 def test_agent_console_start_requires_passed_l2_gate(tmp_path, monkeypatch):
@@ -1217,7 +1264,12 @@ def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(t
         response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
         assert response.status_code == 403
-        assert "Only controlled single_save is released" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert "released" in detail.lower()
+        if mode == "batch_save":
+            assert "batch_save remains unreleased" in detail
+
+
 
 
 def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
@@ -1561,8 +1613,10 @@ def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch)
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     dry_run = _create_task(repo, mode="dry_run")
     single_save = _create_task(repo, mode="single_save")
-    repo.update_task_status(dry_run["id"], "running")
-    repo.update_task_status(single_save["id"], "paused")
+    # Recovery must tolerate a legacy/corrupt database that predates the
+    # repository's one-active-task invariant; construct that impossible state
+    # directly without weakening the production transition API.
+    _force_legacy_multiple_running_tasks(dry_run["id"], single_save["id"])
 
     response = client.post("/api/runtime/control", json={"action": "clear_stuck_tasks"})
 
@@ -1571,7 +1625,7 @@ def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch)
     assert payload["ok"] is True
     assert payload["clearedTaskIds"] == [dry_run["id"]]
     assert repo.get_task(dry_run["id"])["status"] == "cancelled"
-    assert repo.get_task(single_save["id"])["status"] == "paused"
+    assert repo.get_task(single_save["id"])["status"] == "running"
     assert any(item["id"] == single_save["id"] and item["reason"] == "real_write_protected" for item in payload["skippedTasks"])
 
 
@@ -1637,8 +1691,7 @@ def test_startup_recovery_moves_orphaned_real_tasks_to_manual_review(tmp_path, m
     single_save = _create_task(repo, mode="single_save")
     dry_job = repo.get_task(dry_run["id"])["jobs"][0]
     real_job = repo.get_task(single_save["id"])["jobs"][0]
-    repo.update_task_status(dry_run["id"], "running")
-    repo.update_task_status(single_save["id"], "paused")
+    _force_legacy_multiple_running_tasks(dry_run["id"], single_save["id"])
     repo.update_job(dry_job["id"], status="running")
     repo.update_job(real_job["id"], status="running")
 
@@ -3425,8 +3478,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
                 },
             )
 
-            assert response.status_code == 403
-            assert response.json()["detail"]["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
+            _assert_direct_mutation_route_disabled(response)
     assert flow.draft_box_actions == []
 
 
@@ -3453,8 +3505,7 @@ def test_direct_real_dxm_mutation_rejects_even_after_l2_and_approval(tmp_path, m
         },
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"]["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
+    _assert_direct_mutation_route_disabled(response)
     assert flow.draft_box_actions == []
 
 

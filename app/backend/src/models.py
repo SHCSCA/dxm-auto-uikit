@@ -93,6 +93,11 @@ class EditBatchBundleSourceSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     template_id: StrictInt = Field(gt=0)
+    source_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9A-Fa-f]{64}$",
+    )
 
 
 class EditBatchBundleSectionTemplates(BaseModel):
@@ -122,6 +127,82 @@ class EditBatchBundleComposeRequest(BaseModel):
     section_templates: EditBatchBundleSectionTemplates
 
 
+class DxmTemplateRefSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
+    category_ids: list[str] = Field(min_length=1, max_length=50)
+    representative_product_ids: dict[str, str] = Field(default_factory=dict)
+
+
+class DxmTemplateShopSyncRequest(BaseModel):
+    """Request a full management-center template sync for one real DXM shop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
+
+
+class LocalPlanTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    version: str
+    shop_id: str
+    category_ids: list[str]
+    path: str
+    fixed_values: dict[str, Any]
+    fill_rules: dict[str, Any]
+    dxm_template_refs: list[dict[str, Any]]
+    field_mappings: dict[str, Any]
+    source_policies: dict[str, Any] = Field(default_factory=dict)
+    editor_actions: dict[str, Any] = Field(default_factory=dict)
+    scope_contract: str | None = None
+    # v3 keeps the operator's configuration intent separate from the
+    # per-product execution projection. These fields are optional so legacy
+    # v1/v2 plans remain readable while the UI migrates them explicitly.
+    configuration_contract: str | None = None
+    status: Literal['draft', 'ready'] = 'ready'
+    semi_managed: dict[str, Any] | None = None
+    source_snapshots: dict[str, Any] = Field(default_factory=dict)
+    validation_policy: dict[str, Any]
+    exception_policy: dict[str, Any]
+    provenance: str
+
+
+class PlanSnapshotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    local_plan_template_id: StrictInt = Field(gt=0)
+    shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
+    session_ref: str = Field(pattern=r"^[0-9a-f]{16}$")
+    product_ids: list[str] = Field(min_length=1, max_length=100)
+    expected_snapshot_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9A-Fa-f]{64}$",
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    target_category_id: str | None = Field(
+        default=None,
+        pattern=r"^[1-9][0-9]*$",
+    )
+    target_category_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+    )
+    target_category_match: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+
+
 class ProductCreate(BaseModel):
     title: str
     category_name: str = "未分类"
@@ -137,7 +218,7 @@ class TaskCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
     store_id: StrictInt | None = Field(default=None, gt=0)
-    mode: Literal["probe", "dry_run", "single_save", "batch_save"] = "single_save"
+    mode: Literal["probe", "dry_run", "single_save", "batch_save", "batch_draft_save"] = "single_save"
     publish_scene: str = Field(
         default="SMT_SEMI_MANAGED_SAVE_ONLY",
         min_length=1,

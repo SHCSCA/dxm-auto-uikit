@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import hashlib
 import json
 import sqlite3
@@ -19,6 +20,7 @@ from src.execution import v1_runner as v1_runner_module
 from src.execution.v1_runner import V1ExecutionError, V1TaskRunner
 from src.repository import Repository
 from src.state_machine.contracts import StateName
+from tests.test_action_result_contract import _valid_save_result, _valid_unpublished_result
 
 
 def _test_runner(*args, **kwargs):
@@ -160,6 +162,7 @@ def _strict_test_save_result(*, target_identity: dict, store_name: str) -> dict:
         "mutation_request_count": 1,
         "save_request_count": 1,
         "other_mutation_request_count": 0,
+        "read_only_schema_request_count": 0,
         "publish_request_count": 0,
     }
     publish_signal = {
@@ -394,6 +397,153 @@ def _test_action_first_ref(result: dict) -> dict:
     return result["evidence"]["refs"][0]
 
 
+def _bind_single_save_action_result(
+    result: dict,
+    *,
+    target_identity: dict,
+    product_query: str,
+    store_name: str,
+    evidence_name: str,
+    execution_defaults: dict | None = None,
+) -> dict:
+    bound = deepcopy(result)
+    bound["before_values"]["product_query"] = product_query
+    bound["before_values"]["store_name"] = store_name
+    frozen_payload = (
+        execution_defaults.get("_frozen_execution_payload")
+        if isinstance(execution_defaults, dict)
+        else None
+    )
+    path_a = isinstance(frozen_payload, dict) and isinstance(
+        frozen_payload.get("fields"),
+        list,
+    )
+    if path_a:
+        bound["page_identity"]["kind"] = "editor"
+        bound["page_identity"]["url"] = "https://www.dianxiaomi.com/web/smt/edit"
+    digest = hashlib.sha256(
+        json.dumps(
+            target_identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    bound["before_values"]["target_identity"] = deepcopy(target_identity)
+    if bound["attempted_state"] == "SAVE_ONLY":
+        bound["before_values"]["store_name"] = store_name
+        category_schema_readback = None
+        frozen_execution_readback = None
+        if path_a:
+            category_schema_readback = {
+                "schema": "dxm.editor.category_schema_readback.v1",
+                "ok": True,
+                "phase": "before_ledger_begin_dispatch",
+                "expected_category_id": frozen_payload["category_id"],
+                "observed_category_id": frozen_payload["category_id"],
+                "expected_category_schema_hash": frozen_payload[
+                    "category_schema_hash"
+                ],
+                "observed_category_schema_hash": frozen_payload[
+                    "category_schema_hash"
+                ],
+                "category_source": "test:live_schema_readback",
+                "reason": None,
+            }
+            readback_fields = []
+            for field in frozen_payload["fields"]:
+                resolved_value = field["resolved_value"]
+                value_hash = hashlib.sha256(
+                    json.dumps(
+                        resolved_value,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                ).hexdigest().upper()
+                readback_fields.append(
+                    {
+                        "field_key": field["field_key"],
+                        "ui_binding": field["ui_binding"],
+                        "expected_value_hash": value_hash,
+                        "observed_value_hash": value_hash,
+                        "match_count": (
+                            len(resolved_value)
+                            if isinstance(resolved_value, list)
+                            else 1
+                        ),
+                        "aggregate_kind": (
+                            "sku_rows"
+                            if field["field_key"] == "aeopAeProductSKUs"
+                            else (
+                                "choice_group"
+                                if isinstance(resolved_value, list)
+                                else "single"
+                            )
+                        ),
+                        "exact": True,
+                    }
+                )
+            frozen_execution_readback = {
+                "schema": "dxm.frozen_execution.readback.v1",
+                "ok": True,
+                "phase": "before_ledger_begin_dispatch",
+                "execution_payload_hash": frozen_payload["payload_hash"],
+                "field_count": len(readback_fields),
+                "fields": readback_fields,
+                "reason": None,
+            }
+        for container in (
+            bound["after_values"],
+            bound["evidence"]["observations"],
+            bound["evidence"]["observations"]["save_result"],
+        ):
+            identity = container["pre_dispatch_readback"]["identity"]
+            identity["target_identity"] = deepcopy(target_identity)
+            identity["target_identity_sha256"] = digest
+            identity["expected_store_name"] = store_name
+            if category_schema_readback is not None:
+                container["pre_dispatch_readback"][
+                    "category_schema_readback"
+                ] = deepcopy(category_schema_readback)
+                container["pre_dispatch_readback"][
+                    "frozen_execution_readback"
+                ] = deepcopy(frozen_execution_readback)
+        if category_schema_readback is not None:
+            bound["evidence"]["observations"]["save_result"]["network_audit"][
+                "read_only_schema_request_count"
+            ] = 1
+    else:
+        for container in (
+            bound["after_values"],
+            bound["evidence"]["observations"],
+        ):
+            fresh_probe = container["fresh_probe"]
+            fresh_probe["target_identity_sha256"] = digest
+            if path_a:
+                fresh_probe["page_url"] = "https://www.dianxiaomi.com/web/smt/edit"
+            target = container["target_identity"]
+            target["target_identity_sha256"] = digest
+    evidence_ref = _evidence_ref(evidence_name)
+    evidence_ref.update(
+        {
+            "kind": (
+                "save_screenshot"
+                if bound["attempted_state"] == "SAVE_ONLY"
+                else "unpublished_screenshot"
+            ),
+            "captured_at": (
+                "2026-07-15T08:00:00+08:00"
+                if bound["attempted_state"] == "SAVE_ONLY"
+                else "2026-07-15T08:00:01+08:00"
+            ),
+        }
+    )
+    bound["evidence"]["refs"] = [evidence_ref]
+    return bound
+
+
 class DummyManager:
     def __init__(self):
         self.events = []
@@ -414,6 +564,7 @@ class FakeWorkflowAdapter:
         self.save_result = save_result or {"ok": True, "code": 0, "msg": "真实保存成功", "published": False}
         self.include_save_result = include_save_result
         self.live_hud_calls = []
+        self._last_frozen_execution_defaults = None
 
     def check_login_state(self):
         return self._record("check_login_state")
@@ -466,7 +617,7 @@ class FakeWorkflowAdapter:
             "updated_at": "2026-05-22T00:00:02+00:00",
         }
 
-    def _record(self, action, *args):
+    def _record(self, action, *args, target_identity=None):
         self.calls.append((action, *args))
         target_identity = args[-1] if args and isinstance(args[-1], dict) else None
         business_args = args[:-1] if target_identity is not None else args
@@ -544,9 +695,13 @@ class ThreadRecordingWorkflowAdapter(FakeWorkflowAdapter):
         self.thread_names = []
         self.hud_thread_names = []
 
-    def _record(self, action, *args):
+    def _record(self, action, *args, target_identity=None):
         self.thread_names.append(threading.current_thread().name)
-        return super()._record(action, *args)
+        return super()._record(
+            action,
+            *args,
+            target_identity=target_identity,
+        )
 
     def update_live_hud(self, hud):
         self.hud_thread_names.append(threading.current_thread().name)
@@ -706,10 +861,13 @@ def _create_task(
     store = repo.create_store("Dang Kang", "AliExpress")
     dxm_reference_templates = {
         "attribute_info": {"names": ["立牌类谷子"]},
+        "description": {"names": [], "required": False},
         "freight": {"names": ["40g普货包裹"]},
         "service": {"names": ["Service Template for New Sellers"]},
         "eu_responsible": {"names": ["Jacqueiline Marti"]},
         "manufacturer": {"names": ["jiyang county thunder"]},
+        "compliance": {"names": [], "required": False},
+        "semi_managed": {"names": [], "required": False},
     }
     template_payloads = {
         "category": {
@@ -846,9 +1004,22 @@ def test_single_save_late_success_cannot_override_manual_review_after_save_autho
     manager = DummyManager()
 
     class ManualReviewDuringSaveAdapter(FakeWorkflowAdapter):
-        def save_only(self, defaults=None, product_query=None, store_name=None, target_identity=None):
+        def save_only(
+            self,
+            defaults=None,
+            product_query=None,
+            store_name=None,
+            target_identity=None,
+            **kwargs,
+        ):
             repo.update_task_status(task["id"], "needs_manual_review")
-            return super().save_only(defaults, product_query, store_name, target_identity)
+            return super().save_only(
+                defaults,
+                product_query,
+                store_name,
+                target_identity=target_identity,
+                **kwargs,
+            )
 
     asyncio.run(
         _test_runner(
@@ -1163,8 +1334,12 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
 
 def test_single_save_persists_save_and_unpublished_evidence_refs_in_workflow_meta(v1_db):
     class EvidenceWorkflowAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action in {"save_only", "verify_not_published"}:
                 evidence_ref = _evidence_ref(f"{action}-proof.png")
                 result["evidence"]["refs"] = [
@@ -1628,8 +1803,12 @@ def test_save_only_false_save_result_fails_job(v1_db):
 
 def test_single_save_fails_when_action_result_has_no_evidence_descriptor(v1_db):
     class MissingEvidenceAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action in {"save_only", "verify_not_published"}:
                 result["evidence"]["refs"] = []
             return result
@@ -1654,8 +1833,12 @@ def test_single_save_fails_when_action_result_has_no_evidence_descriptor(v1_db):
 
 def test_single_save_rejects_nested_only_evidence_descriptor(v1_db):
     class NestedOnlyEvidenceAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action == "save_only":
                 result["evidence"]["refs"] = []
             return result
@@ -1693,8 +1876,12 @@ def test_single_save_rejects_invalid_live_evidence(
     reason_code,
 ):
     class InvalidEvidenceAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action != "save_only":
                 return result
 
@@ -1769,8 +1956,12 @@ def test_single_save_revalidates_save_evidence_before_finalize(v1_db):
             super().__init__()
             self.save_evidence_path = None
 
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action == "save_only":
                 self.save_evidence_path = Path(_test_action_first_ref(result)["path"])
             elif action == "verify_not_published" and self.save_evidence_path:
