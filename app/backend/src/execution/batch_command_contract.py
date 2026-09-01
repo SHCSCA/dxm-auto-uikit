@@ -10,12 +10,343 @@ from typing import Any
 
 BATCH_QUEUE_GUARD_SCHEMA = "dxm.batch_draft_save.queue_guard.v1"
 SAVE_VERIFICATION_CONTEXT_SCHEMA = "dxm.batch_draft_save.save_verification.v1"
+PATH_B_SAVE1_DISCOVERY_PROFILE_KEY = "real_dxm_path_b_discovery"
+PATH_B_SAVE1_DISCOVERY_PROFILE_SCHEMA = "real_dxm_path_b_save1_discovery.v1"
+PATH_B_SAVE1_DISCOVERY_EXECUTION_PROFILE = "path_b_save1_discovery"
+PATH_B_SAVE1_DISCOVERY_STATE = "FIRST_SAVE_INTENT"
+PATH_B_SAVE1_DISCOVERY_ACTION = "first_save_intent"
+PATH_B_FORMAL_LINEAGE_KEY = "real_dxm_path_b_formal_lineage"
+PATH_B_FORMAL_LINEAGE_SCHEMA = "real_dxm_path_b_formal_lineage.v1"
+
+_PATH_B_SAVE1_DISCOVERY_PROFILE_KEYS = frozenset(
+    {
+        "schema",
+        "execution_profile",
+        "target_task_id",
+        "target_job_id",
+        "target_product_id",
+        "target_product_ordinal",
+        "scope_sha256",
+        "approval_sha256",
+        "discovery_key_sha256",
+        "single_use",
+        "save_stage_limit",
+        "save2_allowed",
+        "other_product_mutation_allowed",
+    }
+)
 
 
 class BatchCommandContractError(ValueError):
     def __init__(self, reason_code: str, detail: str) -> None:
         self.reason_code = reason_code
         super().__init__(detail)
+
+
+def build_path_b_save1_discovery_profile(
+    task: Any,
+    *,
+    target_product_id: Any,
+    scope_sha256: Any,
+    approval_sha256: Any,
+    discovery_key_sha256: Any,
+) -> dict[str, Any]:
+    """Derive the only fail-closed one-product SAVE1 discovery profile.
+
+    The public caller chooses a product id, but cannot choose a queue position,
+    job id, SAVE stage, or broaden the mutation boundary.  Discovery is only
+    legal for the first product in the frozen exact three-product queue.
+    """
+
+    if not isinstance(task, Mapping):
+        _reject(
+            "DISCOVERY_TASK_INVALID",
+            "a persisted Path B task is required",
+        )
+    task_id = _positive_int(task.get("id"), "task id")
+    product_id = _positive_int(target_product_id, "target product id")
+    if str(task.get("mode") or "") != "batch_draft_save":
+        _reject(
+            "DISCOVERY_TASK_MODE_INVALID",
+            "SAVE1 discovery requires batch_draft_save",
+        )
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    if payload.get("path") != "B" or payload.get("publish_allowed") is not False:
+        _reject(
+            "DISCOVERY_TASK_PATH_INVALID",
+            "SAVE1 discovery requires a no-publish Path B task",
+        )
+    jobs = task.get("jobs") if isinstance(task.get("jobs"), list) else []
+    ordered_products = payload.get("product_ids")
+    if (
+        len(jobs) != 3
+        or not isinstance(ordered_products, list)
+        or len(ordered_products) != len(jobs)
+        or any(not isinstance(job, Mapping) for job in jobs)
+    ):
+        _reject(
+            "DISCOVERY_QUEUE_INVALID",
+            "SAVE1 discovery requires the exact frozen three-product queue",
+        )
+    job_ids = [_positive_int(job.get("id"), "queue job id") for job in jobs]
+    job_product_ids = [
+        _positive_int(job.get("product_id"), "queue product id") for job in jobs
+    ]
+    ordered_product_ids = [
+        _positive_int(value, "ordered product id") for value in ordered_products
+    ]
+    if (
+        len(set(job_ids)) != 3
+        or len(set(job_product_ids)) != 3
+        or job_product_ids != ordered_product_ids
+    ):
+        _reject(
+            "DISCOVERY_QUEUE_INVALID",
+            "SAVE1 discovery requires three distinct jobs in exact product order",
+        )
+    first_job = jobs[0]
+    first_product_id = _positive_int(first_job.get("product_id"), "first product id")
+    if (
+        product_id != first_product_id
+    ):
+        _reject(
+            "DISCOVERY_TARGET_NOT_QUEUE_HEAD",
+            "SAVE1 discovery is restricted to the first frozen product",
+        )
+    real_authorization = payload.get("real_dxm_write_authorization")
+    if not isinstance(real_authorization, Mapping):
+        _reject(
+            "DISCOVERY_REAL_AUTHORIZATION_REQUIRED",
+            "consumed Path B real-write authorization is required",
+        )
+    canonical_scope_sha256 = _sha256(scope_sha256, "scope sha256")
+    canonical_approval_sha256 = _sha256(approval_sha256, "approval sha256")
+    if (
+        _sha256(real_authorization.get("scope_sha256"), "stored scope sha256")
+        != canonical_scope_sha256
+        or _sha256(
+            real_authorization.get("approval_sha256"),
+            "stored approval sha256",
+        )
+        != canonical_approval_sha256
+    ):
+        _reject(
+            "DISCOVERY_AUTHORIZATION_BINDING_MISMATCH",
+            "discovery scope or approval differs from the consumed authorization",
+        )
+    return validate_path_b_save1_discovery_profile(
+        {
+            "schema": PATH_B_SAVE1_DISCOVERY_PROFILE_SCHEMA,
+            "execution_profile": PATH_B_SAVE1_DISCOVERY_EXECUTION_PROFILE,
+            "target_task_id": task_id,
+            "target_job_id": _positive_int(first_job.get("id"), "first job id"),
+            "target_product_id": product_id,
+            "target_product_ordinal": 1,
+            "scope_sha256": canonical_scope_sha256,
+            "approval_sha256": canonical_approval_sha256,
+            "discovery_key_sha256": _sha256(
+                discovery_key_sha256,
+                "discovery key sha256",
+            ),
+            "single_use": True,
+            "save_stage_limit": "SAVE1",
+            "save2_allowed": False,
+            "other_product_mutation_allowed": False,
+        }
+    )
+
+
+def validate_path_b_save1_discovery_profile(value: Any) -> dict[str, Any]:
+    """Canonicalize a persisted discovery profile without widening it."""
+
+    if not isinstance(value, Mapping) or set(value) != _PATH_B_SAVE1_DISCOVERY_PROFILE_KEYS:
+        _reject(
+            "DISCOVERY_PROFILE_INVALID",
+            "Path B SAVE1 discovery profile has an unexpected shape",
+        )
+    profile = deepcopy(dict(value))
+    if (
+        profile.get("schema") != PATH_B_SAVE1_DISCOVERY_PROFILE_SCHEMA
+        or profile.get("execution_profile")
+        != PATH_B_SAVE1_DISCOVERY_EXECUTION_PROFILE
+        or profile.get("target_product_ordinal") != 1
+        or profile.get("single_use") is not True
+        or profile.get("save_stage_limit") != "SAVE1"
+        or profile.get("save2_allowed") is not False
+        or profile.get("other_product_mutation_allowed") is not False
+    ):
+        _reject(
+            "DISCOVERY_PROFILE_WIDENED",
+            "discovery must remain one first-product SAVE1 with SAVE2 forbidden",
+        )
+    for key in ("target_task_id", "target_job_id", "target_product_id"):
+        profile[key] = _positive_int(profile.get(key), key.replace("_", " "))
+    for key in ("scope_sha256", "approval_sha256", "discovery_key_sha256"):
+        profile[key] = _sha256(profile.get(key), key.replace("_", " "))
+    return profile
+
+
+def validate_path_b_save1_discovery_dispatch(
+    task: Any,
+    *,
+    job_id: Any,
+    command_state: Any,
+    command_action: Any,
+) -> dict[str, Any] | None:
+    """Reject every non-composite or out-of-head mutation for Discovery.
+
+    ``None`` means the task is not a discovery task.  A profile-shaped payload
+    is never ignored: malformed or widened values fail closed.
+    """
+
+    if not isinstance(task, Mapping):
+        _reject("DISCOVERY_TASK_INVALID", "persisted task is required")
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    raw_profile = payload.get(PATH_B_SAVE1_DISCOVERY_PROFILE_KEY)
+    if raw_profile is None:
+        return None
+    profile = validate_path_b_save1_discovery_profile(raw_profile)
+    jobs = task.get("jobs") if isinstance(task.get("jobs"), list) else []
+    real_authorization = payload.get("real_dxm_write_authorization")
+    if (
+        str(task.get("mode") or "") != "batch_draft_save"
+        or payload.get("path") != "B"
+        or payload.get("publish_allowed") is not False
+        or str(task.get("status") or "") != "running"
+        or len(jobs) != 3
+        or any(not isinstance(job, Mapping) for job in jobs)
+        or not isinstance(real_authorization, Mapping)
+    ):
+        _reject(
+            "DISCOVERY_CURRENT_TASK_DRIFT",
+            "current discovery task is outside the armed Path B boundary",
+        )
+    first_job = jobs[0]
+    ordered_products = payload.get("product_ids")
+    if not isinstance(ordered_products, list) or len(ordered_products) != 3:
+        _reject(
+            "DISCOVERY_CURRENT_TASK_DRIFT",
+            "current discovery product order is not the exact three-product queue",
+        )
+    job_ids = [_positive_int(candidate.get("id"), "queue job id") for candidate in jobs]
+    job_product_ids = [
+        _positive_int(candidate.get("product_id"), "queue product id")
+        for candidate in jobs
+    ]
+    ordered_product_ids = [
+        _positive_int(value, "ordered product id") for value in ordered_products
+    ]
+    current_job_id = _positive_int(job_id, "command job id")
+    first_job_id = _positive_int(first_job.get("id"), "first job id")
+    first_product_id = _positive_int(first_job.get("product_id"), "first product id")
+    statuses = [str(job.get("status") or "") for job in jobs]
+    if (
+        profile["target_task_id"] != _positive_int(task.get("id"), "task id")
+        or profile["target_job_id"] != first_job_id
+        or profile["target_product_id"] != first_product_id
+        or len(set(job_ids)) != 3
+        or len(set(job_product_ids)) != 3
+        or job_product_ids != ordered_product_ids
+        or current_job_id != first_job_id
+        or command_state != PATH_B_SAVE1_DISCOVERY_STATE
+        or command_action != PATH_B_SAVE1_DISCOVERY_ACTION
+        or statuses[0] != "running"
+        or statuses.count("running") != 1
+        or any(status != "pending" for status in statuses[1:])
+        or _non_negative_int(task.get("completed_jobs"), "completed jobs") != 0
+        or _non_negative_int(task.get("failed_jobs"), "failed jobs") != 0
+        or _sha256(real_authorization.get("scope_sha256"), "stored scope sha256")
+        != profile["scope_sha256"]
+        or _sha256(
+            real_authorization.get("approval_sha256"),
+            "stored approval sha256",
+        )
+        != profile["approval_sha256"]
+    ):
+        _reject(
+            "DISCOVERY_DISPATCH_BOUNDARY_MISMATCH",
+            "only the armed first-product composite FIRST_SAVE command may dispatch",
+        )
+    return profile
+
+
+def validate_path_b_formal_lineage(value: Any) -> dict[str, Any]:
+    """Validate the narrow sealed-Discovery to fresh-Formal execution grant."""
+
+    required_keys = {
+        "schema",
+        "predecessor_scope_sha256",
+        "discovery_receipt_sha256",
+        "formal_scope_sha256",
+        "lineage_sha256",
+        "discovery_task_id",
+        "discovery_snapshot_id",
+        "discovery_snapshot_sha256",
+        "formal_task_id",
+        "formal_snapshot_id",
+        "formal_snapshot_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required_keys:
+        _reject(
+            "FORMAL_LINEAGE_INVALID",
+            "formal Path B lineage has an unexpected shape",
+        )
+    lineage = deepcopy(dict(value))
+    if lineage.get("schema") != PATH_B_FORMAL_LINEAGE_SCHEMA:
+        _reject("FORMAL_LINEAGE_INVALID", "formal lineage schema is invalid")
+    for key in (
+        "predecessor_scope_sha256",
+        "discovery_receipt_sha256",
+        "formal_scope_sha256",
+        "lineage_sha256",
+        "discovery_snapshot_sha256",
+        "formal_snapshot_sha256",
+    ):
+        lineage[key] = _sha256(lineage.get(key), key.replace("_", " "))
+    for key in (
+        "discovery_task_id",
+        "discovery_snapshot_id",
+        "formal_task_id",
+        "formal_snapshot_id",
+    ):
+        lineage[key] = _positive_int(lineage.get(key), key.replace("_", " "))
+    if (
+        lineage["predecessor_scope_sha256"]
+        == lineage["formal_scope_sha256"]
+        or lineage["discovery_task_id"] == lineage["formal_task_id"]
+        or lineage["discovery_snapshot_id"] == lineage["formal_snapshot_id"]
+        or lineage["discovery_snapshot_sha256"]
+        == lineage["formal_snapshot_sha256"]
+    ):
+        _reject(
+            "FORMAL_LINEAGE_NOT_FRESH",
+            "formal task, snapshot, and scope must all be fresh",
+        )
+    unsigned = {
+        key: lineage[key]
+        for key in (
+            "predecessor_scope_sha256",
+            "discovery_receipt_sha256",
+            "formal_scope_sha256",
+            "formal_task_id",
+            "formal_snapshot_id",
+            "formal_snapshot_sha256",
+        )
+    }
+    expected_lineage_sha256 = canonical_contract_sha256(
+        {
+            "schemaVersion": PATH_B_FORMAL_LINEAGE_SCHEMA,
+            "predecessorScopeSha256": unsigned["predecessor_scope_sha256"],
+            "discoveryReceiptSha256": unsigned["discovery_receipt_sha256"],
+            "formalScopeSha256": unsigned["formal_scope_sha256"],
+            "formalTaskId": unsigned["formal_task_id"],
+            "formalSnapshotId": unsigned["formal_snapshot_id"],
+            "formalSnapshotSha256": unsigned["formal_snapshot_sha256"],
+        }
+    )
+    if lineage["lineage_sha256"] != expected_lineage_sha256:
+        _reject("FORMAL_LINEAGE_HASH_MISMATCH", "formal lineage hash differs")
+    return lineage
 
 
 def build_batch_queue_guard(task: Any, job_id: Any) -> dict[str, Any]:
@@ -317,20 +648,26 @@ def build_save_verification_context(
         )
     task_id = _positive_int(task.get("id"), "task id")
     job_id = _positive_int(job.get("id"), "job id")
+    save_state = str(save_command.get("state") or "")
+    expected_save_action = {
+        "SAVE_ONLY": "save_only",
+        "SAVE2_ONLY": "save_only",
+        PATH_B_SAVE1_DISCOVERY_STATE: PATH_B_SAVE1_DISCOVERY_ACTION,
+    }.get(save_state)
     if (
         save_command.get("task_id") != task_id
         or save_command.get("job_id") != job_id
-        or save_command.get("state") != "SAVE_ONLY"
-        or save_command.get("action") != "save_only"
+        or expected_save_action is None
+        or save_command.get("action") != expected_save_action
         or save_command.get("execution_mode") != "batch_draft_save"
     ):
         _reject(
             "SAVE_VERIFICATION_PREDECESSOR_MISMATCH",
-            "preceding command is not this batch job's SAVE_ONLY command",
+            "preceding command is not this batch job's exact SAVE command",
         )
     if (
-        save_action_result.get("attempted_state") != "SAVE_ONLY"
-        or save_action_result.get("action") != "save_only"
+        save_action_result.get("attempted_state") != save_state
+        or save_action_result.get("action") != expected_save_action
         or save_action_result.get("ok") is not True
     ):
         _reject(
@@ -441,11 +778,22 @@ def rebuild_save_verification_authority(
         )
     task_id = _positive_int(task.get("id"), "task id")
     job_id = _positive_int(save_command.get("job_id"), "job id")
+    save_state = str(save_command.get("state") or "")
+    expected_save_action = {
+        "SAVE_ONLY": "save_only",
+        "SAVE2_ONLY": "save_only",
+        PATH_B_SAVE1_DISCOVERY_STATE: PATH_B_SAVE1_DISCOVERY_ACTION,
+    }.get(save_state)
+    expected_mutation_action = (
+        "first_save_intent"
+        if save_state == PATH_B_SAVE1_DISCOVERY_STATE
+        else "save_only_click"
+    )
     if (
         str(task.get("mode") or "") != "batch_draft_save"
         or save_command.get("task_id") != task_id
-        or save_command.get("state") != "SAVE_ONLY"
-        or save_command.get("action") != "save_only"
+        or expected_save_action is None
+        or save_command.get("action") != expected_save_action
         or save_command.get("execution_mode") != "batch_draft_save"
     ):
         _reject(
@@ -485,9 +833,9 @@ def rebuild_save_verification_authority(
         )
     exact_pairs = (
         (ledger_entry.get("status"), "DISPATCHED"),
-        (ledger_entry.get("mutation_action"), "save_only_click"),
-        (ledger_entry.get("command_state"), "SAVE_ONLY"),
-        (ledger_entry.get("command_action"), "save_only"),
+        (ledger_entry.get("mutation_action"), expected_mutation_action),
+        (ledger_entry.get("command_state"), save_state),
+        (ledger_entry.get("command_action"), expected_save_action),
         (ledger_entry.get("task_id"), str(task_id)),
         (ledger_entry.get("job_id"), str(job_id)),
         (ledger_entry.get("command_id"), save_command.get("command_id")),
@@ -513,11 +861,41 @@ def rebuild_save_verification_authority(
             "SAVE_VERIFICATION_PREDECESSOR_FACTS_INVALID",
             "the actual SAVE authorization differs from the persisted task approval",
         )
+    real_authorization = (
+        payload.get("real_dxm_write_authorization")
+        if isinstance(payload.get("real_dxm_write_authorization"), Mapping)
+        else None
+    )
+    expected_lease_id = approval.get("lease_id")
+    if isinstance(real_authorization, Mapping):
+        matching_jobs = [
+            item
+            for item in task.get("jobs", [])
+            if isinstance(item, Mapping) and item.get("id") == job_id
+        ]
+        product_id = (
+            matching_jobs[0].get("product_id") if len(matching_jobs) == 1 else None
+        )
+        save_stage = (
+            "SAVE1"
+            if save_state in {"SAVE_ONLY", PATH_B_SAVE1_DISCOVERY_STATE}
+            else "SAVE2"
+        )
+        matching_leases = [
+            item
+            for item in real_authorization.get("save_leases", [])
+            if isinstance(item, Mapping)
+            and item.get("product_id") == product_id
+            and item.get("save_stage") == save_stage
+        ]
+        expected_lease_id = (
+            matching_leases[0].get("lease_id")
+            if len(matching_leases) == 1
+            else None
+        )
     if _text(
-        approval.get("lease_id"), "persisted authorization lease id"
-    ) != _text(
-        save_command.get("authorization_lease_id"), "authorization lease id"
-    ):
+        expected_lease_id, "persisted authorization lease id"
+    ) != _text(save_command.get("authorization_lease_id"), "authorization lease id"):
         _reject(
             "SAVE_VERIFICATION_PREDECESSOR_FACTS_INVALID",
             "the actual SAVE lease differs from the persisted task approval",

@@ -12,7 +12,10 @@ Each phase has enter_phase / execute_phase / exit_phase with receipts.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -82,26 +85,31 @@ class FullProductEditOrchestrator:
       3. PHASE_SEMI_EDIT: execute editFromSmt (S1-S3)
     """
 
-    MAIN_SECTIONS = frozenset(
-        {
-            "product_info",
-            "basic_info",
-            "sale_info",
-            "media_assets",
-            "additional_info",
-            "compliance",
-            "logistics",
-            "video",
-            "wholesale",
-        }
+    MAIN_SECTIONS = (
+        "basic_info",
+        "dxm_info",
+        "attribute_info",
+        "product_info",
+        "regional_pricing",
+        "description_info",
+        "packaging_info",
+        "template_main",
+        "template_tax",
+        "compliance_info",
+        "other_info",
     )
 
-    SEMI_SECTIONS = frozenset(
-        {
-            "semi_countries",
-            "semi_goods",
-            "semi_variants",
-        }
+    CONTENT_FINALIZE_CAPABILITIES = (
+        "video",
+        "wholesale",
+        "translation",
+        "rollbackPreparation",
+    )
+
+    SEMI_SECTIONS = (
+        "semi_countries",
+        "semi_goods",
+        "semi_variants",
     )
 
     def __init__(
@@ -166,7 +174,7 @@ class FullProductEditOrchestrator:
         if phase == EditPhase.PHASE_MAIN_EDIT:
             receipt.enter_receipt = {
                 "phase": phase.value,
-                "sections": sorted(self.MAIN_SECTIONS),
+                "sections": list(self.MAIN_SECTIONS),
                 "section_count": len(self.MAIN_SECTIONS),
             }
         elif phase == EditPhase.PHASE_SAVE_MODAL:
@@ -178,7 +186,7 @@ class FullProductEditOrchestrator:
         elif phase == EditPhase.PHASE_SEMI_EDIT:
             receipt.enter_receipt = {
                 "phase": phase.value,
-                "sections": sorted(self.SEMI_SECTIONS),
+                "sections": list(self.SEMI_SECTIONS),
                 "section_count": len(self.SEMI_SECTIONS),
             }
         else:
@@ -283,28 +291,40 @@ class FullProductEditOrchestrator:
         section_results: dict[str, Any],
     ) -> dict[str, Any]:
         """Execute main edit phase (11 sections excluding semi)."""
-        executed = []
-        failed = []
-        for section in sorted(self.MAIN_SECTIONS):
-            if section in section_results:
-                result = section_results[section]
-                if result.get("success"):
-                    executed.append(section)
-                else:
-                    failed.append(section)
-            else:
-                executed.append(section)
-        if failed:
+        required = (*self.MAIN_SECTIONS, *self.CONTENT_FINALIZE_CAPABILITIES)
+        missing = [section for section in required if section not in section_results]
+        invalid = [
+            section
+            for section in self.MAIN_SECTIONS
+            if section in section_results
+            and not self._verified_section_result(section, section_results[section])
+        ] + [
+            capability
+            for capability in self.CONTENT_FINALIZE_CAPABILITIES
+            if capability in section_results
+            and not self._verified_capability_result(
+                capability, section_results[capability]
+            )
+        ]
+        if missing or invalid:
             return {
                 "status": "blocked",
-                "executed_sections": executed,
-                "failed_sections": failed,
-                "error": f"Main edit sections failed: {failed}",
+                "executed_sections": [
+                    section
+                    for section in required
+                    if section not in missing and section not in invalid
+                ],
+                "missing_sections": missing,
+                "failed_sections": invalid,
+                "error": (
+                    "Main edit receipts incomplete: "
+                    f"missing={missing}, invalid={invalid}"
+                ),
             }
         return {
             "status": "success",
-            "executed_sections": executed,
-            "section_count": len(executed),
+            "executed_sections": list(required),
+            "section_count": len(required),
         }
 
     def _execute_save_modal(
@@ -313,17 +333,18 @@ class FullProductEditOrchestrator:
     ) -> dict[str, Any]:
         """Execute save modal phase."""
         modal_result = section_results.get("save_modal", {})
-        if modal_result.get("semi_entry_triggered"):
+        if (
+            modal_result.get("save1_verified") is True
+            and modal_result.get("gate_outcome") == "admitted"
+            and modal_result.get("semi_entry_triggered") is True
+            and isinstance(modal_result.get("handshake_id"), str)
+            and bool(modal_result["handshake_id"].strip())
+            and modal_result.get("same_handshake") is True
+        ):
             return {
                 "status": "success",
                 "semi_entry_triggered": True,
                 "handshake_id": modal_result.get("handshake_id"),
-            }
-        elif modal_result.get("save_completed"):
-            return {
-                "status": "success",
-                "semi_entry_triggered": False,
-                "save_completed": True,
             }
         elif modal_result.get("blocked"):
             return {
@@ -341,26 +362,221 @@ class FullProductEditOrchestrator:
         section_results: dict[str, Any],
     ) -> dict[str, Any]:
         """Execute semi-managed edit phase (S1-S3)."""
-        executed = []
-        failed = []
-        for section in sorted(self.SEMI_SECTIONS):
-            if section in section_results:
-                result = section_results[section]
-                if result.get("success"):
-                    executed.append(section)
-                else:
-                    failed.append(section)
-            else:
-                executed.append(section)
-        if failed:
+        missing = [section for section in self.SEMI_SECTIONS if section not in section_results]
+        invalid = [
+            section
+            for section in self.SEMI_SECTIONS
+            if section in section_results
+            and not self._verified_section_result(section, section_results[section])
+        ]
+        if missing or invalid:
             return {
                 "status": "blocked",
-                "executed_sections": executed,
-                "failed_sections": failed,
-                "error": f"Semi-managed sections failed: {failed}",
+                "executed_sections": [
+                    section
+                    for section in self.SEMI_SECTIONS
+                    if section not in missing and section not in invalid
+                ],
+                "missing_sections": missing,
+                "failed_sections": invalid,
+                "error": (
+                    "Semi-managed receipts incomplete: "
+                    f"missing={missing}, invalid={invalid}"
+                ),
             }
         return {
             "status": "success",
-            "executed_sections": executed,
-            "section_count": len(executed),
+            "executed_sections": list(self.SEMI_SECTIONS),
+            "section_count": len(self.SEMI_SECTIONS),
         }
+
+    @staticmethod
+    def _canonical_sha256(value: Any) -> str | None:
+        try:
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            return None
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _verified_readbacks(value: Any, *, require_nonempty: bool) -> bool:
+        expected_keys = {
+            "field_key",
+            "field_label",
+            "source",
+            "before_value",
+            "after_value",
+            "readback_proven",
+            "timestamp",
+        }
+        if not isinstance(value, list) or (require_nonempty and not value):
+            return False
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, dict) or set(item) != expected_keys:
+                return False
+            field_key = item.get("field_key")
+            if (
+                not isinstance(field_key, str)
+                or not field_key.strip()
+                or field_key != field_key.strip()
+                or field_key in seen
+                or not isinstance(item.get("field_label"), str)
+                or not item["field_label"].strip()
+                or not isinstance(item.get("source"), str)
+                or not item["source"].strip()
+                or item.get("readback_proven") is not True
+                or not isinstance(item.get("timestamp"), str)
+            ):
+                return False
+            try:
+                observed_at = datetime.fromisoformat(
+                    item["timestamp"].replace("Z", "+00:00")
+                )
+            except ValueError:
+                return False
+            if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+                return False
+            seen.add(field_key)
+        return True
+
+    @staticmethod
+    def _verified_interval(started_at: Any, completed_at: Any) -> bool:
+        if not isinstance(started_at, str) or not isinstance(completed_at, str):
+            return False
+        try:
+            started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+            completed = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return bool(
+            started.tzinfo is not None
+            and started.utcoffset() is not None
+            and completed.tzinfo is not None
+            and completed.utcoffset() is not None
+            and completed >= started
+        )
+
+    @classmethod
+    def _verified_section_result(cls, section: str, value: Any) -> bool:
+        """Validate one exact, independently hashed section receipt."""
+
+        expected_keys = {
+            "schema_version",
+            "section",
+            "action_grant_id",
+            "success",
+            "readback_proven",
+            "field_readbacks",
+            "started_at",
+            "completed_at",
+            "receipt_sha256",
+        }
+        if not isinstance(value, dict) or set(value) != expected_keys:
+            return False
+        receipt_sha256 = value.get("receipt_sha256")
+        if (
+            value.get("schema_version") != "dxm.path-b.section-receipt.v1"
+            or value.get("section") != section
+            or value.get("success") is not True
+            or value.get("readback_proven") is not True
+            or not isinstance(value.get("action_grant_id"), str)
+            or not value["action_grant_id"].strip()
+            or not cls._verified_interval(
+                value.get("started_at"), value.get("completed_at")
+            )
+            or not isinstance(value.get("field_readbacks"), list)
+            or not cls._verified_readbacks(
+                value.get("field_readbacks"), require_nonempty=True
+            )
+            or not isinstance(receipt_sha256, str)
+            or len(receipt_sha256) != 64
+        ):
+            return False
+        digest = cls._canonical_sha256(
+            {key: item for key, item in value.items() if key != "receipt_sha256"}
+        )
+        return digest is not None and digest.casefold() == receipt_sha256.casefold()
+
+    @classmethod
+    def _verified_capability_result(cls, capability: str, value: Any) -> bool:
+        """Validate the canonical wrapper for one mandatory capability."""
+
+        phase_by_capability = {
+            "video": "content_finalize_video",
+            "wholesale": "content_finalize_wholesale",
+            "translation": "content_finalize_translation",
+            "semiManaged": "semi_managed_entry",
+            "rollbackPreparation": "rollback_preparation",
+        }
+        raw_keys = {
+            "phase",
+            "action_grant_id",
+            "result_ok",
+            "error_code",
+            "error_detail",
+            "unresolved",
+            "media_identity",
+            "started_at",
+            "completed_at",
+            "field_readbacks",
+            "canonical_sha256",
+        }
+        if capability == "rollbackPreparation":
+            raw_keys.add("preimage_sha256")
+        if not isinstance(value, dict) or set(value) != {
+            "canonical_receipt",
+            "receipt_sha256",
+        }:
+            return False
+        raw = value.get("canonical_receipt")
+        wrapper_sha256 = value.get("receipt_sha256")
+        if not isinstance(raw, dict) or set(raw) != raw_keys:
+            return False
+        canonical_sha256 = raw.get("canonical_sha256")
+        if (
+            raw.get("phase") != phase_by_capability.get(capability)
+            or raw.get("result_ok") is not True
+            or raw.get("unresolved") is not False
+            or raw.get("error_code") is not None
+            or raw.get("error_detail") is not None
+            or not isinstance(raw.get("action_grant_id"), str)
+            or not raw["action_grant_id"].strip()
+            or not cls._verified_interval(
+                raw.get("started_at"), raw.get("completed_at")
+            )
+            or not cls._verified_readbacks(
+                raw.get("field_readbacks"), require_nonempty=False
+            )
+            or not isinstance(canonical_sha256, str)
+            or len(canonical_sha256) != 64
+            or not isinstance(wrapper_sha256, str)
+            or len(wrapper_sha256) != 64
+        ):
+            return False
+        if capability == "video" and not str(raw.get("media_identity") or "").strip():
+            return False
+        if capability == "rollbackPreparation":
+            preimage_sha256 = str(raw.get("preimage_sha256") or "")
+            if len(preimage_sha256) != 64 or any(
+                character not in "0123456789abcdefABCDEF"
+                for character in preimage_sha256
+            ):
+                return False
+        canonical_body = {
+            key: item
+            for key, item in raw.items()
+            if key not in {"canonical_sha256", "preimage_sha256"}
+        }
+        digest = cls._canonical_sha256(canonical_body)
+        return bool(
+            digest is not None
+            and digest.casefold() == canonical_sha256.casefold()
+            and digest.casefold() == wrapper_sha256.casefold()
+        )

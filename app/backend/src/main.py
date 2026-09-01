@@ -54,13 +54,26 @@ from src.execution.browser_agent_protocol import (
     validate_browser_agent_command,
 )
 from src.execution.batch_command_contract import (
+    PATH_B_FORMAL_LINEAGE_KEY,
+    PATH_B_SAVE1_DISCOVERY_ACTION,
+    PATH_B_SAVE1_DISCOVERY_STATE,
     BatchCommandContractError,
     validate_current_batch_queue_guard,
+    validate_path_b_save1_discovery_dispatch,
+    validate_path_b_formal_lineage,
 )
 from src.execution.batch_dispatch_authority import LiveDispatchFacts
 from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
+from src.execution.controlled_mutation_dispatch import ControlledMutationDispatch
 from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
+from src.real_dxm_write_scope import (
+    RealDxmWriteScopeError,
+    canonical_sha256 as real_scope_sha256,
+    prepare_real_dxm_write_scope,
+    validate_real_dxm_write_authorization,
+    validate_real_dxm_write_scope,
+)
 from src.models import (
     AIConfigUpdateRequest,
     AgentConsoleBrowserDiagnosticsRequest,
@@ -84,6 +97,9 @@ from src.models import (
     PlanSnapshotRequest,
     ProductCreate,
     ProductImportRequest,
+    RealDxmPathBDiscoveryStartRequest,
+    RealDxmPathBScopeDeriveRequest,
+    RealDxmWriteScopePrepareRequest,
     RuntimeControlRequest,
     SelectorProfileValidateRequest,
     StoreCreate,
@@ -102,6 +118,7 @@ from src.batch_edit import (
     EditBatchBundleComposer,
 )
 from src.batch_edit.plan_contract import E2PlanService, PlanContractError
+from src.batch_edit.plan_snapshot_store import PlanSnapshotStore
 from src.batch_edit.plan_snapshot_compiler import (
     PLAN_PATH_EXECUTION_NOT_RELEASED,
     WorkflowMandatoryCapabilityChecker,
@@ -220,9 +237,13 @@ def _mutation_dispatch_live_facts() -> LiveDispatchFacts:
 mutation_dispatch_ledger = MutationDispatchLedger(
     live_facts_provider=_mutation_dispatch_live_facts,
 )
+controlled_mutation_dispatch = ControlledMutationDispatch(
+    mutation_dispatch_ledger,
+    recover_inflight=False,
+)
 browser_agent_runtime = BrowserAgentRuntime(
     workflow_adapter,
-    mutation_ledger=mutation_dispatch_ledger,
+    mutation_ledger=controlled_mutation_dispatch,
 )
 
 
@@ -250,17 +271,26 @@ def _verify_batch_draft_save_command_authorization(
         validate_browser_agent_command(command)
     except (MutationCommandContractError, TypeError, ValueError):
         return _reject_batch_command_authorization('AUTH_COMMAND_CONTRACT_INVALID')
+    command_contract = {
+        'SAVE_ONLY': ('save_only', 'editor', 'save_only_click'),
+        'SAVE2_ONLY': ('save_only', 'semi_managed', 'save_only_click'),
+        PATH_B_SAVE1_DISCOVERY_STATE: (
+            PATH_B_SAVE1_DISCOVERY_ACTION,
+            'editor',
+            'first_save_intent',
+        ),
+    }.get(str(command.state or ''))
     if (
-        command.state != 'SAVE_ONLY'
-        or command.action != 'save_only'
+        command_contract is None
+        or command.action != command_contract[0]
         or command.execution_mode != 'batch_draft_save'
-        or command.expected_page != 'editor'
+        or command.expected_page != command_contract[1]
         or not isinstance(command.params, dict)
     ):
         return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
     if (
         not isinstance(context, Mapping)
-        or context.get('mutation_action') != 'save_only_click'
+        or context.get('mutation_action') != command_contract[2]
     ):
         return _reject_batch_command_authorization('AUTH_COMMAND_MUTATION_MISMATCH')
     if (
@@ -278,6 +308,20 @@ def _verify_batch_draft_save_command_authorization(
         return _reject_batch_command_authorization('AUTH_TASK_NOT_FOUND')
     if str(task.get('mode') or '').strip() != 'batch_draft_save':
         return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
+    try:
+        discovery_profile = validate_path_b_save1_discovery_dispatch(
+            task,
+            job_id=command.job_id,
+            command_state=command.state,
+            command_action=command.action,
+        )
+    except BatchCommandContractError as exc:
+        return _reject_batch_command_authorization(exc.reason_code)
+    if (
+        command.state == PATH_B_SAVE1_DISCOVERY_STATE
+        and discovery_profile is None
+    ):
+        return _reject_batch_command_authorization('DISCOVERY_PROFILE_REQUIRED')
     try:
         snapshot = E2PlanService().assert_task_snapshot_binding(task)
     except PlanContractError:
@@ -356,8 +400,46 @@ def _verify_batch_draft_save_command_authorization(
         expected_authorization_fingerprint = batch_authorization_context_fingerprint(stored_context)
     except BatchDraftAuthorizationError:
         return _reject_batch_command_authorization('AUTH_COMMAND_AUTHORIZATION_MISMATCH')
+    expected_lease_id = str(approval.get('lease_id') or '')
+    if stage_facts.get('path') == 'B':
+        real_authorization = (
+            payload.get('real_dxm_write_authorization')
+            if isinstance(payload.get('real_dxm_write_authorization'), Mapping)
+            else None
+        )
+        save_stage = (
+            'SAVE1'
+            if command.state in {'SAVE_ONLY', 'FIRST_SAVE_INTENT'}
+            else 'SAVE2'
+        )
+        leases = (
+            real_authorization.get('save_leases')
+            if isinstance(real_authorization, Mapping)
+            and isinstance(real_authorization.get('save_leases'), list)
+            else []
+        )
+        matching_leases = [
+            item
+            for item in leases
+            if isinstance(item, Mapping)
+            and item.get('product_id') == product_id
+            and item.get('save_stage') == save_stage
+        ]
+        if len(matching_leases) != 1:
+            return _reject_batch_command_authorization(
+                'AUTH_COMMAND_AUTHORIZATION_MISMATCH'
+            )
+        expected_lease_id = str(matching_leases[0].get('lease_id') or '')
+        expected_lease_fingerprint = real_scope_sha256(dict(matching_leases[0]))
+        if not hmac.compare_digest(
+            str(command.authorization_lease_fingerprint or '').casefold(),
+            expected_lease_fingerprint.casefold(),
+        ):
+            return _reject_batch_command_authorization(
+                'AUTH_COMMAND_AUTHORIZATION_MISMATCH'
+            )
     if (
-        str(command.authorization_lease_id or '') != str(approval.get('lease_id') or '')
+        str(command.authorization_lease_id or '') != expected_lease_id
         or not hmac.compare_digest(
             str(command.authorization_fingerprint or '').casefold(),
             expected_authorization_fingerprint.casefold(),
@@ -387,7 +469,7 @@ def _verify_batch_draft_save_command_authorization(
             command.params,
         )
         expected_target = canonical_mutation_target_payload(
-            'save_only',
+            command.action,
             {
                 'store_name': store_name,
                 'target_identity': frozen_target,
@@ -1552,8 +1634,107 @@ def archive_local_plan_template(plan_id: int):
         ) from exc
 
 
+def _trusted_real_write_stage_by_field(
+    item_snapshot: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Read an exact frozen SAVE1/SAVE2 field partition, if one exists.
+
+    Compiler-v3 snapshots derive ``real_write_stage_fields`` only from the
+    frozen Reader schema ``ui_section`` facts.  The Prepare surface still
+    treats any absent, empty, duplicated, or malformed partition as missing
+    authority; it never infers a physical SAVE phase from an operator label or
+    field name.
+    """
+
+    raw = item_snapshot.get('real_write_stage_fields')
+    if not isinstance(raw, Mapping) or set(raw) != {'SAVE1', 'SAVE2'}:
+        return None
+    result: dict[str, str] = {}
+    for stage in ('SAVE1', 'SAVE2'):
+        fields = raw.get(stage)
+        if not isinstance(fields, list) or not fields:
+            return None
+        for field in fields:
+            if (
+                not isinstance(field, str)
+                or not field
+                or field != field.strip()
+                or field in result
+            ):
+                return None
+            result[field] = stage
+    return result
+
+
+def _scope_prepare_snapshot_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a plan snapshot to hashes only; never expose frozen field values."""
+
+    session = snapshot.get('session_context') if isinstance(snapshot.get('session_context'), Mapping) else {}
+    projected_products: list[dict[str, Any]] = []
+    for item in snapshot.get('item_snapshots') or []:
+        if not isinstance(item, Mapping):
+            continue
+        current_values = item.get('current_value_snapshot')
+        current_values = current_values if isinstance(current_values, Mapping) else {}
+        resolution = item.get('resolution_result') if isinstance(item.get('resolution_result'), Mapping) else {}
+        trusted_stages = _trusted_real_write_stage_by_field(item)
+        trusted_stages = trusted_stages if trusted_stages is not None else {}
+        projected_fields: list[dict[str, Any]] = []
+        for field in resolution.get('resolved_fields') or []:
+            if not isinstance(field, Mapping) or not isinstance(field.get('field_key'), str):
+                continue
+            field_key = field['field_key']
+            projected = {
+                'field': field_key,
+                'saveStage': trusted_stages.get(field_key),
+                'expectedSha256': (
+                    real_scope_sha256(field['resolved_value'])
+                    if 'resolved_value' in field
+                    else None
+                ),
+                'preimageAvailable': field_key in current_values,
+                'preimageSha256': (
+                    real_scope_sha256(current_values[field_key])
+                    if field_key in current_values
+                    else None
+                ),
+            }
+            projected_fields.append(projected)
+        projected_products.append({
+            'productId': int(item['product_id']),
+            'fieldHashes': projected_fields,
+            'fieldHashesSha256': real_scope_sha256(projected_fields),
+        })
+    return {
+        'schemaVersion': 'real_dxm_path_b_scope_prepare_projection.v1',
+        **({'snapshotId': int(snapshot['id'])} if isinstance(snapshot.get('id'), int) else {}),
+        **({'taskId': int(snapshot['task_id'])} if isinstance(snapshot.get('task_id'), int) else {}),
+        'snapshotSha256': str(snapshot.get('snapshot_hash') or ''),
+        'path': str(snapshot.get('path') or ''),
+        'publishAllowed': snapshot.get('publish_allowed'),
+        'shop': {
+            'shopId': int(snapshot.get('shop_scope') or 0),
+            'shopName': str(session.get('shop_name') or ''),
+        },
+        'readerSessionRef': str(session.get('session_ref') or ''),
+        'accountContextHash': str(session.get('account_ref_hash') or ''),
+        'orderedProductIds': [int(value) for value in snapshot.get('product_ids') or []],
+        'orderedProducts': projected_products,
+        'mutationCount': 0,
+        'publishCount': 0,
+        'counterEvidence': {
+            'source': 'prepare_route_contract_declaration',
+            'measured': False,
+            'requiredIndependentCheck': 'task_acceptance_export_before_after',
+        },
+    }
+
+
 @app.post('/api/plan-snapshots/preview')
-def preview_plan_snapshot(payload: PlanSnapshotRequest):
+def preview_plan_snapshot(
+    payload: PlanSnapshotRequest,
+    projection: str = Query(default='full', pattern=r'^(?:full|scope_prepare)$'),
+):
     try:
         authoritative = _run_login_flow(
             DxmPlanReader(workflow_adapter).build_snapshot_request,
@@ -1590,7 +1771,11 @@ def preview_plan_snapshot(payload: PlanSnapshotRequest):
                 'plan_id': payload.local_plan_template_id,
             },
         })
-        return snapshot
+        return (
+            _scope_prepare_snapshot_projection(snapshot)
+            if projection == 'scope_prepare'
+            else snapshot
+        )
     except DxmSessionBusyError as exc:
         record_best_effort({
             'actor': 'operator',
@@ -1631,7 +1816,10 @@ def preview_plan_snapshot(payload: PlanSnapshotRequest):
 
 
 @app.post('/api/plan-snapshots', status_code=201)
-def freeze_plan_snapshot(payload: PlanSnapshotRequest):
+def freeze_plan_snapshot(
+    payload: PlanSnapshotRequest,
+    projection: str = Query(default='full', pattern=r'^(?:full|scope_prepare)$'),
+):
     try:
         if payload.expected_snapshot_hash is None:
             raise PlanContractError(
@@ -1662,10 +1850,15 @@ def freeze_plan_snapshot(payload: PlanSnapshotRequest):
             shop_id=authoritative["request"]["shop_id"],
             category_ids=authoritative["category_ids"],
         )
-        return service.freeze_plan_snapshot(
+        frozen = service.freeze_plan_snapshot(
             authoritative["request"],
             expected_snapshot_hash=payload.expected_snapshot_hash,
             idempotency_key=payload.idempotency_key,
+        )
+        return (
+            _scope_prepare_snapshot_projection(frozen)
+            if projection == 'scope_prepare'
+            else frozen
         )
     except DxmSessionBusyError as exc:
         raise _dxm_session_busy_http_exception() from exc
@@ -1677,9 +1870,17 @@ def freeze_plan_snapshot(payload: PlanSnapshotRequest):
 
 
 @app.get('/api/plan-snapshots/{snapshot_id}')
-def get_plan_snapshot(snapshot_id: int):
+def get_plan_snapshot(
+    snapshot_id: int,
+    projection: str = Query(default='full', pattern=r'^(?:full|scope_prepare)$'),
+):
     try:
-        return E2PlanService().get_plan_snapshot(snapshot_id)
+        snapshot = E2PlanService().get_plan_snapshot(snapshot_id)
+        return (
+            _scope_prepare_snapshot_projection(snapshot)
+            if projection == 'scope_prepare'
+            else snapshot
+        )
     except PlanContractError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -1688,14 +1889,698 @@ def get_plan_snapshot(snapshot_id: int):
 
 
 @app.post('/api/plan-snapshots/{snapshot_id}/tasks', status_code=201)
-def create_batch_draft_save_task(snapshot_id: int):
+def create_batch_draft_save_task(
+    snapshot_id: int,
+    projection: str = Query(default='full', pattern=r'^(?:full|scope_prepare)$'),
+):
     try:
-        return E2PlanService().create_task_from_snapshot(snapshot_id, repo)
+        task = E2PlanService().create_task_from_snapshot(snapshot_id, repo)
+        if projection != 'scope_prepare':
+            return task
+        private_task = repo.get_task_private(int(task['id']))
+        if not isinstance(private_task, Mapping):
+            raise PlanContractError(
+                'PLAN_SNAPSHOT_TASK_NOT_ATOMIC',
+                'snapshot task is missing after atomic freeze',
+            )
+        frozen = E2PlanService().assert_task_snapshot_binding(private_task)
+        return {
+            **_scope_prepare_snapshot_projection({
+                **dict(frozen),
+                'id': snapshot_id,
+                'task_id': int(task['id']),
+            }),
+            'taskStatus': private_task.get('status'),
+            'jobProductIds': [
+                int(job['product_id'])
+                for job in private_task.get('jobs') or []
+                if isinstance(job, Mapping)
+            ],
+        }
     except PlanContractError as exc:
         raise HTTPException(
             status_code=exc.status_code,
             detail={'reason_code': exc.reason_code, 'message': str(exc)},
         ) from exc
+
+
+@app.post('/api/real-dxm/path-b/scopes/prepare')
+def prepare_real_dxm_path_b_scope(payload: RealDxmWriteScopePrepareRequest):
+    """Validate and register an external, zero-write Path B scope."""
+
+    try:
+        canonical_scope = validate_real_dxm_write_scope(payload.scope)
+    except RealDxmWriteScopeError as exc:
+        _scope_rejected(exc.detail_code, '真实写 scope 合同无效。')
+    task_id = int(canonical_scope['snapshot']['taskId'])
+    task = repo.get_task_private(task_id)
+    if not isinstance(task, Mapping):
+        _scope_rejected('TASK_NOT_FOUND', 'scope 指向的冻结任务不存在。')
+    _validate_real_scope_task_binding(task, canonical_scope)
+    persisted = repo.prepare_real_dxm_write_scope(canonical_scope)
+    if persisted.get('ok') is not True:
+        _scope_rejected(
+            str(persisted.get('detail_code') or 'SCOPE_PERSISTENCE_REJECTED'),
+            'scope 无法形成一次性持久绑定。',
+        )
+    return {
+        'ok': True,
+        'status': 'SCOPE_PREPARED',
+        'reasonCode': 'OK',
+        'scopeSha256': canonical_scope['scopeSha256'],
+        'taskId': task_id,
+        'orderedProductCount': len(canonical_scope['orderedProducts']),
+        'mutationCount': 0,
+        'publishCount': 0,
+        'counterEvidence': {
+            'source': 'prepare_route_contract_declaration',
+            'measured': False,
+            'requiredIndependentCheck': 'task_acceptance_export',
+        },
+    }
+
+
+@app.post('/api/real-dxm/path-b/discovery/approve-and-start')
+async def approve_and_start_real_dxm_path_b_discovery(
+    payload: RealDxmPathBDiscoveryStartRequest,
+):
+    """Arm exactly one first-product composite SAVE1 and dispatch its runner."""
+
+    task_id = int(payload.taskId)
+    task = repo.get_task_private(task_id)
+    if not isinstance(task, Mapping):
+        raise HTTPException(status_code=404, detail='Task not found')
+    _assert_agent_console_browser_released(
+        '已有旧 Agent Console 浏览器现场。请先关闭该现场，再批准 Discovery。',
+    )
+    _assert_workflow_runtime_healthy()
+    if (
+        task.get('status') != 'draft'
+        or str(task.get('mode') or '') != 'batch_draft_save'
+        or _task_plan_path(task) != 'B'
+        or (task.get('payload') or {}).get('publish_allowed') is not False
+    ):
+        _scope_rejected(
+            'DISCOVERY_TASK_BOUNDARY_INVALID',
+            'Discovery 只接受尚未启动且永久禁止发布的 Path B draft task。',
+        )
+    jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
+    if (
+        len(jobs) != 3
+        or any(not isinstance(job, Mapping) for job in jobs)
+        or int(jobs[0].get('product_id') or 0) != int(payload.targetProductId)
+        or any(str(job.get('status') or '') != 'pending' for job in jobs)
+    ):
+        _scope_rejected(
+            'DISCOVERY_QUEUE_INVALID',
+            'Discovery 必须绑定 exact 三商品队列的首商品，且三个 job 均未执行。',
+        )
+    if payload.confirmation != L3_CONFIRMATION:
+        raise HTTPException(
+            status_code=400,
+            detail=f'confirmation must be {L3_CONFIRMATION}',
+        )
+    active_task = repo.get_active_task_execution()
+    if active_task is not None and int(active_task['id']) != task_id:
+        _scope_rejected('AUTH_ANOTHER_TASK_ACTIVE', '已有真实任务占用浏览器。')
+    if repo.get_active_edit_batch_execution() is not None:
+        _scope_rejected('AUTH_EDIT_BATCH_ACTIVE', '已有编辑批次占用浏览器。')
+    l2_gate = l2_real_probe_gate()
+    if l2_gate.get('status') != 'passed':
+        _scope_rejected('L2_NOT_PASSED', 'Discovery 需要 fresh passed L2。')
+    authorization = _validate_real_scope_task_binding(
+        task,
+        payload.realDxmWriteScope,
+        raw_approval=payload.realDxmWriteApproval,
+        approved_by=payload.approvedBy,
+    )
+    scope_sha256 = str(authorization['scope']['scopeSha256'])
+    prepared = repo.get_real_dxm_write_scope(scope_sha256)
+    if (
+        not isinstance(prepared, Mapping)
+        or prepared.get('status') != 'prepared'
+        or prepared.get('purpose') not in {None, 'general', 'discovery'}
+        or prepared.get('lineage_discovery_receipt_sha256') is not None
+        or prepared.get('lineage_predecessor_scope_sha256') is not None
+    ):
+        _scope_rejected(
+            'SCOPE_NOT_PREPARED_OR_CONSUMED',
+            'Discovery scope 未 Prepare、已消费或误带 Formal 谱系。',
+        )
+    discovery_key_sha256 = hashlib.sha256(
+        payload.discoveryKey.encode('utf-8')
+    ).hexdigest().upper()
+    request_sha256 = real_scope_sha256(payload.model_dump(mode='json'))
+    result = repo.approve_and_start_real_dxm_path_b_discovery(
+        task_id,
+        scope=authorization['scope'],
+        approval=authorization['approval'],
+        target_product_id=int(payload.targetProductId),
+        discovery_key_sha256=discovery_key_sha256,
+        request_sha256=request_sha256,
+        token=secrets.token_urlsafe(24),
+        confirmation=payload.confirmation,
+        approved_by=payload.approvedBy.strip(),
+        lease_id=uuid.uuid4().hex,
+    )
+    if not result.ok:
+        _scope_rejected(
+            result.reason_code,
+            'Discovery attempt 未能原子 arm；没有浏览器动作被派发。',
+        )
+    asyncio.create_task(runner.run_task(task_id))
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': 'running',
+        'authorizationConsumed': True,
+        'discoveryKeySha256': discovery_key_sha256,
+        'scopeSha256': scope_sha256,
+    }
+
+
+@app.get(
+    '/api/real-dxm/path-b/discovery/by-key-sha256/{discovery_key_sha256}'
+)
+def get_real_dxm_path_b_discovery_by_key_sha256(
+    discovery_key_sha256: str,
+):
+    """Recover an ambiguous Discovery POST without ever replaying it."""
+
+    normalized = _acceptance_digest(discovery_key_sha256)
+    if normalized is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'reason_code': 'DISCOVERY_KEY_SHA256_INVALID',
+                'message': 'discovery key hash must be 64 uppercase hex characters',
+            },
+        )
+    result = repo.get_real_dxm_path_b_discovery_by_key_sha256(normalized)
+    if not isinstance(result, Mapping):
+        raise HTTPException(status_code=404, detail='Discovery attempt not found')
+    return dict(result)
+
+
+def _real_path_b_scope_prepare_result(
+    scope: Mapping[str, Any],
+    *,
+    prepare_request_sha256: str,
+    reused: bool,
+    purpose: str = 'discovery',
+    predecessor_scope_sha256: str | None = None,
+    discovery_receipt_sha256: str | None = None,
+) -> dict[str, Any]:
+    return {
+        'schemaVersion': 'real_dxm_path_b_scope_prepare_result.v1',
+        'ok': True,
+        'status': 'SCOPE_PREPARED',
+        'reasonCode': 'OK',
+        'scope': dict(scope),
+        'scopeSha256': scope['scopeSha256'],
+        'prepareRequestSha256': prepare_request_sha256,
+        'reused': reused,
+        'purpose': purpose,
+        'predecessorScopeSha256': predecessor_scope_sha256,
+        'discoveryReceiptSha256': discovery_receipt_sha256,
+        'task': {
+            'taskId': scope['snapshot']['taskId'],
+            'snapshotId': scope['snapshot']['snapshotId'],
+            'snapshotSha256': scope['snapshot']['snapshotSha256'],
+            'path': 'B',
+            'orderedProductIds': [
+                item['productId'] for item in scope['orderedProducts']
+            ],
+        },
+        'provenance': {
+            'factsSource': 'current_backend',
+            'operatorHashBindingsSha256': real_scope_sha256(
+                [item['allowedFields'] for item in scope['orderedProducts']]
+            ),
+        },
+        'counters': {
+            'physicalSave': 0,
+            'browserMutation': 0,
+            'publishRequest': 0,
+        },
+        'counterEvidence': {
+            'source': 'prepare_route_contract_declaration',
+            'measured': False,
+            'requiredIndependentCheck': 'task_acceptance_export_before_after',
+        },
+    }
+
+
+def _assert_formal_scope_continues_discovery(
+    scope: Mapping[str, Any],
+    discovery_receipt: Mapping[str, Any],
+    *,
+    predecessor_scope_sha256: str,
+) -> None:
+    """Require a fresh scope whose first SAVE1 preimage is Discovery output."""
+
+    if (
+        _acceptance_digest(scope.get('scopeSha256'))
+        == _acceptance_digest(predecessor_scope_sha256)
+        or scope.get('account', {}).get('accountContextHash')
+        != discovery_receipt.get('account_ref_hash')
+        or scope.get('shop', {}).get('shopId') != discovery_receipt.get('shop_id')
+        or scope.get('shop', {}).get('shopName')
+        != discovery_receipt.get('shop_name')
+        or scope.get('git', {}).get('head') != discovery_receipt.get('git_head')
+        or scope.get('worktree') != discovery_receipt.get('worktree')
+        or scope.get('runtime') != discovery_receipt.get('runtime')
+        or [item.get('productId') for item in scope.get('orderedProducts', [])]
+        != discovery_receipt.get('ordered_product_ids')
+    ):
+        _scope_rejected(
+            'DISCOVERY_FORMAL_IDENTITY_DRIFT',
+            'Formal 必须保持同账号、店铺、HEAD、clean worktree、runtime、browser session 与商品顺序。',
+        )
+    first_products = [
+        item
+        for item in scope.get('orderedProducts', [])
+        if isinstance(item, Mapping) and item.get('ordinal') == 1
+    ]
+    raw_readbacks = discovery_receipt.get('field_readbacks')
+    if len(first_products) != 1 or not isinstance(raw_readbacks, list) or not raw_readbacks:
+        _scope_rejected(
+            'DISCOVERY_AFTER_READBACK_MISSING',
+            'sealed Discovery 缺少首商品 SAVE1 字段读回。',
+        )
+    formal_save1 = {
+        item.get('field'): item.get('preimageSha256')
+        for item in first_products[0].get('allowedFields', [])
+        if isinstance(item, Mapping) and item.get('saveStage') == 'SAVE1'
+    }
+    discovery_after: dict[str, str] = {}
+    for item in raw_readbacks:
+        if (
+            not isinstance(item, Mapping)
+            or item.get('readback_proven') is not True
+            or not isinstance(item.get('field_key'), str)
+            or not str(item.get('field_key') or '').strip()
+        ):
+            _scope_rejected(
+                'DISCOVERY_AFTER_READBACK_INVALID',
+                'Discovery 字段读回不是可验证的 canonical readback。',
+            )
+        field_key = str(item['field_key'])
+        if field_key in discovery_after:
+            _scope_rejected(
+                'DISCOVERY_AFTER_READBACK_DUPLICATE',
+                'Discovery 字段读回发生重复。',
+            )
+        discovery_after[field_key] = _acceptance_sha256(item.get('after_value'))
+    if formal_save1 != discovery_after:
+        _scope_rejected(
+            'DISCOVERY_AFTER_TO_FORMAL_PREIMAGE_MISMATCH',
+            'Formal 首商品 SAVE1 preimage 必须精确等于 Discovery 已验证 after value。',
+        )
+
+
+@app.get('/api/tasks/{task_id}/scope-prepare')
+def get_real_dxm_path_b_scope_prepare_task(task_id: int):
+    """Return only the hash projection needed by the external Prepare script."""
+
+    task = repo.get_task_private(task_id)
+    if not isinstance(task, Mapping):
+        raise HTTPException(status_code=404, detail='Task not found')
+    try:
+        frozen = E2PlanService().assert_task_snapshot_binding(task)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    if str(frozen.get('path') or '').upper() != 'B':
+        _scope_rejected('TASK_PATH_MISMATCH', 'scope Prepare 只接受冻结 Path B 任务。')
+    projection = _scope_prepare_snapshot_projection({
+        **dict(frozen),
+        'id': int((task.get('payload') or {}).get('plan_snapshot_id') or 0),
+        'task_id': task_id,
+    })
+    return {
+        **projection,
+        'taskStatus': task.get('status'),
+        'jobProductIds': [
+            int(job['product_id'])
+            for job in task.get('jobs') or []
+            if isinstance(job, Mapping)
+        ],
+    }
+
+
+@app.post('/api/real-dxm/path-b/scopes/derive-and-prepare')
+def derive_and_prepare_real_dxm_path_b_scope(
+    payload: RealDxmPathBScopeDeriveRequest,
+):
+    """Derive current authority facts and persist a zero-real-write Path B scope.
+
+    The caller supplies only an exact, hash-only field allowlist.  Account,
+    shop, snapshot, Git/worktree, runtime/browser session, L2, timestamps and
+    nonce are all derived by the current backend and revalidated before the
+    scope registry is touched.
+    """
+
+    request_body = payload.model_dump(mode='json')
+    has_predecessor = payload.predecessorScopeSha256 is not None
+    has_discovery_receipt = payload.discoveryReceiptSha256 is not None
+    if has_predecessor != has_discovery_receipt:
+        _scope_rejected(
+            'FORMAL_LINEAGE_PAIR_REQUIRED',
+            'Formal Prepare 必须同时携带 predecessorScopeSha256 与 discoveryReceiptSha256。',
+        )
+    purpose = 'formal' if has_predecessor else 'discovery'
+    predecessor_scope_sha256 = (
+        str(payload.predecessorScopeSha256 or '').upper() or None
+    )
+    discovery_receipt_sha256 = (
+        str(payload.discoveryReceiptSha256 or '').upper() or None
+    )
+    discovery_lineage: Mapping[str, Any] | None = None
+    discovery_receipt: Mapping[str, Any] | None = None
+    if purpose == 'formal':
+        discovery_lineage = repo.get_real_dxm_path_b_discovery_by_receipt_sha256(
+            str(discovery_receipt_sha256)
+        )
+        discovery_receipt = (
+            discovery_lineage.get('receipt')
+            if isinstance(discovery_lineage, Mapping)
+            and isinstance(discovery_lineage.get('receipt'), Mapping)
+            else None
+        )
+        if (
+            not isinstance(discovery_lineage, Mapping)
+            or discovery_lineage.get('ok') is not True
+            or discovery_lineage.get('status') != 'DISCOVERY_SEALED'
+            or not isinstance(discovery_receipt, Mapping)
+            or _acceptance_digest(
+                discovery_receipt.get('discovery_receipt_sha256')
+            )
+            != discovery_receipt_sha256
+            or _acceptance_digest(discovery_receipt.get('scope_sha256'))
+            != predecessor_scope_sha256
+        ):
+            _scope_rejected(
+                'DISCOVERY_RECEIPT_MISSING_OR_INVALID',
+                'Formal Prepare 未找到可复验的 sealed Discovery receipt。',
+            )
+    prepare_request_sha256 = real_scope_sha256(request_body)
+    prepare_key_sha256 = hashlib.sha256(
+        payload.prepareKey.encode('utf-8')
+    ).hexdigest().upper()
+    nonce_prefix = (
+        f"prepare.{prepare_key_sha256[:24]}."
+        f"{prepare_request_sha256[:24]}."
+    )
+    task = repo.get_task_private(payload.taskId)
+    if not isinstance(task, Mapping):
+        _scope_rejected('TASK_NOT_FOUND', 'Prepare 指向的冻结任务不存在。')
+    if task.get('status') != 'draft':
+        _scope_rejected('TASK_NOT_DRAFT', 'Prepare 只接受尚未启动的 draft 任务。')
+    try:
+        frozen = E2PlanService().assert_task_snapshot_binding(task)
+    except PlanContractError as exc:
+        _scope_rejected(exc.reason_code, '冻结任务与 plan snapshot 绑定无效。')
+    if str(frozen.get('path') or '').upper() != 'B':
+        _scope_rejected('TASK_PATH_MISMATCH', 'Prepare 只接受冻结 Path B。')
+    if frozen.get('publish_allowed') is not False:
+        _scope_rejected('PUBLISH_INTENT_FORBIDDEN', '冻结任务必须永久禁止发布。')
+    if purpose == 'formal' and (
+        int(discovery_receipt.get('task_id') or 0) == int(payload.taskId)
+        or int(discovery_receipt.get('snapshot_id') or 0)
+        == int((task.get('payload') or {}).get('plan_snapshot_id') or 0)
+        or str(discovery_receipt.get('snapshot_sha256') or '').upper()
+        == str((task.get('payload') or {}).get('plan_snapshot_hash') or '').upper()
+    ):
+        _scope_rejected(
+            'FORMAL_TASK_OR_SNAPSHOT_NOT_FRESH',
+            'Formal 必须由新的 Reader/preview/freeze/task/snapshot 派生。',
+        )
+
+    requested_product_ids = [item.productId for item in payload.orderedProducts]
+    task_product_ids = list((task.get('payload') or {}).get('product_ids') or [])
+    job_product_ids = [
+        int(job['product_id'])
+        for job in task.get('jobs') or []
+        if isinstance(job, Mapping)
+    ]
+    if (
+        len(requested_product_ids) != 3
+        or requested_product_ids != task_product_ids
+        or requested_product_ids != job_product_ids
+    ):
+        _scope_rejected(
+            'ORDERED_PRODUCTS_DRIFT',
+            'Prepare 商品顺序必须与冻结 task/jobs 完全一致且精确三件。',
+        )
+    if purpose == 'formal' and requested_product_ids != list(
+        discovery_receipt.get('ordered_product_ids') or []
+    ):
+        _scope_rejected(
+            'DISCOVERY_FORMAL_PRODUCT_ORDER_DRIFT',
+            'Formal 商品顺序必须与 sealed Discovery 完全一致。',
+        )
+
+    ordered_products: list[dict[str, Any]] = []
+    for ordinal, product in enumerate(payload.orderedProducts, start=1):
+        field_bindings: list[dict[str, Any]] = []
+        seen_fields: set[str] = set()
+        stage_counts = {'SAVE1': 0, 'SAVE2': 0}
+        for binding in product.fieldHashBindings:
+            field_name = binding.field
+            if field_name != field_name.strip() or field_name in seen_fields:
+                _scope_rejected(
+                    'FIELD_HASH_BINDING_INVALID',
+                    '字段授权必须规范化且不得跨 SAVE 阶段重复。',
+                )
+            seen_fields.add(field_name)
+            if any(token in field_name.casefold() for token in ('publish', '发布')):
+                _scope_rejected('PUBLISH_FIELD_FORBIDDEN', '字段授权不得包含发布入口。')
+            stage_counts[binding.saveStage] += 1
+            field_bindings.append({
+                'field': field_name,
+                'saveStage': binding.saveStage,
+                'preimageSha256': binding.preimageSha256,
+                'expectedSha256': binding.expectedSha256,
+            })
+        if any(count < 1 for count in stage_counts.values()):
+            _scope_rejected(
+                'SAVE_ALLOWED_FIELDS_REQUIRED',
+                '每件商品的 SAVE1 与 SAVE2 都必须有显式字段哈希授权。',
+            )
+        ordered_products.append({
+            'ordinal': ordinal,
+            'productId': product.productId,
+            'allowedFields': field_bindings,
+            'saves': [
+                {'stage': 'SAVE1', 'maxPhysicalRequests': 1},
+                {'stage': 'SAVE2', 'maxPhysicalRequests': 1},
+            ],
+        })
+
+    provisional_scope = {'orderedProducts': ordered_products}
+    _validate_scope_field_hashes_against_frozen_task(task, provisional_scope)
+    session = frozen.get('session_context') if isinstance(frozen.get('session_context'), Mapping) else {}
+    try:
+        shop_id = int(frozen.get('shop_scope'))
+    except (TypeError, ValueError):
+        _scope_rejected('SHOP_BINDING_INVALID', '冻结店铺 ID 无效。')
+    shop_name = str(session.get('shop_name') or '')
+    if not shop_name:
+        _scope_rejected('SHOP_BINDING_INVALID', '冻结店铺名称缺失。')
+
+    git_summary = _current_git_summary()
+    worktree_identity = _current_execution_worktree_identity(git_summary)
+    if git_summary.get('is_dirty') is not False:
+        _scope_rejected(
+            'WORKTREE_DIRTY',
+            '真实 scope Prepare 只接受当前 clean worktree；未触发任何真实写入。',
+        )
+    _assert_real_scope_data_dir_external()
+    adapter_browser_session_id = str(workflow_adapter.browser_session_id() or '')
+    try:
+        runtime_browser_session_id = _current_browser_session_id()
+    except HTTPException:
+        _scope_rejected('BROWSER_SESSION_UNAVAILABLE', 'BrowserAgent 当前会话不可用。')
+    if (
+        not adapter_browser_session_id
+        or adapter_browser_session_id != runtime_browser_session_id
+    ):
+        _scope_rejected(
+            'BROWSER_SESSION_IDENTITY_DRIFT',
+            'workflow adapter 与 BrowserAgent 会话身份不一致。',
+        )
+    try:
+        account_context_hash = workflow_adapter.refresh_account_context_hash()
+    except Exception:
+        _scope_rejected('ACCOUNT_CONTEXT_UNAVAILABLE', '无法重读当前账号身份。')
+    if str(session.get('account_ref_hash') or '') != account_context_hash:
+        _scope_rejected('ACCOUNT_CONTEXT_DRIFT', '当前账号与冻结 Reader 账号不一致。')
+    l2_gate = l2_real_probe_gate()
+    if l2_gate.get('status') != 'passed':
+        _scope_rejected('L2_NOT_PASSED', 'Prepare 需要 fresh passed L2。')
+
+    def persist_derived_scope(scope_value: Mapping[str, Any]) -> dict[str, Any]:
+        lineage_sha256 = None
+        if purpose == 'formal':
+            _assert_formal_scope_continues_discovery(
+                scope_value,
+                discovery_receipt,
+                predecessor_scope_sha256=str(predecessor_scope_sha256),
+            )
+            lineage_sha256 = real_scope_sha256({
+                'schemaVersion': 'real_dxm_path_b_formal_lineage.v1',
+                'predecessorScopeSha256': predecessor_scope_sha256,
+                'discoveryReceiptSha256': discovery_receipt_sha256,
+                'formalScopeSha256': scope_value.get('scopeSha256'),
+                'formalTaskId': scope_value.get('snapshot', {}).get('taskId'),
+                'formalSnapshotId': scope_value.get('snapshot', {}).get('snapshotId'),
+                'formalSnapshotSha256': scope_value.get('snapshot', {}).get(
+                    'snapshotSha256'
+                ),
+            })
+        return repo.prepare_real_dxm_write_scope(
+            scope_value,
+            purpose=purpose,
+            lineage_sha256=lineage_sha256,
+            lineage_discovery_receipt_sha256=discovery_receipt_sha256,
+            lineage_predecessor_scope_sha256=predecessor_scope_sha256,
+        )
+
+    existing = repo.get_prepared_real_dxm_write_scope_for_task(payload.taskId)
+    if isinstance(existing, Mapping) and isinstance(existing.get('scope'), Mapping):
+        existing_scope = existing['scope']
+        try:
+            validated_existing = validate_real_dxm_write_scope(existing_scope)
+        except RealDxmWriteScopeError as exc:
+            if exc.detail_code != 'SCOPE_EXPIRED':
+                _scope_rejected(exc.detail_code, '现有 prepared scope 已损坏。')
+        else:
+            if (
+                not str(validated_existing.get('nonce') or '').startswith(nonce_prefix)
+                or validated_existing.get('orderedProducts') != ordered_products
+            ):
+                _scope_rejected(
+                    'TASK_ACTIVE_SCOPE_CONFLICT',
+                    '同一 task 已有另一份仍有效的 prepared scope。',
+                )
+            if (
+                existing.get('purpose') != purpose
+                or _acceptance_digest(
+                    existing.get('lineage_discovery_receipt_sha256')
+                )
+                != _acceptance_digest(discovery_receipt_sha256)
+                or _acceptance_digest(
+                    existing.get('lineage_predecessor_scope_sha256')
+                )
+                != _acceptance_digest(predecessor_scope_sha256)
+            ):
+                _scope_rejected(
+                    'TASK_ACTIVE_SCOPE_CONFLICT',
+                    '同一 task 已有不同用途或谱系的 prepared scope。',
+                )
+            _validate_real_scope_task_binding(task, validated_existing)
+            rechecked = persist_derived_scope(validated_existing)
+            if rechecked.get('ok') is not True:
+                _scope_rejected(
+                    str(rechecked.get('detail_code') or 'SCOPE_PERSISTENCE_REJECTED'),
+                    '现有 prepared scope 已不再绑定 draft task。',
+                )
+            return _real_path_b_scope_prepare_result(
+                validated_existing,
+                prepare_request_sha256=prepare_request_sha256,
+                reused=True,
+                purpose=purpose,
+                predecessor_scope_sha256=predecessor_scope_sha256,
+                discovery_receipt_sha256=discovery_receipt_sha256,
+            )
+
+    issued_at = _authorization_now()
+    try:
+        candidate = prepare_real_dxm_write_scope({
+            'schema': 'real_dxm_write_scope.v1',
+            'stage': 'execute',
+            'path': 'B',
+            'issuedAt': issued_at,
+            'expiresAt': issued_at + timedelta(seconds=payload.validForSeconds),
+            'nonce': nonce_prefix + secrets.token_hex(12),
+            'account': {'accountContextHash': account_context_hash},
+            'shop': {'shopId': shop_id, 'shopName': shop_name},
+            'snapshot': {
+                'snapshotId': int((task.get('payload') or {}).get('plan_snapshot_id') or 0),
+                'snapshotSha256': str((task.get('payload') or {}).get('plan_snapshot_hash') or ''),
+                'taskId': payload.taskId,
+            },
+            'git': {'head': str(git_summary.get('head') or '')},
+            'worktree': worktree_identity,
+            'runtime': {
+                'runtimeInstanceId': str(runtime_identity.instance_id),
+                'browserRuntimeId': str(browser_agent_runtime.runtime_id),
+                'browserSessionId': runtime_browser_session_id,
+            },
+            'l2': {
+                'status': 'passed',
+                'evidenceFingerprint': _l2_authorization_fingerprint(l2_gate),
+            },
+            'orderedProducts': ordered_products,
+            'publishAllowed': False,
+            'maxPhysicalRequestsPerSave': 1,
+        }, now=issued_at)
+    except RealDxmWriteScopeError as exc:
+        _scope_rejected(exc.detail_code, '当前事实无法形成严格的真实写 scope。')
+    _validate_real_scope_task_binding(task, candidate)
+    persisted = persist_derived_scope(candidate)
+    if persisted.get('ok') is not True:
+        if persisted.get('detail_code') == 'TASK_ACTIVE_SCOPE_CONFLICT':
+            raced = repo.get_prepared_real_dxm_write_scope_for_task(payload.taskId)
+            raced_scope = raced.get('scope') if isinstance(raced, Mapping) else None
+            if (
+                isinstance(raced_scope, Mapping)
+                and str(raced_scope.get('nonce') or '').startswith(nonce_prefix)
+                and raced_scope.get('orderedProducts') == ordered_products
+            ):
+                try:
+                    validated_raced = validate_real_dxm_write_scope(raced_scope)
+                except RealDxmWriteScopeError as exc:
+                    _scope_rejected(exc.detail_code, '并发 prepared scope 已无效。')
+                _validate_real_scope_task_binding(task, validated_raced)
+                if (
+                    raced.get('purpose') != purpose
+                    or _acceptance_digest(
+                        raced.get('lineage_discovery_receipt_sha256')
+                    )
+                    != _acceptance_digest(discovery_receipt_sha256)
+                    or _acceptance_digest(
+                        raced.get('lineage_predecessor_scope_sha256')
+                    )
+                    != _acceptance_digest(predecessor_scope_sha256)
+                ):
+                    _scope_rejected(
+                        'TASK_ACTIVE_SCOPE_CONFLICT',
+                        '并发 prepared scope 谱系不匹配。',
+                    )
+                return _real_path_b_scope_prepare_result(
+                    validated_raced,
+                    prepare_request_sha256=prepare_request_sha256,
+                    reused=True,
+                    purpose=purpose,
+                    predecessor_scope_sha256=predecessor_scope_sha256,
+                    discovery_receipt_sha256=discovery_receipt_sha256,
+                )
+        _scope_rejected(
+            str(persisted.get('detail_code') or 'SCOPE_PERSISTENCE_REJECTED'),
+            'derived scope 无法形成一次性持久绑定。',
+        )
+    return _real_path_b_scope_prepare_result(
+        candidate,
+        prepare_request_sha256=prepare_request_sha256,
+        reused=False,
+        purpose=purpose,
+        predecessor_scope_sha256=predecessor_scope_sha256,
+        discovery_receipt_sha256=discovery_receipt_sha256,
+    )
 
 
 @app.post('/api/templates')
@@ -1779,6 +2664,1306 @@ def get_task(task_id: int):
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
     return _with_public_worker_control(task)
+
+
+def _acceptance_sha256(value: Any) -> str:
+    return real_scope_sha256(value)
+
+
+def _acceptance_digest(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().upper()
+    if len(normalized) != 64 or any(
+        character not in '0123456789ABCDEF' for character in normalized
+    ):
+        return None
+    return normalized
+
+
+def _acceptance_opaque_ref(label: str, value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return hashlib.sha256(
+        f"{label}:{value}".encode('utf-8')
+    ).hexdigest().upper()
+
+
+def _acceptance_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _acceptance_discovery_formal_campaign(
+    *,
+    task_id: int,
+    formal_task: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    formal_scope_sha256: str,
+    formal_scope_record: Mapping[str, Any] | None,
+    formal_scope: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Revalidate the sealed Discovery -> fresh Formal boundary for export.
+
+    Only opaque identities, hashes, and counters leave this helper.  Missing or
+    inconsistent private evidence produces false gates instead of optimistic
+    defaults, so the public acceptance route remains fail-closed.
+    """
+
+    empty = {
+        'lineageConsistent': False,
+        'discoveryReceiptValid': False,
+        'continuationValid': False,
+        'chronologyValid': False,
+        'discoveryCountersValid': False,
+        'formalLineageSha256': None,
+        'predecessorScopeSha256': None,
+        'discoveryReceiptSha256': None,
+        '_proofHashes': [],
+        '_commandId': None,
+        '_leaseId': None,
+        'chronology': {
+            'discoverySealedAt': None,
+            'formalSnapshotCreatedAt': None,
+            'formalTaskCreatedAt': None,
+            'formalScopeIssuedAt': None,
+            'formalScopePreparedAt': None,
+            'formalApprovalApprovedAt': None,
+        },
+        'discovery': {
+            'taskId': None,
+            'snapshotId': None,
+            'snapshotSha256': None,
+            'scopeSha256': None,
+            'productId': None,
+            'receiptSha256': None,
+            'proofSetSha256': None,
+            'counters': {
+                'physicalMutation': None,
+                'save1': None,
+                'save2': None,
+                'otherProductMutation': None,
+                'publishRequest': None,
+                'unknown': None,
+            },
+        },
+    }
+    raw_lineage = task_payload.get(PATH_B_FORMAL_LINEAGE_KEY)
+    try:
+        lineage = validate_path_b_formal_lineage(raw_lineage)
+    except (BatchCommandContractError, TypeError, ValueError):
+        return empty
+
+    discovery_receipt_sha256 = lineage['discovery_receipt_sha256']
+    discovery_reader = getattr(
+        repo, 'get_real_dxm_path_b_discovery_by_receipt_sha256', None
+    )
+    if not callable(discovery_reader):
+        return {
+            **empty,
+            'formalLineageSha256': lineage['lineage_sha256'],
+            'predecessorScopeSha256': lineage['predecessor_scope_sha256'],
+            'discoveryReceiptSha256': discovery_receipt_sha256,
+        }
+    discovery_record = discovery_reader(discovery_receipt_sha256)
+    receipt = (
+        discovery_record.get('receipt')
+        if isinstance(discovery_record, Mapping)
+        and isinstance(discovery_record.get('receipt'), Mapping)
+        else None
+    )
+    predecessor = repo.get_real_dxm_write_scope(
+        lineage['predecessor_scope_sha256']
+    )
+    if not isinstance(receipt, Mapping) or not isinstance(predecessor, Mapping):
+        return {
+            **empty,
+            'formalLineageSha256': lineage['lineage_sha256'],
+            'predecessorScopeSha256': lineage['predecessor_scope_sha256'],
+            'discoveryReceiptSha256': discovery_receipt_sha256,
+        }
+
+    receipt_sha256 = _acceptance_digest(
+        receipt.get('discovery_receipt_sha256')
+    )
+    unsigned_receipt = {
+        key: value
+        for key, value in receipt.items()
+        if key != 'discovery_receipt_sha256'
+    }
+    field_readbacks = (
+        receipt.get('field_readbacks')
+        if isinstance(receipt.get('field_readbacks'), list)
+        else []
+    )
+    unpublished_readback = (
+        receipt.get('unpublished_readback')
+        if isinstance(receipt.get('unpublished_readback'), Mapping)
+        else None
+    )
+    leaf_proof_manifest = (
+        receipt.get('leaf_proof_manifest')
+        if isinstance(receipt.get('leaf_proof_manifest'), Mapping)
+        else None
+    )
+    leaf_proof_keys = (
+        'network_request_sha256',
+        'network_response_sha256',
+        'screenshot_sha256',
+        'readback_sha256',
+        'unpublished_readback_sha256',
+    )
+    proof_hashes = [
+        _acceptance_digest(leaf_proof_manifest.get(key))
+        if isinstance(leaf_proof_manifest, Mapping)
+        else None
+        for key in leaf_proof_keys
+    ]
+    receipt_valid = bool(
+        isinstance(discovery_record, Mapping)
+        and discovery_record.get('ok') is True
+        and discovery_record.get('status') == 'DISCOVERY_SEALED'
+        and receipt.get('schema_version')
+        == 'dxm.real-dxm-path-b.save1-discovery-receipt.v1'
+        and receipt_sha256 == discovery_receipt_sha256
+        and receipt_sha256 == _acceptance_sha256(unsigned_receipt)
+        and _acceptance_digest(receipt.get('field_readbacks_sha256'))
+        == _acceptance_sha256(field_readbacks)
+        and isinstance(unpublished_readback, Mapping)
+        and _acceptance_digest(receipt.get('unpublished_readback_sha256'))
+        == _acceptance_sha256(unpublished_readback)
+        and isinstance(leaf_proof_manifest, Mapping)
+        and leaf_proof_manifest.get('schema_version')
+        == 'dxm.real-dxm-path-b.discovery-leaf-proof-manifest.v1'
+        and _acceptance_digest(
+            receipt.get('leaf_proof_manifest_sha256')
+        )
+        == _acceptance_sha256(leaf_proof_manifest)
+        and len(field_readbacks) > 0
+        and all(value is not None for value in proof_hashes)
+        and len(set(proof_hashes)) == len(proof_hashes)
+    )
+
+    first_products = [
+        item
+        for item in formal_scope.get('orderedProducts', [])
+        if isinstance(item, Mapping) and item.get('ordinal') == 1
+    ]
+    formal_save1 = (
+        {
+            item.get('field'): item.get('preimageSha256')
+            for item in first_products[0].get('allowedFields', [])
+            if isinstance(item, Mapping) and item.get('saveStage') == 'SAVE1'
+        }
+        if len(first_products) == 1
+        else {}
+    )
+    discovery_after: dict[str, str] = {}
+    readbacks_valid = bool(field_readbacks)
+    for item in field_readbacks:
+        if (
+            not isinstance(item, Mapping)
+            or item.get('readback_proven') is not True
+            or not isinstance(item.get('field_key'), str)
+            or not str(item.get('field_key') or '').strip()
+        ):
+            readbacks_valid = False
+            continue
+        field_key = str(item['field_key'])
+        if field_key in discovery_after:
+            readbacks_valid = False
+            continue
+        discovery_after[field_key] = _acceptance_sha256(item.get('after_value'))
+    continuation_valid = bool(
+        readbacks_valid
+        and formal_save1
+        and discovery_after == formal_save1
+    )
+
+    discovery_counters = {
+        'physicalMutation': receipt.get('physical_mutation_count'),
+        'save1': receipt.get('save1_count'),
+        'save2': receipt.get('save2_count'),
+        'otherProductMutation': receipt.get('other_product_mutation_count'),
+        'publishRequest': receipt.get('publish_request_count'),
+        'unknown': receipt.get('unknown_count'),
+    }
+    discovery_counters_valid = discovery_counters == {
+        'physicalMutation': 1,
+        'save1': 1,
+        'save2': 0,
+        'otherProductMutation': 0,
+        'publishRequest': 0,
+        'unknown': 0,
+    } and receipt.get('published') is False
+
+    formal_snapshot_id = int(task_payload.get('plan_snapshot_id') or 0)
+    formal_snapshot_sha256 = str(
+        task_payload.get('plan_snapshot_hash') or ''
+    ).upper()
+    try:
+        formal_snapshot_row = PlanSnapshotStore.get(formal_snapshot_id)
+    except Exception:
+        formal_snapshot_row = None
+    manual_approval = (
+        task_payload.get('manual_approval')
+        if isinstance(task_payload.get('manual_approval'), Mapping)
+        else {}
+    )
+    chronology = {
+        'discoverySealedAt': receipt.get('sealed_at'),
+        'formalSnapshotCreatedAt': (
+            formal_snapshot_row.get('created_at')
+            if isinstance(formal_snapshot_row, Mapping)
+            else None
+        ),
+        'formalTaskCreatedAt': formal_task.get('created_at'),
+        'formalScopeIssuedAt': formal_scope.get('issuedAt'),
+        'formalScopePreparedAt': (
+            formal_scope_record.get('prepared_at')
+            if isinstance(formal_scope_record, Mapping)
+            else None
+        ),
+        'formalApprovalApprovedAt': manual_approval.get('approved_at'),
+    }
+    chronology_times = {
+        key: _acceptance_timestamp(value) for key, value in chronology.items()
+    }
+    discovery_sealed_at = chronology_times['discoverySealedAt']
+    formal_snapshot_created_at = chronology_times['formalSnapshotCreatedAt']
+    formal_task_created_at = chronology_times['formalTaskCreatedAt']
+    formal_scope_issued_at = chronology_times['formalScopeIssuedAt']
+    formal_scope_prepared_at = chronology_times['formalScopePreparedAt']
+    formal_approval_approved_at = chronology_times['formalApprovalApprovedAt']
+    chronology_valid = bool(
+        isinstance(formal_snapshot_row, Mapping)
+        and int(formal_snapshot_row.get('id') or 0) == formal_snapshot_id
+        and int(formal_snapshot_row.get('task_id') or 0) == task_id
+        and _acceptance_digest(formal_snapshot_row.get('snapshot_hash'))
+        == _acceptance_digest(formal_snapshot_sha256)
+        and all(value is not None for value in chronology_times.values())
+        and all(
+            value > discovery_sealed_at
+            for key, value in chronology_times.items()
+            if key != 'discoverySealedAt'
+        )
+        and formal_snapshot_created_at <= formal_task_created_at
+        and formal_task_created_at
+        <= min(formal_scope_issued_at, formal_scope_prepared_at)
+        and not (
+            formal_scope_prepared_at < formal_scope_issued_at
+            and formal_scope_issued_at - formal_scope_prepared_at
+            >= timedelta(seconds=1)
+        )
+        and max(formal_scope_issued_at, formal_scope_prepared_at)
+        <= formal_approval_approved_at
+        and formal_approval_approved_at <= datetime.now(timezone.utc)
+    )
+    receipt_order = (
+        list(receipt.get('ordered_product_ids'))
+        if isinstance(receipt.get('ordered_product_ids'), list)
+        else []
+    )
+    formal_order = [
+        item.get('productId')
+        for item in formal_scope.get('orderedProducts', [])
+        if isinstance(item, Mapping)
+    ]
+    formal_account = (
+        formal_scope.get('account')
+        if isinstance(formal_scope.get('account'), Mapping)
+        else {}
+    )
+    formal_shop = (
+        formal_scope.get('shop')
+        if isinstance(formal_scope.get('shop'), Mapping)
+        else {}
+    )
+    formal_git = (
+        formal_scope.get('git')
+        if isinstance(formal_scope.get('git'), Mapping)
+        else {}
+    )
+    identity_consistent = bool(
+        formal_account.get('accountContextHash') == receipt.get('account_ref_hash')
+        and formal_shop.get('shopId') == receipt.get('shop_id')
+        and formal_shop.get('shopName') == receipt.get('shop_name')
+        and formal_git.get('head') == receipt.get('git_head')
+        and formal_scope.get('worktree') == receipt.get('worktree')
+        and formal_scope.get('runtime') == receipt.get('runtime')
+        and formal_order == receipt_order
+        and len(formal_order) == 3
+    )
+    registry_consistent = bool(
+        isinstance(formal_scope_record, Mapping)
+        and formal_scope_record.get('status') == 'consumed'
+        and formal_scope_record.get('purpose') == 'formal'
+        and _acceptance_digest(formal_scope_record.get('scope_sha256'))
+        == _acceptance_digest(formal_scope_sha256)
+        and _acceptance_digest(formal_scope_record.get('lineage_sha256'))
+        == lineage['lineage_sha256']
+        and _acceptance_digest(
+            formal_scope_record.get('lineage_discovery_receipt_sha256')
+        )
+        == discovery_receipt_sha256
+        and _acceptance_digest(
+            formal_scope_record.get('lineage_predecessor_scope_sha256')
+        )
+        == lineage['predecessor_scope_sha256']
+        and predecessor.get('status') == 'discovery_sealed'
+        and predecessor.get('purpose') == 'discovery'
+        and _acceptance_digest(predecessor.get('scope_sha256'))
+        == lineage['predecessor_scope_sha256']
+        and _acceptance_digest(predecessor.get('approval_sha256'))
+        == _acceptance_digest(receipt.get('approval_sha256'))
+        and _acceptance_digest(formal_scope_record.get('approval_sha256'))
+        is not None
+        and _acceptance_digest(formal_scope_record.get('approval_sha256'))
+        != _acceptance_digest(receipt.get('approval_sha256'))
+    )
+    freshness_consistent = bool(
+        lineage['formal_task_id'] == task_id
+        and lineage['formal_snapshot_id'] == formal_snapshot_id
+        and lineage['formal_snapshot_sha256'] == formal_snapshot_sha256
+        and lineage['formal_scope_sha256']
+        == _acceptance_digest(formal_scope_sha256)
+        and lineage['discovery_task_id'] == receipt.get('task_id')
+        and lineage['discovery_snapshot_id'] == receipt.get('snapshot_id')
+        and lineage['discovery_snapshot_sha256']
+        == _acceptance_digest(receipt.get('snapshot_sha256'))
+        and lineage['predecessor_scope_sha256']
+        == _acceptance_digest(receipt.get('scope_sha256'))
+        and lineage['discovery_receipt_sha256'] == receipt_sha256
+    )
+    lineage_consistent = bool(
+        receipt_valid
+        and continuation_valid
+        and chronology_valid
+        and discovery_counters_valid
+        and identity_consistent
+        and registry_consistent
+        and freshness_consistent
+    )
+    return {
+        'lineageConsistent': lineage_consistent,
+        'discoveryReceiptValid': receipt_valid,
+        'continuationValid': continuation_valid,
+        'chronologyValid': chronology_valid,
+        'discoveryCountersValid': discovery_counters_valid,
+        'formalLineageSha256': lineage['lineage_sha256'],
+        'predecessorScopeSha256': lineage['predecessor_scope_sha256'],
+        'discoveryReceiptSha256': discovery_receipt_sha256,
+        '_proofHashes': proof_hashes if receipt_valid else [],
+        '_commandId': receipt.get('command_id'),
+        '_leaseId': receipt.get('authorization_lease_id'),
+        'chronology': chronology,
+        'discovery': {
+            'taskId': receipt.get('task_id'),
+            'snapshotId': receipt.get('snapshot_id'),
+            'snapshotSha256': _acceptance_digest(
+                receipt.get('snapshot_sha256')
+            ),
+            'scopeSha256': _acceptance_digest(receipt.get('scope_sha256')),
+            'productId': receipt.get('product_id'),
+            'receiptSha256': receipt_sha256,
+            'proofSetSha256': (
+                _acceptance_sha256(proof_hashes) if receipt_valid else None
+            ),
+            'leafProofSha256s': (
+                proof_hashes if receipt_valid else []
+            ),
+            'commandRefSha256': _acceptance_opaque_ref(
+                'command', receipt.get('command_id')
+            ),
+            'leaseRefSha256': _acceptance_opaque_ref(
+                'lease', receipt.get('authorization_lease_id')
+            ),
+            'counters': discovery_counters,
+        },
+    }
+
+
+@app.get('/api/tasks/{task_id}/acceptance-export')
+def get_real_path_b_acceptance_export(task_id: int):
+    """Return a redacted, public-API-only Path B acceptance projection."""
+
+    task = repo.get_task_private(task_id)
+    if not isinstance(task, Mapping):
+        raise HTTPException(status_code=404, detail='Task not found')
+    payload = task.get('payload') if isinstance(task.get('payload'), Mapping) else {}
+    real_authorization = (
+        payload.get('real_dxm_write_authorization')
+        if isinstance(payload.get('real_dxm_write_authorization'), Mapping)
+        else {}
+    )
+    scope_sha256 = str(real_authorization.get('scope_sha256') or '')
+    scope_record = repo.get_real_dxm_write_scope(scope_sha256) if scope_sha256 else None
+    scope = (
+        scope_record.get('scope')
+        if isinstance(scope_record, Mapping)
+        and isinstance(scope_record.get('scope'), Mapping)
+        else {}
+    )
+    campaign_evidence = _acceptance_discovery_formal_campaign(
+        task_id=task_id,
+        formal_task=task,
+        task_payload=payload,
+        formal_scope_sha256=scope_sha256,
+        formal_scope_record=(
+            scope_record if isinstance(scope_record, Mapping) else None
+        ),
+        formal_scope=scope,
+    )
+    jobs = [item for item in task.get('jobs') or [] if isinstance(item, Mapping)]
+    jobs_by_product = {
+        item.get('product_id'): item
+        for item in jobs
+        if isinstance(item.get('product_id'), int)
+        and not isinstance(item.get('product_id'), bool)
+    }
+    scoped_products = [
+        item
+        for item in scope.get('orderedProducts', [])
+        if isinstance(item, Mapping)
+    ]
+    ordered_products = []
+    for item in scoped_products:
+        job = jobs_by_product.get(item.get('productId'))
+        ordered_products.append(
+            {
+                'ordinal': item.get('ordinal'),
+                'productId': item.get('productId'),
+                'jobId': job.get('id') if isinstance(job, Mapping) else None,
+                'status': job.get('status') if isinstance(job, Mapping) else 'missing',
+            }
+        )
+
+    receipt_rows = repo.list_receipts(task_id)
+    save_stage_authority = repo.revalidate_task_save_stage_authority(task_id)
+    receipts_by_job: dict[int, Mapping[str, Any]] = {}
+    persisted_save_receipts: dict[tuple[int, str], Mapping[str, Any]] = {}
+    receipt_row_issues: list[str] = []
+    expected_product_by_job = {
+        int(item['id']): item.get('product_id')
+        for item in jobs
+        if isinstance(item.get('id'), int) and not isinstance(item.get('id'), bool)
+    }
+    for row in receipt_rows:
+        canonical = row.get('receipt') if isinstance(row.get('receipt'), Mapping) else None
+        job_id = row.get('job_id')
+        if (
+            not isinstance(job_id, int)
+            or isinstance(job_id, bool)
+            or not isinstance(canonical, Mapping)
+            or job_id not in expected_product_by_job
+        ):
+            receipt_row_issues.append('CANONICAL_RECEIPT_ROW_INVALID')
+            continue
+        receipt_kind = str(row.get('receipt_kind') or 'product_aggregate')
+        if receipt_kind == 'save_stage':
+            save_stage = str(row.get('save_stage') or '')
+            pair = (job_id, save_stage)
+            stored_digest = _acceptance_digest(
+                canonical.get('canonical_receipt_sha256')
+            )
+            parent_digest = _acceptance_digest(
+                row.get('parent_canonical_receipt_sha256')
+            )
+            nested = (
+                canonical.get('save_receipt')
+                if isinstance(canonical.get('save_receipt'), Mapping)
+                else None
+            )
+            nested_digest = (
+                _acceptance_digest(
+                    nested.get('canonical_save_receipt_sha256')
+                )
+                if isinstance(nested, Mapping)
+                else None
+            )
+            unsigned_stage = {
+                key: value
+                for key, value in canonical.items()
+                if key not in {'schema_version', 'canonical_receipt_sha256'}
+            }
+            unsigned_nested = {
+                key: value
+                for key, value in nested.items()
+                if key not in {
+                    'schema_version',
+                    'canonical_save_receipt_sha256',
+                }
+            } if isinstance(nested, Mapping) else {}
+            expected_phase = {
+                'SAVE1': 'phase_1_first_save',
+                'SAVE2': 'phase_2_second_save',
+            }.get(save_stage)
+            if (
+                pair in persisted_save_receipts
+                or expected_phase is None
+                or canonical.get('schema_version')
+                != 'dxm.path-b.canonical-save-stage-receipt.v1'
+                or canonical.get('receipt_kind') != 'save_stage'
+                or canonical.get('task_id') != task_id
+                or canonical.get('job_id') != job_id
+                or canonical.get('product_id') != expected_product_by_job[job_id]
+                or canonical.get('save_stage') != save_stage
+                or canonical.get('mode') != 'batch_draft_save'
+                or canonical.get('job_status') != 'succeeded'
+                or canonical.get('error_code') is not None
+                or canonical.get('error_detail') is not None
+                or canonical.get('needs_manual_review') is not False
+                or _acceptance_digest(canonical.get('scope_sha256')) is None
+                or _acceptance_digest(canonical.get('claim_mark'))
+                != _acceptance_digest(canonical.get('scope_sha256'))
+                or parent_digest is None
+                or stored_digest is None
+                or stored_digest != _acceptance_sha256(unsigned_stage)
+                or _acceptance_digest(row.get('canonical_receipt_sha256'))
+                != stored_digest
+                or row.get('save_stage') != save_stage
+                or _acceptance_digest(row.get('scope_sha256'))
+                != _acceptance_digest(canonical.get('scope_sha256'))
+                or nested_digest is None
+                or nested_digest != _acceptance_sha256(unsigned_nested)
+                or nested.get('save_phase') != expected_phase
+            ):
+                receipt_row_issues.append(
+                    'CANONICAL_SAVE_STAGE_RECEIPT_BINDING_INVALID'
+                )
+                continue
+            persisted_save_receipts[pair] = {
+                **dict(canonical),
+                '_row_parent_canonical_receipt_sha256': parent_digest,
+            }
+            continue
+        if receipt_kind != 'product_aggregate':
+            receipt_row_issues.append('CANONICAL_RECEIPT_KIND_INVALID')
+            continue
+        if job_id in receipts_by_job:
+            receipt_row_issues.append('CANONICAL_RECEIPT_DUPLICATE_JOB')
+            continue
+        stored_digest = _acceptance_digest(canonical.get('canonical_receipt_sha256'))
+        unsigned_canonical = {
+            key: value
+            for key, value in canonical.items()
+            if key not in {'schema_version', 'canonical_receipt_sha256'}
+        }
+        if (
+            canonical.get('schema_version') != 'dxm.path-b.canonical-receipt.v1'
+            or canonical.get('task_id') != task_id
+            or canonical.get('job_id') != job_id
+            or canonical.get('product_id') != expected_product_by_job[job_id]
+            or canonical.get('mode') != 'batch_draft_save'
+            or canonical.get('job_status') != 'succeeded'
+            or canonical.get('error_code') is not None
+            or canonical.get('needs_manual_review') is not False
+            or stored_digest is None
+            or stored_digest != _acceptance_sha256(unsigned_canonical)
+            or _acceptance_digest(row.get('canonical_receipt_sha256')) != stored_digest
+        ):
+            receipt_row_issues.append('CANONICAL_RECEIPT_BINDING_INVALID')
+            continue
+        receipts_by_job[job_id] = canonical
+
+    capability_phase_names = {
+        'content_finalize_wholesale': 'wholesale',
+        'content_finalize_video': 'video',
+        'content_finalize_translation': 'translation',
+        'semi_managed_entry': 'semi_managed',
+        'rollback_preparation': 'rollback_preparation',
+    }
+    capability_hashes: dict[str, dict[int, str]] = {
+        value: {} for value in capability_phase_names.values()
+    }
+    capability_issues: list[str] = []
+    save_receipts: list[dict[str, Any]] = []
+    private_save_receipt_by_lease: dict[str, Mapping[str, Any]] = {}
+    for canonical in receipts_by_job.values():
+        product_id = canonical.get('product_id')
+        job_id = canonical.get('job_id')
+        for capability in canonical.get('content_finalize_receipts', []):
+            if not isinstance(capability, Mapping):
+                continue
+            name = capability_phase_names.get(str(capability.get('phase') or ''))
+            digest = _acceptance_digest(capability.get('canonical_sha256'))
+            if (
+                name
+                and isinstance(product_id, int)
+                and capability.get('result_ok') is True
+                and capability.get('unresolved') is False
+                and digest is not None
+            ):
+                if product_id in capability_hashes[name]:
+                    capability_issues.append('CAPABILITY_RECEIPT_DUPLICATE_PRODUCT')
+                else:
+                    capability_hashes[name][product_id] = digest
+        aggregate_saves: dict[str, Mapping[str, Any]] = {}
+        for aggregate_save in canonical.get('save_receipts', []):
+            if not isinstance(aggregate_save, Mapping):
+                receipt_row_issues.append('CANONICAL_SAVE_RECEIPT_INVALID')
+                continue
+            aggregate_stage = {
+                'phase_1_first_save': 'SAVE1',
+                'phase_2_second_save': 'SAVE2',
+            }.get(str(aggregate_save.get('save_phase') or ''))
+            if aggregate_stage is None or aggregate_stage in aggregate_saves:
+                receipt_row_issues.append('CANONICAL_SAVE_RECEIPT_PHASE_INVALID')
+                continue
+            aggregate_saves[aggregate_stage] = aggregate_save
+        for stage in ('SAVE1', 'SAVE2'):
+            persisted = persisted_save_receipts.get((job_id, stage))
+            aggregate_save = aggregate_saves.get(stage)
+            raw_save = (
+                persisted.get('save_receipt')
+                if isinstance(persisted, Mapping)
+                and isinstance(persisted.get('save_receipt'), Mapping)
+                else None
+            )
+            if (
+                not isinstance(persisted, Mapping)
+                or not isinstance(raw_save, Mapping)
+                or not isinstance(aggregate_save, Mapping)
+                or dict(raw_save) != dict(aggregate_save)
+                or _acceptance_digest(
+                    persisted.get('_row_parent_canonical_receipt_sha256')
+                )
+                != _acceptance_digest(canonical.get('canonical_receipt_sha256'))
+                or _acceptance_digest(persisted.get('scope_sha256'))
+                != _acceptance_digest(scope_sha256)
+                or _acceptance_digest(
+                    persisted.get('canonical_save_receipt_sha256')
+                )
+                != _acceptance_digest(
+                    raw_save.get('canonical_save_receipt_sha256')
+                )
+            ):
+                receipt_row_issues.append(
+                    'CANONICAL_SAVE_STAGE_PARENT_BINDING_INVALID'
+                )
+                continue
+            proofs = raw_save.get('proofs') if isinstance(raw_save.get('proofs'), Mapping) else {}
+            request = proofs.get('network_request') if isinstance(proofs.get('network_request'), Mapping) else {}
+            response = proofs.get('network_response') if isinstance(proofs.get('network_response'), Mapping) else {}
+            screenshot = (
+                proofs.get('page_success_screenshot')
+                if isinstance(proofs.get('page_success_screenshot'), Mapping)
+                else proofs.get('screenshot')
+                if isinstance(proofs.get('screenshot'), Mapping)
+                else {}
+            )
+            unpublished = proofs.get('unpublished_status') if isinstance(proofs.get('unpublished_status'), Mapping) else {}
+            product_scope = next(
+                (
+                    item
+                    for item in scoped_products
+                    if item.get('productId') == product_id
+                ),
+                {},
+            )
+            governed = {
+                item.get('field'): item
+                for item in product_scope.get('allowedFields', [])
+                if isinstance(item, Mapping) and item.get('saveStage') == stage
+            }
+            readbacks = [
+                item
+                for item in raw_save.get('field_readbacks', [])
+                if isinstance(item, Mapping)
+            ]
+            readback_equal = bool(governed) and set(governed) == {
+                item.get('field_key') for item in readbacks
+            }
+            if readback_equal:
+                for readback in readbacks:
+                    binding = governed.get(readback.get('field_key'), {})
+                    if (
+                        _acceptance_sha256(readback.get('before_value'))
+                        != binding.get('preimageSha256')
+                        or _acceptance_sha256(readback.get('after_value'))
+                        != binding.get('expectedSha256')
+                        or readback.get('readback_proven') is not True
+                    ):
+                        readback_equal = False
+                        break
+            save_receipts.append(
+                {
+                    'productId': product_id,
+                    'stage': stage,
+                    'canonicalReceiptSha256': _acceptance_digest(
+                        persisted.get('canonical_receipt_sha256')
+                    ),
+                    'canonicalSaveReceiptSha256': _acceptance_digest(
+                        persisted.get('canonical_save_receipt_sha256')
+                    ),
+                    'parentCanonicalReceiptSha256': _acceptance_digest(
+                        persisted.get(
+                            '_row_parent_canonical_receipt_sha256'
+                        )
+                    ),
+                    'persisted': True,
+                    'commandId': raw_save.get('action_grant_id'),
+                    'leaseId': raw_save.get('save_lease_id'),
+                    'mutationCount': raw_save.get('physical_mutation_count'),
+                    'publishCount': raw_save.get('publish_request_count'),
+                    'networkRequestSha256': _acceptance_digest(request.get('body_sha256')),
+                    'networkResponseSha256': _acceptance_digest(response.get('body_sha256')),
+                    'businessSuccess': response.get('business_success') is True
+                    and str(response.get('business_code')) == '0',
+                    'screenshotSha256': _acceptance_digest(screenshot.get('body_sha256')),
+                    'readbackSha256': _acceptance_sha256(readbacks),
+                    'unpublishedReadbackSha256': _acceptance_digest(unpublished.get('body_sha256')),
+                    'readbackEqual': readback_equal,
+                    'unpublished': unpublished.get('unpublished') is True
+                    and unpublished.get('independent') is True,
+                    'published': (
+                        raw_save.get('published')
+                        if isinstance(raw_save.get('published'), bool)
+                        else None
+                    ),
+                }
+            )
+            raw_lease_id = raw_save.get('save_lease_id')
+            if isinstance(raw_lease_id, str) and raw_lease_id.strip():
+                private_save_receipt_by_lease[raw_lease_id] = raw_save
+
+    ledger_rows = repo.list_task_mutation_ledger(task_id)
+    product_by_job = {
+        str(item.get('id')): item.get('product_id') for item in jobs
+    }
+    receipt_by_lease = {
+        str(item.get('leaseId') or ''): item for item in save_receipts
+    }
+    mutation_ledger = []
+    for row in ledger_rows:
+        lease_id = str(row.get('authorization_lease_id') or '')
+        save_receipt = receipt_by_lease.get(lease_id, {})
+        private_save_receipt = private_save_receipt_by_lease.get(lease_id, {})
+        try:
+            command_json = json.loads(str(row.get('command_json') or ''))
+            save_result_json = json.loads(
+                str(row.get('save_action_result_json') or '')
+            )
+            save_authority_json = json.loads(
+                str(row.get('save_authority_json') or '')
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            command_json = None
+            save_result_json = None
+            save_authority_json = None
+        expected_state = {
+            'SAVE1': 'SAVE_ONLY',
+            'SAVE2': 'SAVE2_ONLY',
+        }.get(save_receipt.get('stage'))
+        save_observations = (
+            save_result_json.get('evidence', {}).get('observations', {})
+            if isinstance(save_result_json, Mapping)
+            and isinstance(save_result_json.get('evidence'), Mapping)
+            else {}
+        )
+        save_network = (
+            save_observations.get('network_save_result')
+            if isinstance(save_observations.get('network_save_result'), Mapping)
+            else {}
+        )
+        save_refs = (
+            save_result_json.get('evidence', {}).get('refs', [])
+            if isinstance(save_result_json, Mapping)
+            and isinstance(save_result_json.get('evidence'), Mapping)
+            else []
+        )
+        private_proofs = (
+            private_save_receipt.get('proofs')
+            if isinstance(private_save_receipt.get('proofs'), Mapping)
+            else {}
+        )
+        request_proof = (
+            private_proofs.get('network_request')
+            if isinstance(private_proofs.get('network_request'), Mapping)
+            else {}
+        )
+        response_proof = (
+            private_proofs.get('network_response')
+            if isinstance(private_proofs.get('network_response'), Mapping)
+            else {}
+        )
+        screenshot_proof = (
+            private_proofs.get('page_success_screenshot')
+            if isinstance(
+                private_proofs.get('page_success_screenshot'), Mapping
+            )
+            else private_proofs.get('screenshot')
+            if isinstance(private_proofs.get('screenshot'), Mapping)
+            else {}
+        )
+        authority_task = (
+            save_authority_json.get('task_authority')
+            if isinstance(save_authority_json, Mapping)
+            and isinstance(save_authority_json.get('task_authority'), Mapping)
+            else {}
+        )
+        authority_authorization = (
+            save_authority_json.get('authorization')
+            if isinstance(save_authority_json, Mapping)
+            and isinstance(save_authority_json.get('authorization'), Mapping)
+            else {}
+        )
+        authority_target = (
+            save_authority_json.get('target')
+            if isinstance(save_authority_json, Mapping)
+            and isinstance(save_authority_json.get('target'), Mapping)
+            else {}
+        )
+        authority_command = (
+            save_authority_json.get('command')
+            if isinstance(save_authority_json, Mapping)
+            and isinstance(save_authority_json.get('command'), Mapping)
+            else {}
+        )
+        ledger_evidence_bound = bool(
+            isinstance(command_json, Mapping)
+            and isinstance(save_result_json, Mapping)
+            and isinstance(save_authority_json, Mapping)
+            and _acceptance_digest(row.get('command_sha256'))
+            == _acceptance_sha256(command_json)
+            and _acceptance_digest(row.get('save_action_result_sha256'))
+            == _acceptance_sha256(save_result_json)
+            and _acceptance_digest(row.get('save_authority_sha256'))
+            == _acceptance_sha256(save_authority_json)
+            and str(command_json.get('task_id')) == str(task_id)
+            and str(command_json.get('job_id')) == str(row.get('job_id'))
+            and command_json.get('state') == expected_state
+            and command_json.get('action') == 'save_only'
+            and command_json.get('command_id') == row.get('command_id')
+            and command_json.get('authorization_lease_id') == lease_id
+            and _acceptance_digest(command_json.get('target_hash'))
+            == _acceptance_digest(private_save_receipt.get('target_hash'))
+            and private_save_receipt.get('mutation_id')
+            == row.get('mutation_id')
+            and private_save_receipt.get('ledger_entry_id') == row.get('id')
+            and save_authority_json.get('schema')
+            == 'dxm.batch_draft_save.dispatch_authority.v1'
+            and authority_task.get('task_id') == task_id
+            and authority_authorization.get('lease_id') == lease_id
+            and _acceptance_digest(authority_target.get('target_hash'))
+            == _acceptance_digest(private_save_receipt.get('target_hash'))
+            and authority_command.get('payload') == command_json
+            and _acceptance_digest(authority_command.get('sha256'))
+            == _acceptance_digest(row.get('command_sha256'))
+            and _acceptance_digest(save_network.get('request_body_sha256'))
+            == _acceptance_digest(request_proof.get('body_sha256'))
+            and _acceptance_digest(save_network.get('response_body_sha256'))
+            == _acceptance_digest(response_proof.get('body_sha256'))
+            and len(save_refs) == 1
+            and isinstance(save_refs[0], Mapping)
+            and _acceptance_digest(save_refs[0].get('sha256'))
+            == _acceptance_digest(screenshot_proof.get('body_sha256'))
+            and save_observations.get('save_field_readbacks')
+            == private_save_receipt.get('field_readbacks')
+        )
+        success_evidence_complete = bool(
+            row.get('status') == 'DISPATCHED'
+            and ledger_evidence_bound
+            and isinstance(row.get('dispatched_at'), str)
+            and str(row.get('dispatched_at')).strip()
+            and isinstance(row.get('save_success_recorded_at'), str)
+            and str(row.get('save_success_recorded_at')).strip()
+            and save_receipt.get('mutationCount') == 1
+            and save_receipt.get('publishCount') == 0
+            and save_receipt.get('businessSuccess') is True
+            and save_receipt.get('readbackEqual') is True
+            and save_receipt.get('unpublished') is True
+            and save_receipt.get('published') is False
+        )
+        mutation_ledger.append(
+            {
+                'productId': product_by_job.get(str(row.get('job_id'))),
+                'stage': {
+                    'SAVE_ONLY': 'SAVE1',
+                    'SAVE2_ONLY': 'SAVE2',
+                }.get(str(row.get('command_state') or ''), 'UNKNOWN'),
+                'commandId': row.get('command_id'),
+                'leaseId': lease_id,
+                'physicalMutationCount': (
+                    1 if row.get('status') == 'DISPATCHED' else 0
+                ),
+                'publishCount': save_receipt.get('publishCount'),
+                'status': 'succeeded' if success_evidence_complete else 'blocked',
+            }
+        )
+
+    fence_rows = repo.list_task_writer_fences(task_id)
+    fence_conflicts = sum(1 for item in fence_rows if item.get('status') == 'conflict')
+    fence_released = len(fence_rows) == 1 and fence_rows[0].get('status') == 'released'
+    unknown_count = int(
+        task.get('status') in {'unknown', 'needs_manual_review'}
+        or str(task.get('error_code') or '').upper() == 'UNKNOWN'
+        or task.get('needs_manual_review') is True
+    ) + sum(
+        1
+        for item in jobs
+        if item.get('status') in {'unknown', 'needs_manual_review'}
+        or str(item.get('error_code') or '').upper() == 'UNKNOWN'
+        or item.get('needs_manual_review') is True
+    )
+    ledger_groups: dict[tuple[Any, Any], int] = {}
+    for item in mutation_ledger:
+        key = (item.get('productId'), item.get('stage'))
+        ledger_groups[key] = ledger_groups.get(key, 0) + 1
+    auto_retry_count = sum(max(0, count - 1) for count in ledger_groups.values())
+    authorized_save_leases = [
+        item
+        for item in real_authorization.get('save_leases', [])
+        if isinstance(item, Mapping)
+    ]
+    authorized_lease_ids = {
+        item.get('lease_id') for item in authorized_save_leases
+    }
+    authorized_lease_pairs = {
+        (item.get('product_id'), item.get('save_stage'))
+        for item in authorized_save_leases
+    }
+    authorized_lease_targets = {
+        (
+            item.get('product_id'),
+            item.get('product_ordinal'),
+            item.get('save_stage'),
+        )
+        for item in authorized_save_leases
+    }
+    lineage_consistent = bool(
+        scope
+        and save_stage_authority.get('ok') is True
+        and isinstance(scope_record, Mapping)
+        and scope_record.get('status') == 'consumed'
+        and scope.get('scopeSha256') == scope_sha256
+        and real_authorization.get('ordered_product_ids')
+        == [item.get('productId') for item in scoped_products]
+        and len(authorized_save_leases) == 6
+        and len(authorized_lease_ids) == 6
+        and all(
+            _acceptance_digest(item.get('lease_id')) is not None
+            and _acceptance_digest(item.get('scope_sha256'))
+            == _acceptance_digest(scope_sha256)
+            and item.get('single_use') is True
+            for item in authorized_save_leases
+        )
+        and {item.get('leaseId') for item in save_receipts}
+        == {item.get('leaseId') for item in mutation_ledger}
+        == authorized_lease_ids
+    )
+    scoped_product_ids = [item.get('productId') for item in scoped_products]
+    capabilities: dict[str, dict[str, Any]] = {}
+    for name, hashes_by_product in capability_hashes.items():
+        ordered_hashes = [
+            hashes_by_product.get(product_id) for product_id in scoped_product_ids
+        ]
+        passed = bool(
+            len(scoped_product_ids) == 3
+            and set(hashes_by_product) == set(scoped_product_ids)
+            and all(_acceptance_digest(value) is not None for value in ordered_hashes)
+            and len(set(ordered_hashes)) == 3
+        )
+        capabilities[name] = {
+            'status': 'passed' if passed else 'missing',
+            'evidenceSha256': (
+                _acceptance_sha256(ordered_hashes) if passed else None
+            ),
+        }
+
+    expected_save_pairs = {
+        (product_id, stage)
+        for product_id in scoped_product_ids
+        for stage in {'SAVE1', 'SAVE2'}
+    }
+    lineage_consistent = lineage_consistent and (
+        authorized_lease_pairs == expected_save_pairs
+        and authorized_lease_targets
+        == {
+            (product_id, ordinal, stage)
+            for ordinal, product_id in enumerate(scoped_product_ids, start=1)
+            for stage in {'SAVE1', 'SAVE2'}
+        }
+    )
+    save_pairs = [
+        (item.get('productId'), item.get('stage')) for item in save_receipts
+    ]
+    ledger_pairs = [
+        (item.get('productId'), item.get('stage')) for item in mutation_ledger
+    ]
+    save_command_ids = [item.get('commandId') for item in save_receipts]
+    save_lease_ids = [item.get('leaseId') for item in save_receipts]
+    save_stage_receipt_hashes = [
+        item.get('canonicalReceiptSha256') for item in save_receipts
+    ]
+    nested_save_receipt_hashes = [
+        item.get('canonicalSaveReceiptSha256') for item in save_receipts
+    ]
+    save_proof_hashes = [
+        item.get(key)
+        for item in save_receipts
+        for key in (
+            'networkRequestSha256',
+            'networkResponseSha256',
+            'screenshotSha256',
+            'readbackSha256',
+            'unpublishedReadbackSha256',
+        )
+    ]
+    ledger_by_pair = {
+        (item.get('productId'), item.get('stage')): item
+        for item in mutation_ledger
+    }
+    receipt_ledger_bound = all(
+        ledger_by_pair.get((item.get('productId'), item.get('stage')), {}).get('commandId')
+        == item.get('commandId')
+        and ledger_by_pair.get((item.get('productId'), item.get('stage')), {}).get('leaseId')
+        == item.get('leaseId')
+        for item in save_receipts
+    )
+    publish_request_count = sum(
+        int(item.get('publishCount') or 0) for item in save_receipts
+    )
+    published_state = (
+        True
+        if any(item.get('published') is True for item in save_receipts)
+        else False
+        if len(save_receipts) == 6
+        and publish_request_count == 0
+        and all(
+            item.get('published') is False
+            and item.get('unpublished') is True
+            for item in save_receipts
+        )
+        else None
+    )
+    formal_counters = {
+        'physicalMutation': sum(
+            int(item.get('mutationCount') or 0) for item in save_receipts
+        ),
+        'save1': sum(1 for item in save_receipts if item.get('stage') == 'SAVE1'),
+        'save2': sum(1 for item in save_receipts if item.get('stage') == 'SAVE2'),
+        'publishRequest': publish_request_count,
+        'unknown': unknown_count,
+        'autoRetry': auto_retry_count,
+    }
+    formal_counters_valid = bool(
+        len(save_receipts) == 6
+        and formal_counters
+        == {
+            'physicalMutation': 6,
+            'save1': 3,
+            'save2': 3,
+            'publishRequest': 0,
+            'unknown': 0,
+            'autoRetry': 0,
+        }
+        and all(item.get('mutationCount') == 1 for item in save_receipts)
+    )
+    discovery_proof_hashes = {
+        value
+        for value in campaign_evidence.get('_proofHashes', [])
+        if _acceptance_digest(value) is not None
+    }
+    formal_proof_hashes = {
+        value
+        for value in save_proof_hashes
+        if _acceptance_digest(value) is not None
+    }
+    cross_phase_evidence_distinct = bool(
+        len(discovery_proof_hashes) == 5
+        and len(formal_proof_hashes) == 30
+        and discovery_proof_hashes.isdisjoint(formal_proof_hashes)
+    )
+    discovery_command_id = campaign_evidence.get('_commandId')
+    discovery_lease_id = campaign_evidence.get('_leaseId')
+    cross_phase_authority_distinct = bool(
+        isinstance(discovery_command_id, str)
+        and discovery_command_id.strip()
+        and isinstance(discovery_lease_id, str)
+        and discovery_lease_id.strip()
+        and discovery_command_id not in save_command_ids
+        and discovery_lease_id not in save_lease_ids
+    )
+    campaign_lineage_consistent = bool(
+        campaign_evidence.get('lineageConsistent') is True
+        and formal_counters_valid
+        and cross_phase_evidence_distinct
+        and cross_phase_authority_distinct
+    )
+    lineage_consistent = bool(lineage_consistent and campaign_lineage_consistent)
+    discovery_counters = campaign_evidence.get('discovery', {}).get(
+        'counters', {}
+    )
+    campaign = {
+        key: value
+        for key, value in campaign_evidence.items()
+        if not key.startswith('_')
+    }
+    campaign['lineageConsistent'] = campaign_lineage_consistent
+    campaign['formalCountersValid'] = formal_counters_valid
+    campaign['crossPhaseEvidenceDistinct'] = cross_phase_evidence_distinct
+    campaign['crossPhaseAuthorityDistinct'] = cross_phase_authority_distinct
+    campaign['formal'] = {
+        'taskId': task_id,
+        'snapshotId': int(payload.get('plan_snapshot_id') or 0),
+        'snapshotSha256': _acceptance_digest(
+            payload.get('plan_snapshot_hash')
+        ),
+        'scopeSha256': _acceptance_digest(scope_sha256),
+        'counters': formal_counters,
+    }
+    campaign['totals'] = {
+        'physicalMutation': (
+            int(discovery_counters.get('physicalMutation') or 0)
+            + formal_counters['physicalMutation']
+        ),
+        'save1': (
+            int(discovery_counters.get('save1') or 0)
+            + formal_counters['save1']
+        ),
+        'save2': (
+            int(discovery_counters.get('save2') or 0)
+            + formal_counters['save2']
+        ),
+        'publishRequest': (
+            int(discovery_counters.get('publishRequest') or 0)
+            + formal_counters['publishRequest']
+        ),
+        'unknown': (
+            int(discovery_counters.get('unknown') or 0)
+            + formal_counters['unknown']
+        ),
+        'autoRetry': formal_counters['autoRetry'],
+    }
+    blockers: list[str] = []
+
+    def block(code: str, condition: bool) -> None:
+        if condition and code not in blockers:
+            blockers.append(code)
+
+    block('TASK_NOT_COMPLETED', task.get('status') not in {'completed', 'succeeded'})
+    block('TASK_MODE_OR_PATH_INVALID', task.get('mode') != 'batch_draft_save' or _task_plan_path(task) != 'B')
+    block('ORDERED_PRODUCT_COUNT_INVALID', len(ordered_products) != 3)
+    block('ORDERED_PRODUCT_IDENTITY_INVALID', [item.get('ordinal') for item in ordered_products] != [1, 2, 3] or len(set(scoped_product_ids)) != 3)
+    block('ORDERED_JOB_NOT_SUCCEEDED', any(item.get('status') not in {'completed', 'succeeded'} for item in ordered_products))
+    block('CANONICAL_PRODUCT_RECEIPTS_INCOMPLETE', len(receipts_by_job) != 3)
+    block('CANONICAL_RECEIPT_ROWS_INVALID', bool(receipt_row_issues))
+    block(
+        'CANONICAL_SAVE_STAGE_AUTHORITY_DRIFT',
+        save_stage_authority.get('ok') is not True,
+    )
+    block(
+        'CANONICAL_SAVE_STAGE_RECEIPTS_INCOMPLETE',
+        len(persisted_save_receipts) != 6
+        or len(save_stage_receipt_hashes) != 6
+        or any(
+            _acceptance_digest(value) is None
+            for value in save_stage_receipt_hashes + nested_save_receipt_hashes
+        )
+        or len(set(save_stage_receipt_hashes)) != 6
+        or len(set(nested_save_receipt_hashes)) != 6,
+    )
+    block('SAVE_RECEIPTS_INCOMPLETE', len(save_receipts) != 6)
+    block('SAVE_RECEIPT_PAIRS_INVALID', len(save_pairs) != 6 or set(save_pairs) != expected_save_pairs or len(set(save_pairs)) != 6)
+    block('SAVE_RECEIPT_AUTHORITY_REUSED', len(set(save_command_ids)) != 6 or len(set(save_lease_ids)) != 6 or any(not isinstance(value, str) or not value.strip() for value in save_command_ids + save_lease_ids))
+    block('SAVE_PROOF_HASH_INVALID_OR_REUSED', len(save_proof_hashes) != 30 or any(_acceptance_digest(value) is None for value in save_proof_hashes) or len(set(save_proof_hashes)) != 30)
+    block('MUTATION_LEDGER_INCOMPLETE', len(mutation_ledger) != 6)
+    block('MUTATION_LEDGER_PAIRS_INVALID', len(ledger_pairs) != 6 or set(ledger_pairs) != expected_save_pairs or len(set(ledger_pairs)) != 6)
+    block('RECEIPT_LEDGER_BINDING_MISMATCH', not receipt_ledger_bound)
+    block('MUTATION_LEDGER_SUCCESS_UNPROVEN', any(item.get('status') != 'succeeded' for item in mutation_ledger))
+    block('MANDATORY_CAPABILITIES_INCOMPLETE', bool(capability_issues) or any(item['status'] != 'passed' for item in capabilities.values()))
+    block('UNKNOWN_PRESENT', unknown_count != 0)
+    block('AUTO_RETRY_PRESENT', auto_retry_count != 0)
+    block('SAVE_MUTATION_COUNT_INVALID', any(item.get('mutationCount') != 1 for item in save_receipts))
+    block('SAVE_BUSINESS_SUCCESS_MISSING', any(item.get('businessSuccess') is not True for item in save_receipts))
+    block('SAVE_READBACK_MISMATCH', any(item.get('readbackEqual') is not True for item in save_receipts))
+    block('SAVE_UNPUBLISHED_PROOF_MISSING', any(item.get('unpublished') is not True for item in save_receipts))
+    block('PUBLISH_REQUEST_PRESENT', any(item.get('publishCount') != 0 for item in save_receipts))
+    block('PUBLISH_SCOPE_NOT_FALSE', scope.get('publishAllowed') is not False)
+    block('PUBLISHED_STATE_NOT_PROVEN_FALSE', published_state is not False)
+    block('WRITER_FENCE_NOT_ENFORCED', len(fence_rows) != 1 or fence_conflicts != 0)
+    block('WRITER_FENCE_NOT_RELEASED', not fence_released)
+    block(
+        'DISCOVERY_RECEIPT_INVALID',
+        campaign_evidence.get('discoveryReceiptValid') is not True,
+    )
+    block(
+        'DISCOVERY_COUNTERS_INVALID',
+        campaign_evidence.get('discoveryCountersValid') is not True,
+    )
+    block(
+        'DISCOVERY_FORMAL_CONTINUATION_INVALID',
+        campaign_evidence.get('continuationValid') is not True,
+    )
+    block(
+        'DISCOVERY_FORMAL_CHRONOLOGY_INVALID',
+        campaign_evidence.get('chronologyValid') is not True,
+    )
+    block(
+        'DISCOVERY_FORMAL_AUTHORITY_REUSED',
+        not cross_phase_authority_distinct,
+    )
+    block(
+        'DISCOVERY_FORMAL_EVIDENCE_REUSED',
+        not cross_phase_evidence_distinct,
+    )
+    block('FORMAL_COUNTERS_INVALID', not formal_counters_valid)
+    block('DISCOVERY_FORMAL_LINEAGE_MISMATCH', not campaign_lineage_consistent)
+    block('PROVENANCE_LINEAGE_MISMATCH', not lineage_consistent)
+
+    return {
+        'schemaVersion': 'real_dxm_path_b_acceptance_export.v1',
+        'acceptanceStatus': 'REAL_PATH_B_3_ACCEPTED' if not blockers else 'NON_READY',
+        'task': {
+            'id': task_id,
+            'status': task.get('status'),
+            'mode': task.get('mode'),
+            'path': _task_plan_path(task),
+            'orderedProductIds': [item.get('productId') for item in ordered_products],
+            'unknownCount': unknown_count,
+            'autoRetryCount': auto_retry_count,
+        },
+        'provenance': {
+            'gitHead': scope.get('git', {}).get('head') if isinstance(scope.get('git'), Mapping) else None,
+            'worktreeClean': scope.get('worktree', {}).get('git_dirty') is False if isinstance(scope.get('worktree'), Mapping) else False,
+            'runtimeInstanceId': scope.get('runtime', {}).get('runtimeInstanceId') if isinstance(scope.get('runtime'), Mapping) else None,
+            'browserRuntimeId': scope.get('runtime', {}).get('browserRuntimeId') if isinstance(scope.get('runtime'), Mapping) else None,
+            'browserSessionId': scope.get('runtime', {}).get('browserSessionId') if isinstance(scope.get('runtime'), Mapping) else None,
+            'scopeSha256': scope_sha256 or None,
+            'l2EvidenceFingerprint': scope.get('l2', {}).get('evidenceFingerprint') if isinstance(scope.get('l2'), Mapping) else None,
+            'lineageConsistent': lineage_consistent,
+        },
+        'campaign': campaign,
+        'orderedProducts': ordered_products,
+        'capabilities': capabilities,
+        'saveReceipts': save_receipts,
+        'mutationLedger': mutation_ledger,
+        'publish': {
+            'allowed': scope.get('publishAllowed'),
+            'requestCount': publish_request_count,
+            'published': published_state,
+            'finalReadbackPublished': (
+                False
+                if published_state is False
+                else None
+            ),
+        },
+        'writerFence': {
+            'shopId': scope.get('shop', {}).get('shopId') if isinstance(scope.get('shop'), Mapping) else None,
+            'enforced': bool(fence_rows) and fence_conflicts == 0,
+            'conflictCount': fence_conflicts,
+            'released': fence_released,
+        },
+        'blockers': blockers,
+    }
 
 
 def _with_public_worker_control(task: dict | None) -> dict | None:
@@ -1919,7 +4104,11 @@ async def approve_and_start_task_for_real_dxm(
     task_id: int,
     payload: TaskManualApprovalRequest,
 ):
-    required_confirmation = _assert_task_can_receive_manual_approval(task_id, payload)
+    required_confirmation = _assert_task_can_receive_manual_approval(
+        task_id,
+        payload,
+        allow_exact_formal_path_b=True,
+    )
     _assert_workflow_runtime_healthy()
     record_best_effort({
         'actor': 'operator',
@@ -1949,26 +4138,60 @@ async def approve_and_start_task_for_real_dxm(
             status_code=403,
             detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
         )
-    authorization_context = _build_task_authorization_context(
-        task,
-        approved_by=payload.approved_by.strip(),
-        l2_gate=l2_gate,
-    )
-    issued_at = _authorization_now()
-    consumed_at = issued_at
-    expires_at = issued_at + timedelta(seconds=AUTHORIZATION_LEASE_TTL_SECONDS)
-    result = repo.approve_and_start_task_with_authorization(
-        task_id,
-        token=secrets.token_urlsafe(24),
-        confirmation=required_confirmation,
-        approved_by=payload.approved_by.strip(),
-        authorization_context=authorization_context,
-        lease_id=uuid.uuid4().hex,
-        issued_at=issued_at.isoformat(),
-        expires_at=expires_at.isoformat(),
-        consumed_at=consumed_at.isoformat(),
-    )
+    task_path = _task_plan_path(task)
+    real_authorization: dict[str, Any] | None = None
+    if task_path == 'B':
+        if (
+            not isinstance(payload.real_dxm_write_scope, Mapping)
+            or not isinstance(payload.real_dxm_write_approval, Mapping)
+        ):
+            _scope_rejected(
+                'SCOPE_AND_APPROVAL_REQUIRED',
+                'Path B 原子启动缺少 scope 或 ApprovalFile。',
+            )
+        real_authorization = _validate_real_scope_task_binding(
+            task,
+            payload.real_dxm_write_scope,
+            raw_approval=payload.real_dxm_write_approval,
+            approved_by=payload.approved_by,
+        )
+        result = repo.approve_and_start_real_dxm_path_b(
+            task_id,
+            scope=real_authorization['scope'],
+            approval=real_authorization['approval'],
+            predecessor_scope_sha256=payload.predecessor_scope_sha256,
+            discovery_receipt_sha256=payload.discovery_receipt_sha256,
+            token=secrets.token_urlsafe(24),
+            confirmation=required_confirmation,
+            approved_by=payload.approved_by.strip(),
+            lease_id=uuid.uuid4().hex,
+        )
+    else:
+        authorization_context = _build_task_authorization_context(
+            task,
+            approved_by=payload.approved_by.strip(),
+            l2_gate=l2_gate,
+        )
+        issued_at = _authorization_now()
+        consumed_at = issued_at
+        expires_at = issued_at + timedelta(seconds=AUTHORIZATION_LEASE_TTL_SECONDS)
+        result = repo.approve_and_start_task_with_authorization(
+            task_id,
+            token=secrets.token_urlsafe(24),
+            confirmation=required_confirmation,
+            approved_by=payload.approved_by.strip(),
+            authorization_context=authorization_context,
+            lease_id=uuid.uuid4().hex,
+            issued_at=issued_at.isoformat(),
+            expires_at=expires_at.isoformat(),
+            consumed_at=consumed_at.isoformat(),
+        )
     if not result.ok:
+        if task_path == 'B':
+            _scope_rejected(
+                result.reason_code,
+                'ApprovalFile 消费、授权绑定与任务启动未能原子完成。',
+            )
         status_code = 404 if result.reason_code == 'AUTH_TASK_NOT_FOUND' else 409
         raise HTTPException(
             status_code=status_code,
@@ -4094,6 +6317,11 @@ def _build_task_stage_facts(task: dict[str, Any]) -> dict[str, Any]:
                     or ''
                 ),
                 path=str(payload.get('path') or ((payload.get('plan_snapshot') or {}).get('path') if isinstance(payload.get('plan_snapshot'), dict) else 'A') or 'A'),
+                real_authorization=(
+                    payload.get('real_dxm_write_authorization')
+                    if isinstance(payload.get('real_dxm_write_authorization'), Mapping)
+                    else None
+                ),
             )
         if mode != 'single_save':
             raise HTTPException(
@@ -4163,11 +6391,15 @@ def _build_task_authorization_context(
 
 
 def _verify_runner_authorization(task_id: int, mode: str, state: str) -> dict[str, Any]:
-    required_state = {
-        'single_save': 'SAVE_ONLY',
-        'batch_draft_save': 'SAVE_ONLY',
+    allowed_states = {
+        'single_save': {'SAVE_ONLY'},
+        'batch_draft_save': {
+            'SAVE_ONLY',
+            PATH_B_SAVE1_DISCOVERY_STATE,
+            'SAVE2_ONLY',
+        },
     }.get(mode)
-    if required_state is None or state != required_state:
+    if allowed_states is None or state not in allowed_states:
         return {'ok': False, 'reason_code': 'AUTH_MUTATION_SCOPE_MISMATCH'}
     task = repo.get_task_private(task_id)
     if not task:
@@ -4198,7 +6430,345 @@ def _verify_runner_authorization(task_id: int, mode: str, state: str) -> dict[st
     return {'ok': result.ok, 'reason_code': result.reason_code}
 
 
-def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualApprovalRequest) -> str:
+def _scope_rejected(detail_code: str, message: str) -> NoReturn:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            'reason_code': 'SCOPE_REJECTED',
+            'detail_code': detail_code,
+            'message': message,
+            'mutation_count': 0,
+        },
+    )
+
+
+def _task_plan_path(task: Mapping[str, Any]) -> str:
+    payload = task.get('payload') if isinstance(task.get('payload'), Mapping) else {}
+    plan = payload.get('plan_snapshot') if isinstance(payload.get('plan_snapshot'), Mapping) else {}
+    payload_path = str(payload.get('path') or '').strip().upper()
+    plan_path = str(plan.get('path') or '').strip().upper()
+    return payload_path if payload_path == plan_path else ''
+
+
+def _assert_real_scope_data_dir_external() -> None:
+    try:
+        Path(DATA_DIR).resolve().relative_to(REPO_ROOT.resolve())
+    except ValueError:
+        return
+    _scope_rejected(
+        'DATA_DIR_INSIDE_WORKTREE',
+        '真实 scope Prepare 要求 DXM_DATA_DIR 位于 Git worktree 外。',
+    )
+
+
+def _validate_scope_field_hashes_against_frozen_task(
+    task: Mapping[str, Any],
+    scope: Mapping[str, Any],
+) -> None:
+    """Prove an exact, stage-authoritative field grant against the snapshot."""
+
+    payload = task.get('payload') if isinstance(task.get('payload'), Mapping) else {}
+    plan = payload.get('plan_snapshot') if isinstance(payload.get('plan_snapshot'), Mapping) else {}
+    item_snapshots = plan.get('item_snapshots') if isinstance(plan.get('item_snapshots'), list) else []
+    item_by_product: dict[int, Mapping[str, Any]] = {}
+    for item in item_snapshots:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            product_id = int(item.get('product_id'))
+        except (TypeError, ValueError):
+            continue
+        if product_id in item_by_product:
+            _scope_rejected('FROZEN_PRODUCT_DUPLICATE', '冻结 snapshot 商品身份重复。')
+        item_by_product[product_id] = item
+
+    for product_scope in scope.get('orderedProducts') or []:
+        if not isinstance(product_scope, Mapping):
+            _scope_rejected('FIELD_HASH_BINDING_INVALID', '字段哈希授权结构无效。')
+        product_id = int(product_scope.get('productId') or 0)
+        frozen_item = item_by_product.get(product_id)
+        if not isinstance(frozen_item, Mapping):
+            _scope_rejected('FROZEN_PRODUCT_NOT_FOUND', '字段哈希授权找不到冻结商品。')
+        current_values = frozen_item.get('current_value_snapshot')
+        current_values = current_values if isinstance(current_values, Mapping) else {}
+        resolution = frozen_item.get('resolution_result')
+        resolution = resolution if isinstance(resolution, Mapping) else {}
+        resolved_fields = resolution.get('resolved_fields')
+        resolved_fields = resolved_fields if isinstance(resolved_fields, list) else []
+        resolved_by_field: dict[str, Mapping[str, Any]] = {}
+        for resolved in resolved_fields:
+            if (
+                not isinstance(resolved, Mapping)
+                or not isinstance(resolved.get('field_key'), str)
+                or 'resolved_value' not in resolved
+            ):
+                continue
+            field_key = str(resolved['field_key'])
+            if field_key in resolved_by_field:
+                _scope_rejected(
+                    'FROZEN_RESOLVED_FIELD_DUPLICATE',
+                    '冻结 snapshot 的 resolved field 身份重复。',
+                )
+            resolved_by_field[field_key] = resolved
+        trusted_stages = _trusted_real_write_stage_by_field(frozen_item)
+        if trusted_stages is None:
+            _scope_rejected(
+                'FIELD_SAVE_STAGE_AUTHORITY_NOT_FROZEN',
+                '冻结 snapshot 尚未提供可信的 SAVE1/SAVE2 字段阶段分区。',
+            )
+        if set(trusted_stages) != set(resolved_by_field):
+            _scope_rejected(
+                'FROZEN_FIELD_STAGE_COVERAGE_DRIFT',
+                '冻结字段阶段分区必须精确覆盖全部 resolved fields。',
+            )
+        seen_fields: set[str] = set()
+        requested_by_stage: dict[str, set[str]] = {'SAVE1': set(), 'SAVE2': set()}
+        for binding in product_scope.get('allowedFields') or []:
+            if not isinstance(binding, Mapping):
+                _scope_rejected('FIELD_HASH_BINDING_INVALID', '字段哈希授权结构无效。')
+            field_name = str(binding.get('field') or '')
+            save_stage = str(binding.get('saveStage') or '')
+            if field_name in seen_fields:
+                _scope_rejected(
+                    'FIELD_REUSED_ACROSS_SAVE_STAGES',
+                    '同一字段不得跨 SAVE1/SAVE2 重复授权。',
+                )
+            seen_fields.add(field_name)
+            if save_stage not in requested_by_stage:
+                _scope_rejected('FIELD_SAVE_STAGE_INVALID', '字段未绑定到 SAVE1 或 SAVE2。')
+            requested_by_stage[save_stage].add(field_name)
+            frozen_resolved = resolved_by_field.get(field_name)
+            if frozen_resolved is None:
+                _scope_rejected(
+                    'EXPECTED_FIELD_NOT_FROZEN',
+                    '字段 expected 值未进入不可变 plan snapshot。',
+                )
+            if trusted_stages.get(field_name) != save_stage:
+                _scope_rejected(
+                    'FIELD_SAVE_STAGE_DRIFT',
+                    '调用方字段阶段与冻结的 SAVE1/SAVE2 权威分区不一致。',
+                )
+            if field_name not in current_values:
+                _scope_rejected(
+                    'PREIMAGE_FIELD_NOT_FROZEN',
+                    '字段 preimage 缺少明确的冻结值；不能把缺失猜成 null。',
+                )
+            expected_preimage = real_scope_sha256(current_values[field_name])
+            expected_after = real_scope_sha256(frozen_resolved['resolved_value'])
+            if (
+                not hmac.compare_digest(
+                    str(binding.get('preimageSha256') or '').encode('utf-8'),
+                    expected_preimage.encode('utf-8'),
+                )
+                or not hmac.compare_digest(
+                    str(binding.get('expectedSha256') or '').encode('utf-8'),
+                    expected_after.encode('utf-8'),
+                )
+            ):
+                _scope_rejected(
+                    'FIELD_HASH_BINDING_DRIFT',
+                    '字段哈希授权与冻结 preimage/expected 值不一致。',
+                )
+        trusted_by_stage = {
+            stage: {
+                field_name
+                for field_name, trusted_stage in trusted_stages.items()
+                if trusted_stage == stage
+            }
+            for stage in ('SAVE1', 'SAVE2')
+        }
+        if (
+            any(not fields for fields in trusted_by_stage.values())
+            or requested_by_stage != trusted_by_stage
+        ):
+            _scope_rejected(
+                'FIELD_SCOPE_NOT_EXACT',
+                'scope 必须逐阶段精确覆盖冻结的全部 SAVE1/SAVE2 字段。',
+            )
+
+
+def _validate_fresh_scope_reader_binding(
+    scope: Mapping[str, Any],
+    plan: Mapping[str, Any],
+) -> None:
+    """Cross-check shop and product identity through the current read-only Reader."""
+
+    session = plan.get('session_context') if isinstance(plan.get('session_context'), Mapping) else {}
+    if (
+        str(session.get('account_ref_hash') or '') != scope['account']['accountContextHash']
+        or int(session.get('shop_id') or 0) != scope['shop']['shopId']
+        or str(session.get('shop_name') or '') != scope['shop']['shopName']
+    ):
+        _scope_rejected('FROZEN_SESSION_DRIFT', '冻结账号或店铺身份与 scope 不一致。')
+    expected_session_ref = str(session.get('session_ref') or '')
+    try:
+        shops = _run_login_flow(
+            DxmDraftReader(workflow_adapter).list_shops,
+            fail_if_busy=True,
+        )
+    except Exception as exc:
+        _scope_rejected(
+            'FRESH_READER_UNAVAILABLE',
+            f'无法取得 fresh Reader 店铺事实：{type(exc).__name__}。',
+        )
+    if (
+        not isinstance(shops, Mapping)
+        or shops.get('source') != 'api'
+        or shops.get('session_bound') is not True
+        or str(shops.get('session_ref') or '') != expected_session_ref
+    ):
+        _scope_rejected('FRESH_READER_SESSION_DRIFT', 'fresh Reader 会话与冻结会话不一致。')
+    matching_shops = [
+        item
+        for item in shops.get('shops') or []
+        if isinstance(item, Mapping)
+        and str(item.get('id') or '') == str(scope['shop']['shopId'])
+    ]
+    if (
+        len(matching_shops) != 1
+        or str(matching_shops[0].get('name') or '') != scope['shop']['shopName']
+    ):
+        _scope_rejected('FRESH_SHOP_IDENTITY_DRIFT', 'fresh Reader 店铺身份与 scope 不一致。')
+
+    required_ids = {str(item['productId']) for item in scope['orderedProducts']}
+    visible_ids: set[str] = set()
+    page_no = 1
+    while required_ids - visible_ids:
+        try:
+            page = _run_login_flow(
+                DxmDraftReader(workflow_adapter).list_products,
+                shop_id=str(scope['shop']['shopId']),
+                page_no=page_no,
+                page_size=200,
+                fail_if_busy=True,
+            )
+        except Exception as exc:
+            _scope_rejected(
+                'FRESH_READER_UNAVAILABLE',
+                f'无法取得 fresh Reader 商品事实：{type(exc).__name__}。',
+            )
+        if (
+            not isinstance(page, Mapping)
+            or page.get('source') != 'api'
+            or page.get('session_bound') is not True
+            or not str(page.get('session_ref') or '')
+            or str(page.get('session_ref') or '') != expected_session_ref
+        ):
+            _scope_rejected('FRESH_READER_SESSION_DRIFT', 'fresh Reader 商品页会话已漂移。')
+        visible_ids.update(
+            str(item.get('id'))
+            for item in page.get('items') or []
+            if isinstance(item, Mapping) and item.get('id') is not None
+        )
+        pagination = page.get('pagination') if isinstance(page.get('pagination'), Mapping) else {}
+        if pagination.get('has_next') is not True:
+            break
+        page_no += 1
+        if page_no > 100_000:
+            _scope_rejected('FRESH_READER_PAGINATION_INVALID', 'fresh Reader 分页未能收敛。')
+    if required_ids - visible_ids:
+        _scope_rejected('FRESH_PRODUCT_IDENTITY_DRIFT', 'scope 商品不再属于 fresh Reader 草稿集合。')
+
+
+def _validate_real_scope_task_binding(
+    task: Mapping[str, Any],
+    raw_scope: Mapping[str, Any],
+    *,
+    raw_approval: Mapping[str, Any] | None = None,
+    approved_by: str | None = None,
+) -> dict[str, Any]:
+    """Bind an external scope to current repository and live runtime truth."""
+
+    try:
+        if raw_approval is None:
+            scope = validate_real_dxm_write_scope(raw_scope)
+            approval = None
+        else:
+            authorization = validate_real_dxm_write_authorization(
+                scope=raw_scope,
+                approval=raw_approval,
+            )
+            scope = authorization['scope']
+            approval = authorization['approval']
+    except RealDxmWriteScopeError as exc:
+        _scope_rejected(exc.detail_code, '真实写 scope 或 ApprovalFile 合同无效。')
+
+    if _task_plan_path(task) != 'B':
+        _scope_rejected('TASK_PATH_MISMATCH', '真实 Path B scope 不能授权其它路径。')
+    payload = task.get('payload') if isinstance(task.get('payload'), Mapping) else {}
+    plan = payload.get('plan_snapshot') if isinstance(payload.get('plan_snapshot'), Mapping) else {}
+    snapshot = scope['snapshot']
+    if (
+        int(task.get('id') or 0) != snapshot['taskId']
+        or int(payload.get('plan_snapshot_id') or 0) != snapshot['snapshotId']
+        or str(payload.get('plan_snapshot_hash') or '').upper()
+        != snapshot['snapshotSha256']
+        or str(plan.get('snapshot_hash') or '').upper()
+        != snapshot['snapshotSha256']
+    ):
+        _scope_rejected('SNAPSHOT_BINDING_DRIFT', 'scope 与冻结任务或 snapshot 不一致。')
+    ordered_ids = [item['productId'] for item in scope['orderedProducts']]
+    task_ids = payload.get('product_ids') if isinstance(payload.get('product_ids'), list) else []
+    job_ids = [job.get('product_id') for job in task.get('jobs') or [] if isinstance(job, Mapping)]
+    if len(ordered_ids) < 3 or ordered_ids != task_ids or ordered_ids != job_ids:
+        _scope_rejected('ORDERED_PRODUCTS_DRIFT', 'scope、snapshot 与队列商品顺序不一致。')
+    _validate_scope_field_hashes_against_frozen_task(task, scope)
+    if (
+        int(task.get('store_id') or 0) != scope['shop']['shopId']
+        or str(plan.get('shop_scope') or '') != str(scope['shop']['shopId'])
+    ):
+        _scope_rejected('SHOP_BINDING_DRIFT', 'scope 与冻结店铺不一致。')
+    if payload.get('publish_allowed') is not False or plan.get('publish_allowed') is not False:
+        _scope_rejected('PUBLISH_INTENT_FORBIDDEN', '冻结任务必须永久禁止发布。')
+
+    git_summary = _current_git_summary()
+    current_worktree = _current_execution_worktree_identity(git_summary)
+    if str(git_summary.get('head') or '').lower() != scope['git']['head']:
+        _scope_rejected('GIT_HEAD_DRIFT', '当前 Git HEAD 与 scope 不一致。')
+    if current_worktree != scope['worktree']:
+        _scope_rejected('WORKTREE_IDENTITY_DRIFT', '当前工作树身份与 scope 不一致。')
+    _assert_real_scope_data_dir_external()
+    _validate_fresh_scope_reader_binding(scope, plan)
+    adapter_browser_session_id = str(workflow_adapter.browser_session_id() or '')
+    try:
+        runtime_browser_session_id = _current_browser_session_id()
+    except HTTPException:
+        _scope_rejected('BROWSER_SESSION_UNAVAILABLE', 'BrowserAgent 当前会话不可用。')
+    try:
+        account_ref_hash = workflow_adapter.refresh_account_context_hash()
+    except Exception:
+        _scope_rejected('ACCOUNT_CONTEXT_UNAVAILABLE', '无法从当前会话重读账号身份。')
+    if (
+        str(runtime_identity.instance_id) != scope['runtime']['runtimeInstanceId']
+        or str(browser_agent_runtime.runtime_id) != scope['runtime']['browserRuntimeId']
+        or not adapter_browser_session_id
+        or adapter_browser_session_id != runtime_browser_session_id
+        or runtime_browser_session_id != scope['runtime']['browserSessionId']
+        or account_ref_hash != scope['account']['accountContextHash']
+    ):
+        _scope_rejected('RUNTIME_IDENTITY_DRIFT', '运行时、浏览器会话或账号身份已变化。')
+    l2_gate = l2_real_probe_gate()
+    if (
+        l2_gate.get('status') != 'passed'
+        or _l2_authorization_fingerprint(l2_gate)
+        != scope['l2']['evidenceFingerprint']
+    ):
+        _scope_rejected('L2_EVIDENCE_DRIFT', '当前 fresh L2 与 scope 不一致。')
+    if approval is not None and approved_by is not None:
+        if not hmac.compare_digest(
+            str(approval.get('approvedBy') or '').encode('utf-8'),
+            str(approved_by or '').strip().encode('utf-8'),
+        ):
+            _scope_rejected('APPROVER_MISMATCH', 'ApprovalFile 批准人与请求批准人不一致。')
+    return {'scope': scope, 'approval': approval}
+
+
+def _assert_task_can_receive_manual_approval(
+    task_id: int,
+    request: TaskManualApprovalRequest,
+    *,
+    allow_exact_formal_path_b: bool = False,
+) -> str:
     task = repo.get_task_private(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
@@ -4237,7 +6807,69 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
     if task.get('status') != 'draft':
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
     if mode == 'batch_draft_save':
-        _assert_batch_draft_save_task_scope(task)
+        if _task_plan_path(task) == 'B':
+            formal_lineage_requested = bool(
+                allow_exact_formal_path_b
+                and request.predecessor_scope_sha256
+                and request.discovery_receipt_sha256
+            )
+            if not is_plan_execution_path_released('B') and not formal_lineage_requested:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        'reason_code': PLAN_PATH_EXECUTION_NOT_RELEASED,
+                        'message': 'Path B 生产能力与真实验收闭环前保持锁定。',
+                    },
+                )
+            if allow_exact_formal_path_b and not formal_lineage_requested:
+                _scope_rejected(
+                    'FORMAL_LINEAGE_REQUIRED',
+                    'Path B 原子正式启动必须绑定 sealed Discovery 与前序 scope。',
+                )
+            if (
+                not isinstance(request.real_dxm_write_scope, Mapping)
+                or not isinstance(request.real_dxm_write_approval, Mapping)
+            ):
+                _scope_rejected(
+                    'SCOPE_AND_APPROVAL_REQUIRED',
+                    'Path B 仅接受匹配的一次性 scope 与 ApprovalFile。',
+                )
+            authorization = _validate_real_scope_task_binding(
+                task,
+                request.real_dxm_write_scope,
+                raw_approval=request.real_dxm_write_approval,
+                approved_by=request.approved_by,
+            )
+            prepared = repo.get_real_dxm_write_scope(
+                authorization['scope']['scopeSha256']
+            )
+            if not isinstance(prepared, Mapping) or prepared.get('status') != 'prepared':
+                _scope_rejected(
+                    'SCOPE_NOT_PREPARED_OR_CONSUMED',
+                    'scope 未 Prepare 或 ApprovalFile 已被消费。',
+                )
+            if formal_lineage_requested and (
+                prepared.get('purpose') != 'formal'
+                or str(
+                    prepared.get('lineage_discovery_receipt_sha256') or ''
+                ).upper()
+                != str(request.discovery_receipt_sha256 or '').upper()
+                or str(
+                    prepared.get('lineage_predecessor_scope_sha256') or ''
+                ).upper()
+                != str(request.predecessor_scope_sha256 or '').upper()
+            ):
+                _scope_rejected(
+                    'FORMAL_LINEAGE_SCOPE_MISMATCH',
+                    'prepared scope 未绑定请求中的 Discovery 谱系。',
+                )
+        else:
+            if request.predecessor_scope_sha256 or request.discovery_receipt_sha256:
+                _scope_rejected(
+                    'FORMAL_LINEAGE_PATH_MISMATCH',
+                    'Discovery 谱系只允许用于 exact Path B 原子启动。',
+                )
+            _assert_batch_draft_save_task_scope(task)
     else:
         _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
         _assert_single_save_uses_product_box_item((task.get('payload') or {}).get('product_ids') or [])

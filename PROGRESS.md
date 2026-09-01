@@ -139,3 +139,108 @@ feature 与 main 已按普通非强制推送同步到远端；`af01446` 的工�
 - 真实浏览器动作 / 保存 / 最终发布：0 / 0 / 0。
 - app/** 业务代码修改：0。
 - commit / push：0 / 0。
+
+## 9. 2026-08-31 real Path B system-flow 开工回执
+- `git rev-parse --show-toplevel` → `D:/Desktop/py/dxm-auto-uikit`。
+- `git rev-parse HEAD` → `e6069d06c2c4154e8813aa1ef0a6ae038cf235cc`。
+- `git status --porcelain=v1 -uall` → 空输出（clean）。
+- `scripts\start-mvp.bat --check` → exit 0，`Check mode completed. Environment is ready; services were not started.`
+- 身份与目标基线一致；未重跑任何测试，真实浏览器动作 / mutation / publish 均为 0。
+- 后续仅修改 objective 白名单；缺真实 scope 或有效持久会话时 fail-closed 并写入 `BLOCKED.md`。
+
+## 10. 2026-08-31 Path B 安全开发进度
+
+### 10.1 外部授权与单写权
+
+- 新增 `real_dxm_write_scope.v1` / `real_dxm_write_approval.v1` 严格合同与 JSON Schema：精确 keys、规范化 hash、expiry/nonce、账号/店铺/snapshot/task、clean Git/worktree、runtime/browser session、L2、商品顺序、逐字段 preimage/expected hash、`publishAllowed=false` 和每 SAVE 最多一个物理请求。
+- scope 先通过公开 API 零写 prepare；ApprovalFile 在批准事务内一次性消费，并为三商品派生 6 张 `product + ordinal + SAVE1|SAVE2` 独立 child lease。任何 hash、身份、顺序、过期、通配符、publish-like 字段或 replay 漂移统一 `SCOPE_REJECTED`。
+- 同店铺 writer fence、generation 与 single-use mutation CAS 已贯穿当前 canonical Runner；`ControlledMutationDispatch` 只委托唯一 `MutationDispatchLedger`，不拥有第二套 SQL/账本。
+
+### 10.2 双保存与证据链
+
+- Path B 状态尾分离为 `SAVE1/editor → VERIFY_SAVE1_NOT_PUBLISHED` 与 `SAVE2/semi_managed → VERIFY_SAVE2_NOT_PUBLISHED`；两段分别校验 child lease、mutation scope、command/result digest、页面身份和直接前驱，禁止缓存回放冒充成功或同阶段第二次 dispatch。
+- 每件商品只创建一个 `FullProductEditOrchestrator` context；主编辑 11 区、三项 ContentFinalize、SAVE1 证据、同一原生门 handshake、半托管 S1–S3 和 SAVE2 按阶段 fail-closed。
+- 新 CanonicalReceipt 要求五项 capability receipt、rollback preimage、两份独立 SaveReceipt；每份必须绑定一个 ledger mutation、业务成功回包、页面成功截图、逐字段读回、独立未发布证明和零 publish request。缺失或不一致转 `UNKNOWN`，不得继续真实写。
+
+### 10.3 公开验收与一次性流程
+
+- 新增只读 `GET /api/tasks/{task_id}/acceptance-export`，只投影 hash/status/计数，不输出真实字段值、command payload 或内部 adapter 数据；证据不完整时发布状态保持三态，不能把“未观察到”冒充 `false`。
+- `scripts/run-real-dxm-path-b-system-test.ps1` 只调用公开 FastAPI，并在 Git 外维护 scope 专属 attempt journal；Shadow、Discovery、Formal 各最多一次且顺序不可跳过。当前 Discovery 因缺公开的 SAVE1 后原子停止边界而明确 `DISCOVERY_PUBLIC_STAGE_BOUNDARY_MISSING`，Formal 因此前置不能运行。
+- `scripts/report/generate_v1_acceptance_record.py` 只消费公开 acceptance export；只有 3 商品、6 独立保存、五项能力、零 UNKNOWN/自动重试/发布、writer fence 与 provenance 全部同源才输出 `REAL_PATH_B_3_ACCEPTED`。
+
+### 10.4 测试前静态门
+
+- 本轮白名单 Python 变更及新测试共 23 个文件均通过 `ast.parse`；scope schema 通过 JSON 解析；阶段脚本通过 Windows PowerShell AST parser。
+- `git diff --check` exit 0，仅有仓库既有 LF→CRLF 提示；尚未运行 pytest、服务、浏览器、真实 mutation 或发布。
+- Path B release 常量仍保持仅 Path A；真实五能力 provider、Discovery 原子阶段边界及真实外部 scope/session 未闭合前不得解锁。
+
+### 10.5 唯一聚焦单测（首次绿即停止）
+
+实际命令：
+
+```powershell
+cd app\backend
+$env:DXM_DATA_DIR=Join-Path $env:TEMP ("dxm-unit-"+[guid]::NewGuid().ToString("N"))
+.venv\Scripts\python.exe -m pytest -p no:cacheprovider -q -ra tests\test_real_dxm_path_b_system_contract.py
+```
+
+封存输出：
+
+```text
+......................                                                   [100%]
+22 passed in 3.81s
+```
+
+- exit 0；passed 22、failed 0、skipped 0；这是本轮第一次且唯一一次 pytest，未重跑绿测，也未运行其它单测、完整 backend、frontend、desktop、Browser QA 或交付门禁。
+- 静态审计在 pytest 前额外修正三处测试未覆盖的一致性缺陷：job/report/CanonicalReceipt 同事务提交；ledger 只有在 dispatch 与保存证据全齐时才公开投影 `succeeded`；发布终态只从六份 `SaveReceipt.published=false` 与独立未发布证据得出。公开 export 与生成器还统一了 capability key、hash 大写、精确 pair/唯一证据/fence/blocker 校验。
+
+### 10.6 真实阶段前置核对与停止点
+
+```text
+scopeEnvironmentConfigured=false
+scopeFileExists=false
+worktreeStatusCount=27
+RELEASED_PLAN_EXECUTION_PATHS=frozenset({"A"})
+discoveryBoundaryImplemented=false
+```
+
+- 因 Git 外真实 scope 缺失，且当前实现工作树不 clean，没有调用 backend、Reader、preview、freeze、scope prepare 或任何真实 UI；Shadow 尝试消耗数为 0。
+- production capability/section/handshake/canonical-save evidence 仍只有合同/消费端，没有真实 provider/producer；`OPEN_SEMI_MANAGED_EDITOR` 潜在 SAVE1 尚未进入唯一 mutation dispatch；Discovery 必须 fail-closed。
+- 本轮真实阶段计数：Shadow 0 / Discovery 0 / Formal 0；真实浏览器动作 0 / physical mutation 0 / publish request 0 / auto retry 0。当前结论为 `INTERNAL NON_READY`，唯一后续入口见 `BLOCKED.md` 顶部。
+- 更新 `PROGRESS.md` / `BLOCKED.md` 后最终 status count 为 28，全部仍在 objective 白名单内（violation 0）；`git diff --check` exit 0，仅有 LF→CRLF 提示。HEAD 仍为 `e6069d06c2c4154e8813aa1ef0a6ae038cf235cc`，没有 commit/push。
+
+### 10.7 继续批次：Prepare 权威边界与原子启动收敛
+
+- 新增公开 hash-only Prepare 链：plan preview/freeze/task 支持 `projection=scope_prepare`，`POST /api/real-dxm/path-b/scopes/derive-and-prepare` 只接受 task、幂等 key、短 TTL 和逐字段 hash；Git/worktree、runtime/browser session、account、shop、snapshot、L2、时间窗与 nonce 全由当前 backend 派生。`DXM_DATA_DIR` 必须位于 worktree 外，同 task 只允许一份有效 prepared scope。
+- 静态复核发现调用方原可漏字段或自行改写 `saveStage`。现改为只信冻结 item 的精确 `real_write_stage_fields.SAVE1/SAVE2`，要求其无重叠、两段均非空并精确覆盖全部 resolved fields；scope 也必须逐阶段精确相等。当前 snapshot 尚不生产该权威分区，SAVE2 的真实 preimage/expected 也未冻结，因此脚本会在 preview 后、freeze 前以 `PREPARE_FIELD_STAGE_AUTHORITY_DRIFT` 停止，直接 API 以 `FIELD_SAVE_STAGE_AUTHORITY_NOT_FROZEN` 停止，不签发 scope。
+- fresh Reader 的 shops 与每一页 products 现在都必须携带同一个非空 `session_ref`；workflow adapter 与 BrowserAgent session 也必须一致。scope registry 在 `BEGIN IMMEDIATE` 内复核 task 仍为 `draft`，同 scope 幂等返回同样做事务性复核，关闭 Prepare 的 task-status TOCTOU。
+- 脚本会优先保留 FastAPI `detail.detail_code`，不再把 `WORKTREE_DIRTY` 等具体 blocker 吞成 `SCOPE_REJECTED/UNEXPECTED_BLOCKER`；既有 ScopeFile 必须与 backend 返回的 scope 对象精确相等，不能只保留自报 `scopeSha256` 后篡改正文。Prepare/Shadow 商品页逐页校验 session，Shadow 改读已有 atomic task 的只读 `/api/tasks/{id}/scope-prepare`，不再重复调用 task 创建端点。
+- Prepare API 的零计数明确标为“路由合同声明，未测量”；脚本在 scope 前后分别读取 task-local `acceptance-export`，要求 save receipt、mutation ledger、publish request 全为零后才可继续。普通 SHA-256 只作一致性承诺，不宣称能保密低熵业务值。
+- `Repository.approve_and_start_real_dxm_path_b` 已把 scope/Approval 复核、6 张 child lease、real authorization、manual approval、scope `prepared → consumed` 和 task `draft → running` 放入同一个 `BEGIN IMMEDIATE`；scope/task 两个 CAS 任一失败都会整体 rollback。独立静态审查未发现新的部分提交路径。
+- Discovery 审计确认现有 stop 只在商品边界生效，不能阻止同一 job 从 SAVE1 继续到 SAVE2；`FIRST_SAVE_INTENT` 与 `OPEN_SEMI_MANAGED_EDITOR` 又都属于 `MAY_DISPATCH_SAVE1`，尚缺唯一 FIRST_SAVE command/lease/native-handshake 和原子 seal/stop。Discovery 保持 `DISCOVERY_PUBLIC_STAGE_BOUNDARY_MISSING`；Discovery 会改变 preimage，Formal 必须使用 fresh snapshot/task/scope/Approval 并绑定 `discoveryReceiptSha256`，当前保持 `FORMAL_FRESH_SCOPE_LINEAGE_NOT_IMPLEMENTED`。
+- 继续批次只做静态验证：全部 23 个当前变更 Python 文件 `ast.parse` → `PYTHON_AST_OK 23`；阶段脚本 Windows PowerShell parser → `POWERSHELL_PARSE_OK 1`；`git diff --check` exit 0，仅有 LF→CRLF 提示。没有重跑 pytest、没有 import/start backend、没有 Reader/浏览器/Shadow/Discovery/Formal；真实浏览器动作 / physical mutation / publish / auto retry 仍为 `0 / 0 / 0 / 0`。
+- 当前 `DXM_REAL_SAVE_SCOPE_FILE` 未配置且文件不存在；worktree status 28，objective 白名单 violation 0；HEAD 仍为 `e6069d06c2c4154e8813aa1ef0a6ae038cf235cc`，`RELEASED_PLAN_EXECUTION_PATHS=frozenset({"A"})`，没有 commit/push。结论保持 `INTERNAL NON_READY`。
+
+### 10.8 阻断收敛：Discovery → fresh Formal 与 1+6 证据链
+
+本节以当前源码状态取代 10.7 中“Discovery 边界、Formal lineage 尚未实现”的判断；10.7 保留为本轮中间审计记录。生产 capability/section evidence producer 只闭合了严格消费合同和现有可证事实，不能把尚缺 UI 权威的项目写成已实现。
+
+- 公开系统流现完整限定为 `Prepare → Shadow → Discovery → fresh Prepare → Formal`。驱动脚本只调用 FastAPI，并在 Git 外用独占 `CreateNew` 建立 attempt journal；既有 journal 只允许独占打开并全量复验。Discovery purpose 必须为 `discovery` 且 lineage 为空；Formal 必须在同一受管 persistent browser/runtime/session 上取得 sealed Discovery 之后的 fresh Reader/L2 observation，并创建全新的 snapshot/task/scope/Approval；predecessor scope 与 receipt hash 同时写入 Prepare journal 和原子启动请求。
+- Discovery 使用首商品唯一复合 `FIRST_SAVE_INTENT` command/lease/ledger：可见原生保存只派发一次，原生半托管入口保持同一 handshake；独立 VERIFY 未发布后，仓储在单一事务中写入不可变 Discovery receipt、停止 task、封存 scope。派发后任何 HTTP/进程/恢复歧义都落为 `UNKNOWN`，脚本和 Runner 均不重试，也不允许 SAVE2 或下一商品。
+- Discovery receipt 绑定 snapshot、task、scope、Approval、account/shop、精确三商品顺序、首商品、command/lease/mutation/ledger、原生 handshake、业务回包、页面成功态、逐字段 canonical readback、独立未发布 readback、5 个唯一 leaf proof 与零发布计数；私有 verification command/action-result 与 leaf manifest 随 receipt 封存，GET、Formal 启动和恢复都从数据库权威重建，漂移即 UNKNOWN。
+- Formal 在任何 scope/task CAS 前复验 predecessor 已 sealed、所有新 ID/hash 均不复用、同 account/shop/三商品顺序不变、snapshot/task/scope/Approval 时间严格晚于 Discovery seal，并要求 Discovery after 值精确等于 Formal 首商品 SAVE1 preimage。任务 payload 再冻结同一 lineage，Runner 启动与每次写前继续复核当前 scope、receipt、snapshot 与 task 权威。
+- plan snapshot 从同源执行 payload 冻结精确 `real_write_stage_fields.SAVE1/SAVE2`、两阶段 preimage/expected，并要求五项 mandatory capability 与 Path B section receipt。adapter/Runner 已对 capability/section/handshake/save evidence 做严格 hash、时间、动作授权与逐字段校验；`verifyPopChoiceShop` 主动半托管资格预检已从 Reader 路径移除，半托管只允许由原生入口事实裁决。
+- 生产事实仍有明确缺口：`video`、`translation`、`wholesale` 没有真实动作/post-readback，`semiManaged` 没有首写前只读 capability probe，`rollbackPreparation` 的真实 preimage 读取晚于 capability guard；`dxm_info`、`regional_pricing`、`other_info`、`semi_countries` 等 section 也缺权威绑定。provider 现逐项返回稳定的 `PRODUCTION_*_NOT_BOUND` 并在任何写前 fail-closed，不能以控件文案、历史默认 ID、generic frozen fill 或 receipt 合同冒充执行完成。
+- UI 安全审计还发现生产 Path B 所经历史动作存在矩形中心/原生坐标、DOM remove/hide 与猜测 selector；本轮仅允许把有确定语义事实的 SAVE 派发收紧为唯一精确 Playwright 控件，其他动作在取得只读现场事实前保持阻断，不做推测性替换。
+- 每个 Formal SAVE 在独立 VERIFY 后才允许持久化一份 stage CanonicalReceipt；同一商品的 aggregate receipt 只引用两份子 receipt。Formal 验收精确要求 3 商品、SAVE1/SAVE2 各 3、6 个独立 command/lease/receipt、6 次物理 mutation、30 个唯一 leaf proof；campaign 再要求 1 次 Discovery 与其 5 个 leaf proof 完全分账，跨阶段 command/lease/proof 均不得复用。
+- `acceptance-export` 和 `generate_v1_acceptance_record.py` 已加入 campaign 级复验：Discovery/Formal fresh authority、时间顺序、首商品 readback→preimage 连续性、1+6 次 mutation、零 publish/UNKNOWN/retry。任一缺口都保留 blocker，不能输出 `REAL_PATH_B_3_ACCEPTED`。
+- 本节只记录安全实现与静态审查。唯一聚焦 pytest 仍是先前封存的 `22 passed in 3.81s`，继续批次没有再次运行；也没有 import/start backend、Reader、浏览器、Shadow、Discovery 或 Formal。当前真实计数仍为 Shadow 0 / Discovery 0 / Formal 0，browser action 0 / physical mutation 0 / publish 0 / auto retry 0。
+- `DXM_REAL_SAVE_SCOPE_FILE` 仍未配置，当前实现工作树不 clean；HEAD 仍为 `e6069d06c2c4154e8813aa1ef0a6ae038cf235cc`，全局 `RELEASED_PLAN_EXECUTION_PATHS=frozenset({"A"})` 未变，没有 commit/push。源码与证据合同继续收紧不等于业务验收，业务结论保持 `INTERNAL NON_READY / BLOCKED`；唯一后续入口见 `BLOCKED.md` 顶部。
+
+### 10.9 最终静态收口与诚实停止
+
+- Discovery GET、Formal 原子启动与 acceptance-export 均从私有 ledger/command/save ActionResult/dispatch authority/VERIFY command/VERIFY ActionResult 重建权威；Formal 验收逐份重建精确 6 个 stage receipt。Discovery 与 Formal 统一为同粒度 `5 + 30` 个 leaf proof，并核对 command/lease opaque ref、时间与 readback→preimage 连续性。
+- SAVE 派发已移除 native/rect/JS click 路径：网络监听与按钮几何无关，派发前/授权内/点击前三次核对唯一精确 Playwright role locator，最终只调用 `locator.click()`；不确定结果转 `UNKNOWN`。modal 的 Escape、矩形中心及 DOM 删除/隐藏 fallback 已从可达路径禁用，`verifyPopChoiceShop` 主动预检在 `app/backend/src` 为零命中。
+- 当前仅 `semiManaged` 能从 FIRST_SAVE_INTENT 现有事实产 canonical capability receipt；五项 preflight 仍全部显式 fail-closed，其他 capability 与 `path_b_section_receipts` 没有足够真实 producer。历史 Path B 动作仍有坐标/DOM 路径，故不得执行真实 Path B。
+- 最终只读静态输出：`PYTHON_AST_OK 24`；`POWERSHELL_PARSE_OK 1`；`JSON_SCHEMA_PARSE_OK 1`；`OBJECTIVE_ALLOWLIST_OK 29`；`HARD_CONSTRAINT_STATIC_OK save=semantic network=page_only modal=fail_closed precheck=absent release=A_only`；`git diff --check` exit 0（仅 LF→CRLF 提示）。
+- 环境输出：`scopeEnvironmentConfigured=false`、`scopeFileExists=false`、`worktreeStatusCount=29`、`main@e6069d06c2c4154e8813aa1ef0a6ae038cf235cc`。继续阶段没有重跑 pytest、build、应用 import、服务、Reader、浏览器、Shadow、Discovery 或 Formal；真实 browser action / physical mutation / publish / auto retry 仍为 `0 / 0 / 0 / 0`。

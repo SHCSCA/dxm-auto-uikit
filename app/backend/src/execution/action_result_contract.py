@@ -61,16 +61,29 @@ _RECOVERABILITY_KINDS = frozenset(
     {"none", "retry_same_page", "manual_takeover", "restart_runtime", "terminal"}
 )
 _IMMUTABLE_PROOF_STATES = frozenset(
-    {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}
+    {
+        "SAVE_ONLY",
+        "SAVE2_ONLY",
+        "FIRST_SAVE_INTENT",
+        "VERIFY_NOT_PUBLISHED",
+        "VERIFY_SAVE1_NOT_PUBLISHED",
+        "VERIFY_SAVE2_NOT_PUBLISHED",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+    }
 )
 _PROOF_REF_KIND_BY_STATE = MappingProxyType(
     {
         "SAVE_ONLY": "save_screenshot",
+        "SAVE2_ONLY": "save_screenshot",
+        "FIRST_SAVE_INTENT": "save_screenshot",
         "VERIFY_NOT_PUBLISHED": "unpublished_screenshot",
+        "VERIFY_SAVE1_NOT_PUBLISHED": "unpublished_screenshot",
+        "VERIFY_SAVE2_NOT_PUBLISHED": "unpublished_screenshot",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED": "unpublished_screenshot",
     }
 )
 _NON_RETRYABLE_MUTATION_STATES = frozenset(
-    {"SAVE_ONLY"}
+    {"SAVE_ONLY", "SAVE2_ONLY", "FIRST_SAVE_INTENT"}
 )
 _CONTROLLED_PAGE_PATHS = MappingProxyType(
     {
@@ -225,6 +238,16 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
         ),
         "open_semi_managed_page": MappingProxyType(
             {
+                "SAVE_INTENT_MODAL": _contract(
+                    "semi_managed",
+                    "expected_semi_managed_page",
+                    "business_marker_present",
+                    "loading_absent",
+                    "source_editor_identity_preserved",
+                    "save1_intent_observed",
+                    "same_handshake",
+                    "publish_not_attempted",
+                ),
                 "OPEN_SEMI_MANAGED_PAGE": _contract(
                     "semi_managed",
                     "expected_semi_managed_page",
@@ -271,6 +294,36 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                         "single_save": "semi_managed",
                         "batch_draft_save": "editor",
                     },
+                ),
+                "SAVE2_ONLY": _contract(
+                    "semi_managed",
+                    "mutation_authorized",
+                    "exact_save_target",
+                    "save_click_dispatched",
+                    "network_save_success",
+                    "page_save_success",
+                    "published_false",
+                    "publish_action_not_clicked",
+                    page_by_execution_mode={
+                        "batch_draft_save": "semi_managed",
+                    },
+                ),
+            }
+        ),
+        "first_save_intent": MappingProxyType(
+            {
+                "FIRST_SAVE_INTENT": _contract(
+                    "semi_managed",
+                    "mutation_authorized",
+                    "first_save_intent_observed",
+                    "exactly_one_save_request",
+                    "network_save_success",
+                    "open_semi_managed_editor_observed",
+                    "same_handshake",
+                    "source_editor_identity_preserved",
+                    "published_false",
+                    "publish_action_not_clicked",
+                    page_by_execution_mode={"batch_draft_save": "semi_managed"},
                 )
             }
         ),
@@ -287,7 +340,34 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                         "single_save": "semi_managed",
                         "batch_draft_save": "editor",
                     },
-                )
+                ),
+                "VERIFY_SAVE1_NOT_PUBLISHED": _contract(
+                    "editor",
+                    "independent_probe",
+                    "product_identity_match",
+                    "unpublished_verified",
+                    "publish_status_absent_or_false",
+                    "save_evidence_not_reused",
+                    page_by_execution_mode={"batch_draft_save": "editor"},
+                ),
+                "VERIFY_SAVE2_NOT_PUBLISHED": _contract(
+                    "semi_managed",
+                    "independent_probe",
+                    "product_identity_match",
+                    "unpublished_verified",
+                    "publish_status_absent_or_false",
+                    "save_evidence_not_reused",
+                    page_by_execution_mode={"batch_draft_save": "semi_managed"},
+                ),
+                "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED": _contract(
+                    "semi_managed",
+                    "independent_probe",
+                    "product_identity_match",
+                    "unpublished_verified",
+                    "publish_status_absent_or_false",
+                    "save_evidence_not_reused",
+                    page_by_execution_mode={"batch_draft_save": "semi_managed"},
+                ),
             }
         ),
     }
@@ -579,7 +659,103 @@ def _validate_save_network_receipt(value: Any, field: str) -> dict[str, Any]:
     )
     if not any(term in message for term in ("保存成功", "编辑保存成功", "编辑成功")):
         _reject(f"{field}.message must contain a structured SAVE success term")
+    request_body_sha256 = _required_sha256(
+        receipt.get("request_body_sha256"), f"{field}.request_body_sha256"
+    )
+    response_body_sha256 = _required_sha256(
+        receipt.get("response_body_sha256"), f"{field}.response_body_sha256"
+    )
+    request_at = _parse_captured_at(
+        receipt.get("request_observed_at"), f"{field}.request_observed_at"
+    )
+    response_at = _parse_captured_at(
+        receipt.get("response_observed_at"), f"{field}.response_observed_at"
+    )
+    if response_at < request_at:
+        _reject(f"{field} response observation must not precede its request")
+    request_evidence_id = _non_empty_string(
+        receipt.get("request_evidence_id"), f"{field}.request_evidence_id"
+    )
+    response_evidence_id = _non_empty_string(
+        receipt.get("response_evidence_id"), f"{field}.response_evidence_id"
+    )
+    if request_evidence_id == response_evidence_id:
+        _reject(f"{field} request and response evidence identities must differ")
+    expected_request_evidence_id = (
+        "dxm-network-request:"
+        + _canonical_mapping_sha256(
+            {
+                "kind": "request",
+                "url": receipt.get("url"),
+                "method": receipt.get("method"),
+                "body_sha256": request_body_sha256,
+                "observed_at": receipt.get("request_observed_at"),
+            },
+            f"{field}.request_evidence_identity",
+        )
+    )
+    expected_response_evidence_id = (
+        "dxm-network-response:"
+        + _canonical_mapping_sha256(
+            {
+                "kind": "response",
+                "url": receipt.get("url"),
+                "method": receipt.get("method"),
+                "status": receipt.get("status"),
+                "body_sha256": response_body_sha256,
+                "observed_at": receipt.get("response_observed_at"),
+            },
+            f"{field}.response_evidence_identity",
+        )
+    )
+    if (
+        request_evidence_id != expected_request_evidence_id
+        or response_evidence_id != expected_response_evidence_id
+    ):
+        _reject(f"{field} evidence identities do not bind the captured bodies")
     return receipt
+
+
+def _validate_canonical_save_field_readbacks(value: Any, field: str) -> list[dict[str, Any]]:
+    expected_keys = {
+        "field_key",
+        "field_label",
+        "source",
+        "before_value",
+        "after_value",
+        "readback_proven",
+        "timestamp",
+    }
+    if not isinstance(value, list) or not value:
+        _reject(f"{field} must contain at least one post-SAVE field readback")
+    seen: set[str] = set()
+    readbacks: list[dict[str, Any]] = []
+    for index, raw in enumerate(value):
+        if not isinstance(raw, Mapping) or set(raw) != expected_keys:
+            _reject(f"{field}[{index}] has an unsupported shape")
+        item = dict(raw)
+        field_key = _non_empty_string(item.get("field_key"), f"{field}[{index}].field_key")
+        _non_empty_string(item.get("field_label"), f"{field}[{index}].field_label")
+        _non_empty_string(item.get("source"), f"{field}[{index}].source")
+        _parse_captured_at(item.get("timestamp"), f"{field}[{index}].timestamp")
+        if item.get("readback_proven") is not True or field_key in seen:
+            _reject(f"{field}[{index}] is unproven or duplicated")
+        try:
+            json.dumps(
+                {
+                    "before_value": item.get("before_value"),
+                    "after_value": item.get("after_value"),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError):
+            _reject(f"{field}[{index}] values are not canonical JSON")
+        seen.add(field_key)
+        readbacks.append(item)
+    return readbacks
 
 
 def _validate_save_success_semantics(
@@ -591,6 +767,7 @@ def _validate_save_success_semantics(
     before = dict(envelope["before_values"])
     after = dict(envelope["after_values"])
     observations = dict(envelope["evidence"]["observations"])
+    attempted_state = str(envelope.get("attempted_state") or "")
     save = _required_mapping(observations.get("save_result"), "evidence.observations.save_result")
 
     if save.get("ok") is not True or save.get("published") is not False:
@@ -603,7 +780,7 @@ def _validate_save_success_semantics(
         _reject("SAVE success requires publish_action_clicked=false")
     if str(save.get("text") or "") != "保存" or save.get("exact_save_count") != 1:
         _reject("SAVE success requires exactly one visible button labelled 保存")
-    if save.get("click_method") not in {"native_exact_save", "dom_exact_save"}:
+    if save.get("click_method") != "playwright_exact_role":
         _reject("SAVE success requires an approved exact-save click method")
 
     authorization = _required_mapping(
@@ -680,7 +857,16 @@ def _validate_save_success_semantics(
     for key in ("kind", "field_count", "nonempty_field_count", "sha256"):
         if baseline.get(key) != current.get(key):
             _reject("SAVE form state changed after required-field readback")
-    if execution_mode == "batch_draft_save":
+    if execution_mode == "batch_draft_save" and attempted_state == "SAVE2_ONLY":
+        if not isinstance(expected_execution_payload, Mapping):
+            _reject("batch SAVE2 requires the exact frozen execution payload authority")
+        if (
+            pre_dispatch.get("page_kind") != "semi_managed"
+            or pre_dispatch.get("category_schema_readback") is not None
+            or pre_dispatch.get("frozen_execution_readback") is not None
+        ):
+            _reject("SAVE2 must use a semi-managed pre-dispatch readback")
+    elif execution_mode == "batch_draft_save":
         if not isinstance(expected_execution_payload, Mapping):
             _reject("batch SAVE requires the exact frozen execution payload")
         _validate_batch_category_schema_readback(
@@ -721,6 +907,7 @@ def _validate_save_success_semantics(
         _reject("SAVE success requires one exact SAVE request and a closed zero-publish audit")
     if (
         execution_mode == "batch_draft_save"
+        and attempted_state != "SAVE2_ONLY"
         and audit.get("read_only_schema_request_count") < 1
     ):
         _reject("batch SAVE success requires at least one live read-only Schema request")
@@ -785,6 +972,273 @@ def _validate_save_success_semantics(
         _reject("SAVE after_values must preserve the exact dispatched target")
     if after.get("published") is not False:
         _reject("SAVE after_values.published must be false")
+    readbacks = _validate_canonical_save_field_readbacks(
+        observations.get("save_field_readbacks"),
+        "evidence.observations.save_field_readbacks",
+    )
+    if after.get("save_field_readbacks") not in (None, readbacks):
+        _reject("SAVE field readbacks disagree across evidence and after_values")
+
+
+def _validate_first_save_intent_success_semantics(
+    envelope: Mapping[str, Any],
+    *,
+    execution_mode: str | None,
+    expected_execution_payload: Mapping[str, Any] | None,
+) -> None:
+    """Validate one native SAVE1 intent -> semi-managed transition handshake.
+
+    The producer must capture the entire causal chain in one canonical object.
+    A ready modal, an unbound navigation, or a second write-capable command is
+    never accepted as a substitute for the post-dispatch page identity.
+    """
+
+    if execution_mode != "batch_draft_save":
+        _reject("FIRST_SAVE_INTENT is only valid for batch_draft_save")
+    if not isinstance(expected_execution_payload, Mapping):
+        _reject("FIRST_SAVE_INTENT requires the exact frozen execution payload")
+    before = dict(envelope["before_values"])
+    after = dict(envelope["after_values"])
+    observations = dict(envelope["evidence"]["observations"])
+    handshake = _required_mapping(
+        observations.get("first_save_intent_handshake"),
+        "evidence.observations.first_save_intent_handshake",
+    )
+    required_keys = frozenset(
+        {
+            "schema_version",
+            "save_stage",
+            "handshake_id",
+            "handshake_sha256",
+            "pre_dispatch_page",
+            "post_dispatch_page",
+            "first_save_intent",
+            "open_semi_managed_editor",
+            "mutation_authorization",
+            "pre_dispatch_readback",
+            "network_save_result",
+            "network_audit",
+            "publish_signal",
+            "page_transition",
+            "physical_mutation_count",
+            "publish_request_count",
+            "same_handshake",
+        }
+    )
+    if frozenset(handshake) != required_keys:
+        _reject("FIRST_SAVE_INTENT handshake has an unsupported shape")
+    if (
+        handshake.get("schema_version") != "dxm.first-save-intent-handshake.v1"
+        or handshake.get("save_stage") != "SAVE1"
+        or type(handshake.get("physical_mutation_count")) is not int
+        or handshake.get("physical_mutation_count") != 1
+        or type(handshake.get("publish_request_count")) is not int
+        or handshake.get("publish_request_count") != 0
+        or handshake.get("same_handshake") is not True
+    ):
+        _reject("FIRST_SAVE_INTENT handshake counters or stage are invalid")
+    handshake_id = _non_empty_string(
+        handshake.get("handshake_id"), "first_save_intent.handshake_id"
+    )
+    frozen_hash = _required_sha256(
+        handshake.get("handshake_sha256"), "first_save_intent.handshake_sha256"
+    )
+    recomputed_hash = _canonical_mapping_sha256(
+        {key: value for key, value in handshake.items() if key != "handshake_sha256"},
+        "first_save_intent_handshake",
+    )
+    if frozen_hash != recomputed_hash:
+        _reject("FIRST_SAVE_INTENT handshake hash cannot be reproduced")
+
+    frozen_target = _required_mapping(before.get("target_identity"), "before_values.target_identity")
+    expected_target_sha = _canonical_mapping_sha256(
+        frozen_target, "before_values.target_identity"
+    )
+    pre_page = _required_mapping(
+        handshake.get("pre_dispatch_page"), "first_save_intent.pre_dispatch_page"
+    )
+    post_page = _required_mapping(
+        handshake.get("post_dispatch_page"), "first_save_intent.post_dispatch_page"
+    )
+    for page, kind, field in (
+        (pre_page, "editor", "pre_dispatch_page"),
+        (post_page, "semi_managed", "post_dispatch_page"),
+    ):
+        if page.get("kind") != kind or not _page_url_matches_identity(page.get("url"), kind):
+            _reject(f"FIRST_SAVE_INTENT {field} must identify {kind}")
+        if _required_sha256(
+            page.get("target_identity_sha256"),
+            f"first_save_intent.{field}.target_identity_sha256",
+        ) != expected_target_sha:
+            _reject(f"FIRST_SAVE_INTENT {field} target identity drifted")
+
+    intent = _required_mapping(
+        handshake.get("first_save_intent"), "first_save_intent.first_save_intent"
+    )
+    opened = _required_mapping(
+        handshake.get("open_semi_managed_editor"),
+        "first_save_intent.open_semi_managed_editor",
+    )
+    if set(intent) != {"observed", "handshake_id", "event_id", "observed_at"}:
+        _reject("FIRST_SAVE_INTENT intent observation has an unsupported shape")
+    if set(opened) != {
+        "observed",
+        "handshake_id",
+        "event_id",
+        "observed_at",
+        "field_readbacks",
+    }:
+        _reject("FIRST_SAVE_INTENT open observation has an unsupported shape")
+    save_field_readbacks = _validate_canonical_save_field_readbacks(
+        opened.get("field_readbacks"),
+        "first_save_intent.open_semi_managed_editor.field_readbacks",
+    )
+    if intent.get("observed") is not True or opened.get("observed") is not True:
+        _reject("FIRST_SAVE_INTENT requires both native intent and opened editor observations")
+    if (
+        intent.get("handshake_id") != handshake_id
+        or opened.get("handshake_id") != handshake_id
+    ):
+        _reject("FIRST_SAVE_INTENT observations must bind the same handshake_id")
+    intent_event = _non_empty_string(intent.get("event_id"), "first_save_intent.event_id")
+    opened_event = _non_empty_string(
+        opened.get("event_id"), "open_semi_managed_editor.event_id"
+    )
+    if intent_event == opened_event:
+        _reject("FIRST_SAVE_INTENT requires distinct ordered intent/open observations")
+    intent_at = _parse_captured_at(intent.get("observed_at"), "first_save_intent.observed_at")
+    opened_at = _parse_captured_at(
+        opened.get("observed_at"), "open_semi_managed_editor.observed_at"
+    )
+    if opened_at <= intent_at:
+        _reject("OPEN_SEMI_MANAGED_EDITOR must follow FIRST_SAVE_INTENT")
+
+    authorization = _required_mapping(
+        handshake.get("mutation_authorization"),
+        "first_save_intent.mutation_authorization",
+    )
+    if (
+        authorization.get("ok") is not True
+        or authorization.get("executed") is not True
+        or authorization.get("mutation_action") != "first_save_intent"
+        or authorization.get("mutation_status") != "DISPATCHED"
+    ):
+        _reject("FIRST_SAVE_INTENT requires its exact consumed mutation authorization")
+    _non_empty_string(
+        authorization.get("mutation_id"), "first_save_intent.mutation_authorization.mutation_id"
+    )
+
+    pre_dispatch = _required_mapping(
+        handshake.get("pre_dispatch_readback"),
+        "first_save_intent.pre_dispatch_readback",
+    )
+    if (
+        pre_dispatch.get("ok") is not True
+        or pre_dispatch.get("required_readback_complete") is not True
+        or pre_dispatch.get("write_attempted") is not False
+        or pre_dispatch.get("phase") != "before_ledger_begin_dispatch"
+        or pre_dispatch.get("page_kind") != "editor"
+    ):
+        _reject("FIRST_SAVE_INTENT requires a complete editor pre-dispatch readback")
+    try:
+        validate_expected_frozen_execution_readback(
+            pre_dispatch.get("frozen_execution_readback"),
+            expected_payload=expected_execution_payload,
+        )
+    except BatchCommandContractError as exc:
+        _reject(f"{exc.reason_code}: {exc}")
+
+    network = _validate_save_network_receipt(
+        handshake.get("network_save_result"),
+        "first_save_intent.network_save_result",
+    )
+    network_response_at = _parse_captured_at(
+        network.get("response_observed_at"),
+        "first_save_intent.network_save_result.response_observed_at",
+    )
+    if network_response_at > opened_at:
+        _reject("FIRST_SAVE_INTENT semi-managed page opened before the SAVE response")
+    for index, readback in enumerate(save_field_readbacks):
+        readback_at = _parse_captured_at(
+            readback.get("timestamp"),
+            f"first_save_intent.field_readbacks[{index}].timestamp",
+        )
+        if not network_response_at <= readback_at < opened_at:
+            _reject("FIRST_SAVE_INTENT field readback is outside the SAVE/open window")
+    audit = _required_mapping(
+        handshake.get("network_audit"), "first_save_intent.network_audit"
+    )
+    if (
+        audit.get("scope") != "same_origin_write_window"
+        or audit.get("complete") is not True
+        or audit.get("window_closed") is not True
+        or type(audit.get("mutation_request_count")) is not int
+        or audit.get("mutation_request_count") != 1
+        or type(audit.get("save_request_count")) is not int
+        or audit.get("save_request_count") != 1
+        or type(audit.get("other_mutation_request_count")) is not int
+        or audit.get("other_mutation_request_count") != 0
+        or type(audit.get("publish_request_count")) is not int
+        or audit.get("publish_request_count") != 0
+    ):
+        _reject("FIRST_SAVE_INTENT requires exactly one SAVE and zero other writes")
+    publish_signal = _required_mapping(
+        handshake.get("publish_signal"), "first_save_intent.publish_signal"
+    )
+    if (
+        publish_signal.get("detected") is not False
+        or publish_signal.get("kind") != "network_route_classification"
+        or type(publish_signal.get("request_count")) is not int
+        or publish_signal.get("request_count") != 0
+    ):
+        _reject("FIRST_SAVE_INTENT publish isolation is not proven")
+    transition = _required_mapping(
+        handshake.get("page_transition"), "first_save_intent.page_transition"
+    )
+    if transition != {
+        "from": "editor",
+        "to": "semi_managed",
+        "same_browser_session": True,
+        "source_editor_identity_preserved": True,
+    }:
+        _reject("FIRST_SAVE_INTENT post-dispatch page transition is not exact")
+
+    compatibility_handshake = {
+        "gate_outcome": "admitted",
+        "semi_entry_triggered": True,
+        "same_handshake": True,
+        "handshake_id": handshake["handshake_id"],
+        "save1_verified": True,
+        "exactly_one_save_request": True,
+    }
+    if observations.get("save_result") != handshake:
+        _reject("FIRST_SAVE_INTENT save_result must preserve the canonical handshake")
+    if observations.get("save_intent_handshake") != compatibility_handshake:
+        _reject("FIRST_SAVE_INTENT runner handshake facts disagree")
+    if observations.get("save_field_readbacks") != save_field_readbacks:
+        _reject("FIRST_SAVE_INTENT field readbacks must preserve the hashed handshake")
+
+    for key, expected in (
+        ("first_save_intent_handshake", handshake),
+        ("mutation_authorization", authorization),
+        ("network_save_result", network),
+        ("network_audit", audit),
+        ("publish_signal", publish_signal),
+    ):
+        if observations.get(key) != expected or after.get(key) != expected:
+            _reject(f"FIRST_SAVE_INTENT {key} facts disagree")
+    if after.get("published") is not False:
+        _reject("FIRST_SAVE_INTENT after_values.published must be false")
+    if after.get("save_field_readbacks") != save_field_readbacks:
+        _reject("FIRST_SAVE_INTENT after_values field readbacks disagree")
+    refs = envelope["evidence"]["refs"]
+    if len(refs) != 1:
+        _reject("FIRST_SAVE_INTENT requires one post-transition screenshot")
+    screenshot_at = _parse_captured_at(
+        refs[0].get("captured_at"), "first_save_intent.screenshot.captured_at"
+    )
+    if screenshot_at <= opened_at:
+        _reject("FIRST_SAVE_INTENT screenshot must follow the semi-managed observation")
 
 
 def _validate_expected_save_target_binding(
@@ -793,6 +1247,7 @@ def _validate_expected_save_target_binding(
     expected_target_identity: Mapping[str, Any],
     expected_store_name: str,
     expected_target_hash: str,
+    command_action: str = "save_only",
 ) -> None:
     """Bind canonical SAVE evidence to the exact frozen command target."""
 
@@ -810,7 +1265,7 @@ def _validate_expected_save_target_binding(
         _reject("SAVE result target identity/store differs from the frozen command")
     try:
         reproduced_target_hash = mutation_target_hash(
-            "save_only",
+            command_action,
             {
                 "store_name": store_name,
                 "target_identity": target,
@@ -826,8 +1281,10 @@ def _validate_expected_save_target_binding(
 def _validate_unpublished_success_semantics(
     envelope: Mapping[str, Any],
     *,
+    state: str,
     expected_page: str,
 ) -> None:
+    before = dict(envelope["before_values"])
     after = dict(envelope["after_values"])
     observations = dict(envelope["evidence"]["observations"])
     proof = _required_mapping(
@@ -898,6 +1355,24 @@ def _validate_unpublished_success_semantics(
         _reject("VERIFY_NOT_PUBLISHED after_values must preserve target identity")
     if after.get("published") is not False:
         _reject("VERIFY_NOT_PUBLISHED after_values.published must be false")
+    predecessor_locations = (
+        before.get("save_predecessor"),
+        observations.get("save_predecessor"),
+        proof.get("save_predecessor"),
+        after.get("save_predecessor"),
+        after.get("fresh_probe", {}).get("save_predecessor")
+        if isinstance(after.get("fresh_probe"), Mapping)
+        else None,
+    )
+    if state == "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED":
+        expected_predecessor = {
+            "state": "FIRST_SAVE_INTENT",
+            "action": "first_save_intent",
+        }
+        if any(value != expected_predecessor for value in predecessor_locations):
+            _reject("Discovery VERIFY is not bound to its FIRST_SAVE_INTENT predecessor")
+    elif any(value is not None for value in predecessor_locations):
+        _reject("save_predecessor is reserved for Discovery VERIFY")
 
 
 def _validate_success_evidence_semantics(
@@ -908,15 +1383,27 @@ def _validate_success_evidence_semantics(
     execution_mode: str | None = None,
     expected_execution_payload: Mapping[str, Any] | None = None,
 ) -> None:
-    if state == "SAVE_ONLY":
+    if state in {"SAVE_ONLY", "SAVE2_ONLY"}:
         _validate_save_success_semantics(
             envelope,
             execution_mode=execution_mode,
             expected_execution_payload=expected_execution_payload,
         )
-    elif state == "VERIFY_NOT_PUBLISHED":
+    elif state == "FIRST_SAVE_INTENT":
+        _validate_first_save_intent_success_semantics(
+            envelope,
+            execution_mode=execution_mode,
+            expected_execution_payload=expected_execution_payload,
+        )
+    elif state in {
+        "VERIFY_NOT_PUBLISHED",
+        "VERIFY_SAVE1_NOT_PUBLISHED",
+        "VERIFY_SAVE2_NOT_PUBLISHED",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+    }:
         _validate_unpublished_success_semantics(
             envelope,
+            state=state,
             expected_page=expected_page,
         )
 
@@ -1069,13 +1556,18 @@ def validate_action_result_envelope(
             and isinstance(expected_target_hash, str)
         ):
             _reject("SAVE expected target binding must be complete")
-        if state != "SAVE_ONLY" or action != "save_only":
+        if (state, action) not in {
+            ("SAVE_ONLY", "save_only"),
+            ("SAVE2_ONLY", "save_only"),
+            ("FIRST_SAVE_INTENT", "first_save_intent"),
+        }:
             _reject("expected SAVE target binding is invalid for this action")
         _validate_expected_save_target_binding(
             envelope,
             expected_target_identity=expected_target_identity,
             expected_store_name=expected_store_name,
             expected_target_hash=expected_target_hash,
+            command_action=action,
         )
 
     return _json_clone(envelope)
@@ -1090,12 +1582,14 @@ def validate_independent_save_verification_pair(
     expected_execution_payload: Mapping[str, Any] | None = None,
     expected_verification_context: Mapping[str, Any] | None = None,
     expected_save_command: Mapping[str, Any] | None = None,
+    expected_save_state: str = "SAVE_ONLY",
+    expected_verification_state: str = "VERIFY_NOT_PUBLISHED",
 ) -> dict[str, dict[str, Any]]:
     """Validate that unpublished proof is target-bound and captured after SAVE."""
 
     save = validate_action_result_envelope(
         save_value,
-        expected_state="SAVE_ONLY",
+        expected_state=expected_save_state,
         expected_action="save_only",
         expected_page=expected_page,
         execution_mode=execution_mode,
@@ -1103,7 +1597,7 @@ def validate_independent_save_verification_pair(
     )
     verification = validate_action_result_envelope(
         verification_value,
-        expected_state="VERIFY_NOT_PUBLISHED",
+        expected_state=expected_verification_state,
         expected_action="verify_not_published",
         expected_page=expected_page,
         execution_mode=execution_mode,

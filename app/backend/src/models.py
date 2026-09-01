@@ -242,6 +242,87 @@ class TaskManualApprovalRequest(BaseModel):
 
     approved_by: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
     confirmation: str = Field(min_length=1, max_length=64)
+    real_dxm_write_scope: dict[str, Any] | None = None
+    real_dxm_write_approval: dict[str, Any] | None = None
+    predecessor_scope_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9A-F]{64}$",
+    )
+    discovery_receipt_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9A-F]{64}$",
+    )
+
+
+class RealDxmWriteScopePrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: dict[str, Any]
+
+
+class RealDxmPathBFieldHashBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = Field(min_length=1, max_length=200, pattern=r"^[^*?%\r\n]+$")
+    saveStage: Literal["SAVE1", "SAVE2"]
+    preimageSha256: str = Field(pattern=r"^[0-9A-F]{64}$")
+    expectedSha256: str = Field(pattern=r"^[0-9A-F]{64}$")
+
+
+class RealDxmPathBPrepareProduct(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    productId: StrictInt = Field(gt=0)
+    fieldHashBindings: list[RealDxmPathBFieldHashBinding] = Field(
+        min_length=2,
+        max_length=200,
+    )
+
+
+class RealDxmPathBScopeDeriveRequest(BaseModel):
+    """Hash-only operator input for a zero-real-write Path B Prepare."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["real_dxm_path_b_scope_prepare.v1"]
+    taskId: StrictInt = Field(gt=0)
+    prepareKey: str = Field(
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
+    validForSeconds: StrictInt = Field(default=300, ge=60, le=600)
+    orderedProducts: list[RealDxmPathBPrepareProduct] = Field(
+        min_length=3,
+        max_length=3,
+    )
+    predecessorScopeSha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9A-F]{64}$",
+    )
+    discoveryReceiptSha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9A-F]{64}$",
+    )
+
+
+class RealDxmPathBDiscoveryStartRequest(BaseModel):
+    """One-use public input for the dedicated first-product SAVE1 discovery."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["real_dxm_path_b_save1_discovery_start.v1"]
+    taskId: StrictInt = Field(gt=0)
+    targetProductId: StrictInt = Field(gt=0)
+    discoveryKey: str = Field(
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
+    approvedBy: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
+    confirmation: str = Field(min_length=1, max_length=64)
+    realDxmWriteScope: dict[str, Any]
+    realDxmWriteApproval: dict[str, Any]
 
 
 class TaskConfigOverrideRequest(BaseModel):

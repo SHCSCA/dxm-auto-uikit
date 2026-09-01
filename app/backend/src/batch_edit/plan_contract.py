@@ -222,17 +222,20 @@ class E2PlanService:
                 "BATCH_PLAN_SNAPSHOT_HASH_MISMATCH",
                 "task snapshot hash differs from the stored immutable snapshot",
             )
+        payload_path = str(payload.get("path") or "").strip().upper()
+        snapshot_path = str(stored_body.get("path") or "").strip().upper()
         if (
             task.get("mode") != "batch_draft_save"
             or payload.get("execution_mode") != "batch_draft_save"
-            or payload.get("path") != "A"
-            or stored_body.get("path") != "A"
+            or payload_path not in {"A", "B"}
+            or snapshot_path not in {"A", "B"}
+            or payload_path != snapshot_path
             or payload.get("publish_allowed") is not False
             or stored_body.get("publish_allowed") is not False
         ):
             _reject(
                 "BATCH_PLAN_SNAPSHOT_EXECUTION_DRIFT",
-                "task mode, Path A, or zero-publish binding has drifted",
+                "task mode, plan path, or zero-publish binding has drifted",
             )
         stored_ids = stored_body.get("product_ids")
         if not isinstance(stored_ids, list) or not stored_ids:

@@ -70,7 +70,17 @@ class StateName(StrEnum):
     # Path B 双保存合同专属状态：SAVE1 后由原生门裁决（"编辑半托管信息"）；
     # 由此进入 /web/smt/editFromSmt 完成半托管并触发 SAVE2。
     SAVE_INTENT_MODAL = "SAVE_INTENT_MODAL"
+    # Discovery uses one composite, ledger-authorized command for the causal
+    # SAVE1 + native intent + semi-managed entry handshake.  It must never be
+    # decomposed into SAVE_ONLY followed by another MAY_DISPATCH_SAVE1 action.
+    FIRST_SAVE_INTENT = "FIRST_SAVE_INTENT"
+    VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED = (
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED"
+    )
+    DISCOVERY_SEAL_STOP = "DISCOVERY_SEAL_STOP"
     SAVE2_ONLY = "SAVE2_ONLY"
+    VERIFY_SAVE1_NOT_PUBLISHED = "VERIFY_SAVE1_NOT_PUBLISHED"
+    VERIFY_SAVE2_NOT_PUBLISHED = "VERIFY_SAVE2_NOT_PUBLISHED"
 
 
 @dataclass(frozen=True)
@@ -190,10 +200,79 @@ def build_v1_state_specs() -> dict[StateName, StateNodeSpec]:
             expected_network=("save response code is success",),
             failure_code="E802",
         ),
+        StateName.SAVE_INTENT_MODAL: StateNodeSpec(
+            state_name=StateName.SAVE_INTENT_MODAL,
+            preconditions=(
+                "SAVE1 business success and independent unpublished proof verified",
+            ),
+            actions=(
+                "observe the native first-save intent and enter semi-managed editor",
+            ),
+            expected_url=("/web/smt/editFromSmt",),
+            failure_code="E901",
+        ),
+        StateName.FIRST_SAVE_INTENT: StateNodeSpec(
+            state_name=StateName.FIRST_SAVE_INTENT,
+            preconditions=(
+                "one first-product Path B discovery profile is armed",
+                "pre-save guard and frozen field readback passed",
+            ),
+            actions=(
+                "dispatch one ledger-authorized composite SAVE1 intent handshake",
+            ),
+            expected_url=("/web/smt/editFromSmt",),
+            expected_network=(
+                "exactly one SAVE1 request and zero publish requests",
+            ),
+            failure_code="UNKNOWN",
+        ),
+        StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED: StateNodeSpec(
+            state_name=StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+            preconditions=(
+                "composite SAVE1 intent handshake succeeded on the target product",
+            ),
+            actions=(
+                "record an independent semi-managed-page unpublished proof",
+            ),
+            failure_code="UNKNOWN",
+        ),
+        StateName.DISCOVERY_SEAL_STOP: StateNodeSpec(
+            state_name=StateName.DISCOVERY_SEAL_STOP,
+            preconditions=(
+                "composite SAVE1 intent handshake succeeded",
+                "independent SAVE1 unpublished proof succeeded",
+                "zero SAVE2 and zero other-product dispatches verified",
+            ),
+            actions=(
+                "atomically seal discovery receipt and stop the task",
+            ),
+            failure_code="UNKNOWN",
+            publish_guard_required=False,
+        ),
+        StateName.SAVE2_ONLY: StateNodeSpec(
+            state_name=StateName.SAVE2_ONLY,
+            preconditions=("semi-managed fields and pre-save guard verified",),
+            actions=("click the semi-managed save button exactly once",),
+            expected_text=("edit success", "saved to pending publish"),
+            expected_network=("save response code and business code are success",),
+            failure_code="E802",
+        ),
         StateName.VERIFY_NOT_PUBLISHED: StateNodeSpec(
             state_name=StateName.VERIFY_NOT_PUBLISHED,
             preconditions=("save result verified",),
             actions=("record published=false proof",),
+            failure_code="E999",
+        ),
+        StateName.VERIFY_SAVE1_NOT_PUBLISHED: StateNodeSpec(
+            state_name=StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+            preconditions=("SAVE1 business success verified",),
+            actions=("record an independent editor-page unpublished proof",),
+            failure_code="E999",
+        ),
+        StateName.VERIFY_SAVE2_NOT_PUBLISHED: StateNodeSpec(
+            state_name=StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+            preconditions=("SAVE2 business success verified",),
+            actions=("record an independent semi-managed unpublished proof",),
             failure_code="E999",
         ),
         StateName.WRITE_REPORT: StateNodeSpec(

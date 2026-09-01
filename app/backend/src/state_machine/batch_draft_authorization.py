@@ -8,6 +8,7 @@ from typing import Any
 
 
 BATCH_DRAFT_TASK_FACTS_SCHEMA = "dxm.batch_draft_save.task_facts.v1"
+REAL_PATH_B_TASK_FACTS_SCHEMA = "dxm.real_path_b.task_facts.v1"
 BATCH_DRAFT_AUTHORIZATION_CONTEXT_SCHEMA = "dxm.authorization.context.v2"
 WORKTREE_IDENTITY_SCHEMA = "dxm.git-worktree.identity.v1"
 BATCH_DRAFT_SAVE_CONFIRMATION = "CONFIRM_DXM_SAVE_ONLY"
@@ -30,6 +31,12 @@ _BATCH_DRAFT_FACT_KEYS = frozenset(
         "fingerprint",
     }
 )
+_REAL_PATH_B_FACT_KEYS = _BATCH_DRAFT_FACT_KEYS | {
+    "real_scope_sha256",
+    "real_approval_sha256",
+    "approval_nonce_sha256",
+    "save_leases_sha256",
+}
 _BATCH_DRAFT_STATIC_FACTS = {
     "stage": "batch_draft_save",
     "mode": "batch_draft_save",
@@ -214,13 +221,15 @@ def build_batch_draft_save_task_facts(
     plan_snapshot_id: int,
     plan_snapshot_hash: str,
     path: str = "A",
+    real_authorization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the exact immutable facts authorized for Path A batch draft save."""
+    """Build immutable facts for legacy Path A or externally scoped Path B."""
 
-    if str(path or "").strip().upper() != "A":
+    canonical_path = str(path or "").strip().upper()
+    if canonical_path not in {"A", "B"}:
         raise BatchDraftAuthorizationError(
             "BATCH_PATH_FORBIDDEN",
-            "batch_draft_save authorization only allows Path A",
+            "batch_draft_save authorization path must be A or B",
         )
     normalized_product_ids: list[int] = []
     seen: set[int] = set()
@@ -238,8 +247,17 @@ def build_batch_draft_save_task_facts(
             "BATCH_PRODUCT_IDS_REQUIRED",
             "batch_draft_save requires at least one product id",
         )
+    if canonical_path == "B" and len(normalized_product_ids) < 3:
+        raise BatchDraftAuthorizationError(
+            "REAL_PATH_B_PRODUCT_COUNT_INVALID",
+            "real Path B authorization requires at least three ordered products",
+        )
     unsigned = {
-        "schema": BATCH_DRAFT_TASK_FACTS_SCHEMA,
+        "schema": (
+            BATCH_DRAFT_TASK_FACTS_SCHEMA
+            if canonical_path == "A"
+            else REAL_PATH_B_TASK_FACTS_SCHEMA
+        ),
         **_BATCH_DRAFT_STATIC_FACTS,
         "task_id": _positive_id(task_id, field_name="task_id"),
         "store_id": _positive_id(store_id, field_name="store_id"),
@@ -252,9 +270,43 @@ def build_batch_draft_save_task_facts(
             plan_snapshot_hash,
             field_name="plan_snapshot_hash",
         ),
-        "path": "A",
+        "path": canonical_path,
     }
-    if set(unsigned) | {"fingerprint"} != _BATCH_DRAFT_FACT_KEYS:
+    expected_keys = _BATCH_DRAFT_FACT_KEYS
+    if canonical_path == "B":
+        if not isinstance(real_authorization, Mapping):
+            raise BatchDraftAuthorizationError(
+                "REAL_PATH_B_SCOPE_REQUIRED",
+                "real Path B authorization binding is missing",
+            )
+        leases = real_authorization.get("save_leases")
+        if (
+            not isinstance(leases, list)
+            or len(leases) != 2 * len(normalized_product_ids)
+        ):
+            raise BatchDraftAuthorizationError(
+                "REAL_PATH_B_SAVE_LEASES_INVALID",
+                "real Path B requires two phase-specific SAVE leases per product",
+            )
+        unsigned.update(
+            {
+                "real_scope_sha256": _canonical_sha256(
+                    real_authorization.get("scope_sha256"),
+                    field_name="real_scope_sha256",
+                ),
+                "real_approval_sha256": _canonical_sha256(
+                    real_authorization.get("approval_sha256"),
+                    field_name="real_approval_sha256",
+                ),
+                "approval_nonce_sha256": _canonical_sha256(
+                    real_authorization.get("approval_nonce_sha256"),
+                    field_name="approval_nonce_sha256",
+                ),
+                "save_leases_sha256": _sha256(leases),
+            }
+        )
+        expected_keys = _REAL_PATH_B_FACT_KEYS
+    if set(unsigned) | {"fingerprint"} != expected_keys:
         raise BatchDraftAuthorizationError(
             "BATCH_TASK_FACTS_SHAPE_MISMATCH",
             "batch_draft_save task facts shape is invalid",
@@ -271,9 +323,18 @@ def verify_exact_batch_draft_save_task_facts(
         return _check(False, "STAGE_TASK_FACTS_SHAPE_MISMATCH")
     if facts.get("stage") != "batch_draft_save":
         return _check(False, "STAGE_TASK_FACTS_STAGE_MISMATCH")
-    if set(facts) != _BATCH_DRAFT_FACT_KEYS:
+    path = str(facts.get("path") or "").strip().upper()
+    expected_keys = (
+        _BATCH_DRAFT_FACT_KEYS if path == "A" else _REAL_PATH_B_FACT_KEYS
+    )
+    expected_schema = (
+        BATCH_DRAFT_TASK_FACTS_SCHEMA
+        if path == "A"
+        else REAL_PATH_B_TASK_FACTS_SCHEMA
+    )
+    if path not in {"A", "B"} or set(facts) != expected_keys:
         return _check(False, "STAGE_TASK_FACTS_SHAPE_MISMATCH")
-    if facts.get("schema") != BATCH_DRAFT_TASK_FACTS_SCHEMA:
+    if facts.get("schema") != expected_schema:
         return _check(False, "STAGE_TASK_FACTS_SCHEMA_MISMATCH")
     for field_name, expected in _BATCH_DRAFT_STATIC_FACTS.items():
         if facts.get(field_name) != expected:
@@ -284,8 +345,6 @@ def verify_exact_batch_draft_save_task_facts(
     try:
         _positive_id(facts.get("task_id"), field_name="task_id")
         _positive_id(facts.get("store_id"), field_name="store_id")
-        if facts.get("path") != "A":
-            return _check(False, "BATCH_PATH_FORBIDDEN")
         product_ids = facts.get("product_ids")
         if not isinstance(product_ids, list) or not product_ids:
             return _check(False, "BATCH_PRODUCT_IDS_REQUIRED")
@@ -295,6 +354,16 @@ def verify_exact_batch_draft_save_task_facts(
             if product_id in seen:
                 return _check(False, "BATCH_PRODUCT_DUPLICATE")
             seen.add(product_id)
+        if path == "B":
+            if len(product_ids) < 3:
+                return _check(False, "REAL_PATH_B_PRODUCT_COUNT_INVALID")
+            for field_name in (
+                "real_scope_sha256",
+                "real_approval_sha256",
+                "approval_nonce_sha256",
+                "save_leases_sha256",
+            ):
+                _canonical_sha256(facts.get(field_name), field_name=field_name)
         _positive_id(facts.get("plan_snapshot_id"), field_name="plan_snapshot_id")
         _canonical_sha256(
             facts.get("plan_snapshot_hash"),
@@ -306,7 +375,7 @@ def verify_exact_batch_draft_save_task_facts(
         )
         unsigned = {
             key: facts[key]
-            for key in _BATCH_DRAFT_FACT_KEYS
+            for key in expected_keys
             if key != "fingerprint"
         }
         if not hmac.compare_digest(stored_fingerprint, _sha256(unsigned)):

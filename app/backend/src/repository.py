@@ -5,7 +5,7 @@ import hmac
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,8 @@ from src.db import (
     dumps,
     loads,
     migrate_canonical_receipts,
+    migrate_real_dxm_path_b_discovery_receipts,
+    migrate_real_dxm_write_scopes,
     recover_interrupted_edit_batches as recover_edit_batches_in_db,
 )
 from src.batch_edit.execution_state import (
@@ -44,7 +46,43 @@ from src.batch_edit.execution_contract import (
 )
 from src.batch_edit.batch_contract import BatchContractError, freeze_template_bundle
 from src.batch_edit.scope_contract import canonical_sha256
-from src.execution.browser_agent_protocol import canonical_frozen_target_identity, mutation_target_hash
+from src.execution.browser_agent_protocol import (
+    BrowserAgentCommand,
+    MutationCommandContractError,
+    browser_agent_command_sha256,
+    canonical_frozen_target_identity,
+    mutation_target_hash,
+    validate_browser_agent_command,
+)
+from src.execution.action_result_contract import (
+    ActionResultContractError,
+    validate_action_result_envelope,
+)
+from src.execution.batch_command_contract import (
+    PATH_B_SAVE1_DISCOVERY_ACTION,
+    PATH_B_FORMAL_LINEAGE_KEY,
+    PATH_B_FORMAL_LINEAGE_SCHEMA,
+    PATH_B_SAVE1_DISCOVERY_PROFILE_KEY,
+    PATH_B_SAVE1_DISCOVERY_STATE,
+    BatchCommandContractError,
+    build_path_b_save1_discovery_profile,
+    rebuild_save_verification_authority,
+    validate_path_b_save1_discovery_dispatch,
+    validate_path_b_save1_discovery_profile,
+    validate_path_b_formal_lineage,
+    validate_save_verification_context,
+)
+from src.execution.batch_dispatch_authority import (
+    DispatchAuthorityError,
+    save_verification_facts_from_frozen_authority,
+)
+from src.execution.canonical_receipt import (
+    ReceiptPhase,
+    ReceiptValidationError,
+    SaveReceipt,
+    build_save_receipt_from_verified_pair,
+    validated_field_readbacks_from_payload,
+)
 from src.execution.task_worker_control import (
     ACTIVE_TASK_STATUSES,
     PAYLOAD_KEY as WORKER_CONTROL_PAYLOAD_KEY,
@@ -65,7 +103,17 @@ from src.state_machine.save_authorization import (
     verify_product_box_snapshot,
 )
 from src.state_machine.batch_draft_authorization import (
+    BATCH_DRAFT_SAVE_CONFIRMATION,
+    BATCH_DRAFT_SAVE_PUBLISH_SCENE,
+    BatchDraftAuthorizationError,
+    build_authorization_context as build_batch_authorization_context,
+    build_batch_draft_save_task_facts,
     compare_authorization_context as compare_batch_authorization_context,
+    verify_authorization_context as verify_batch_authorization_context,
+)
+from src.real_dxm_write_scope import (
+    RealDxmWriteScopeError,
+    validate_real_dxm_write_authorization,
 )
 from src.core.config import EVIDENCE_DIR
 from src.utils import now_iso
@@ -94,6 +142,132 @@ class AuthorizationLeaseResult:
     reason_code: str
     task: dict[str, Any] | None
     lease: dict[str, Any] | None
+
+
+class _AtomicPathBStartRejected(RuntimeError):
+    """Private rollback signal for the all-or-nothing Path B start transaction."""
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
+
+class _RealDxmAuthorizationBindingError(ValueError):
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
+
+_PATH_B_DISCOVERY_RECEIPT_SCHEMA = (
+    "dxm.real-dxm-path-b.save1-discovery-receipt.v1"
+)
+_PATH_B_DISCOVERY_LEAF_PROOF_SCHEMA = (
+    "dxm.real-dxm-path-b.discovery-leaf-proof-manifest.v1"
+)
+
+
+def _discovery_attempt_public_status(
+    attempt_status: Any,
+    *,
+    task_status: Any = None,
+) -> str:
+    normalized = str(attempt_status or "").strip().lower()
+    if normalized == "sealed":
+        return "DISCOVERY_SEALED"
+    if normalized == "unknown":
+        return "UNKNOWN"
+    if normalized == "blocked":
+        return "BLOCKED"
+    if normalized == "armed" and str(task_status or "").strip() == "running":
+        return "RUNNING"
+    return "ARMED"
+
+
+def _normalized_sha256(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().upper()
+    if len(normalized) != 64 or any(
+        character not in "0123456789ABCDEF" for character in normalized
+    ):
+        return None
+    return normalized
+
+
+def _derive_real_dxm_write_authorization_binding(
+    scope: Mapping[str, Any],
+    approval: Mapping[str, Any],
+    *,
+    consumed_at: str,
+) -> dict[str, Any]:
+    """Derive the immutable task binding and all phase-specific SAVE leases."""
+
+    scope_sha256 = str(scope.get("scopeSha256") or "")
+    approval_sha256 = str(approval.get("approvalSha256") or "")
+    snapshot = scope.get("snapshot") if isinstance(scope.get("snapshot"), Mapping) else {}
+    task_id = snapshot.get("taskId")
+    products = scope.get("orderedProducts") if isinstance(scope.get("orderedProducts"), list) else []
+    if (
+        isinstance(task_id, bool)
+        or not isinstance(task_id, int)
+        or task_id <= 0
+        or len(products) < 3
+    ):
+        raise _RealDxmAuthorizationBindingError("SAVE_LEASE_COUNT_INVALID")
+
+    save_leases: list[dict[str, Any]] = []
+    ordered_product_ids: list[int] = []
+    for expected_ordinal, item in enumerate(products, start=1):
+        if not isinstance(item, Mapping):
+            raise _RealDxmAuthorizationBindingError("SAVE_LEASE_COUNT_INVALID")
+        product_id = item.get("productId")
+        ordinal = item.get("ordinal")
+        saves = item.get("saves")
+        if (
+            isinstance(product_id, bool)
+            or not isinstance(product_id, int)
+            or product_id <= 0
+            or isinstance(ordinal, bool)
+            or not isinstance(ordinal, int)
+            or ordinal != expected_ordinal
+            or not isinstance(saves, list)
+            or [save.get("stage") if isinstance(save, Mapping) else None for save in saves]
+            != ["SAVE1", "SAVE2"]
+        ):
+            raise _RealDxmAuthorizationBindingError("SAVE_LEASE_COUNT_INVALID")
+        ordered_product_ids.append(product_id)
+        for save_stage in ("SAVE1", "SAVE2"):
+            lease_material = (
+                f"real-path-b-save-lease:{scope_sha256}:{approval_sha256}:"
+                f"{task_id}:{ordinal}:{product_id}:{save_stage}"
+            )
+            save_leases.append(
+                {
+                    "product_id": product_id,
+                    "product_ordinal": ordinal,
+                    "save_stage": save_stage,
+                    "lease_id": hashlib.sha256(lease_material.encode("utf-8")).hexdigest(),
+                    "scope_sha256": scope_sha256,
+                    "expires_at": approval.get("expiresAt"),
+                    "single_use": True,
+                }
+            )
+    if len(save_leases) != 2 * len(products) or len({item["lease_id"] for item in save_leases}) != len(save_leases):
+        raise _RealDxmAuthorizationBindingError("SAVE_LEASE_COUNT_INVALID")
+    return {
+        "schema": "real_dxm_write_authorization.v1",
+        "scope_sha256": scope_sha256,
+        "approval_sha256": approval_sha256,
+        "approval_nonce_sha256": hashlib.sha256(
+            str(approval.get("nonce") or "").encode("utf-8")
+        ).hexdigest().upper(),
+        "approval_consumed_at": consumed_at,
+        "approval_expires_at": approval.get("expiresAt"),
+        "approved_by": approval.get("approvedBy"),
+        "ordered_product_ids": ordered_product_ids,
+        "save_leases": save_leases,
+        "publish_allowed": False,
+    }
 
 
 @dataclass(frozen=True)
@@ -3874,6 +4048,3725 @@ class Repository:
                 row['meta'] = loads(row.pop('meta_json'), {})
             return rows
 
+    def prepare_real_dxm_write_scope(
+        self,
+        scope: Mapping[str, Any],
+        *,
+        purpose: str = "general",
+        lineage_sha256: str | None = None,
+        lineage_discovery_receipt_sha256: str | None = None,
+        lineage_predecessor_scope_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one already-validated external scope without consuming it."""
+
+        normalized_lineage = _normalized_sha256(lineage_sha256)
+        normalized_discovery = _normalized_sha256(
+            lineage_discovery_receipt_sha256
+        )
+        normalized_predecessor = _normalized_sha256(
+            lineage_predecessor_scope_sha256
+        )
+        if (
+            purpose not in {"general", "discovery", "formal"}
+            or (
+                purpose == "formal"
+                and None
+                in {
+                    normalized_lineage,
+                    normalized_discovery,
+                    normalized_predecessor,
+                }
+            )
+            or (
+                purpose != "formal"
+                and any(
+                    value is not None
+                    for value in (
+                        normalized_lineage,
+                        normalized_discovery,
+                        normalized_predecessor,
+                    )
+                )
+            )
+        ):
+            return {
+                "ok": False,
+                "reason_code": "SCOPE_REJECTED",
+                "detail_code": "FORMAL_LINEAGE_INVALID",
+            }
+
+        scope_sha256 = str(scope.get("scopeSha256") or "")
+        snapshot = scope.get("snapshot") if isinstance(scope.get("snapshot"), Mapping) else {}
+        account = scope.get("account") if isinstance(scope.get("account"), Mapping) else {}
+        shop = scope.get("shop") if isinstance(scope.get("shop"), Mapping) else {}
+        products = scope.get("orderedProducts") if isinstance(scope.get("orderedProducts"), list) else []
+        task_id = int(snapshot.get("taskId") or 0)
+        snapshot_id = int(snapshot.get("snapshotId") or 0)
+        snapshot_sha256 = str(snapshot.get("snapshotSha256") or "")
+        nonce = str(scope.get("nonce") or "")
+        nonce_sha256 = hashlib.sha256(nonce.encode("utf-8")).hexdigest().upper()
+        order_sha256 = canonical_sha256(
+            [item.get("productId") for item in products if isinstance(item, Mapping)]
+        )
+        now = now_iso()
+        scope_json = dumps(dict(scope))
+        with connection() as conn:
+            migrate_real_dxm_write_scopes(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute(
+                "SELECT id, status FROM tasks WHERE id=? AND mode='batch_draft_save'",
+                (task_id,),
+            ).fetchone()
+            if not task:
+                conn.execute("ROLLBACK")
+                return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "TASK_NOT_FOUND"}
+            if task["status"] != "draft":
+                conn.execute("ROLLBACK")
+                return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "TASK_NOT_DRAFT"}
+            existing = conn.execute(
+                "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+                (scope_sha256,),
+            ).fetchone()
+            if existing:
+                same = bool(
+                    existing["scope_json"] == scope_json
+                    and int(existing["task_id"]) == task_id
+                    and existing["status"] == "prepared"
+                    and str(existing.get("purpose") or "general") == purpose
+                    and _normalized_sha256(existing.get("lineage_sha256"))
+                    == normalized_lineage
+                    and _normalized_sha256(
+                        existing.get("lineage_discovery_receipt_sha256")
+                    )
+                    == normalized_discovery
+                    and _normalized_sha256(
+                        existing.get("lineage_predecessor_scope_sha256")
+                    )
+                    == normalized_predecessor
+                )
+                conn.execute("ROLLBACK")
+                return {
+                    "ok": same,
+                    "reason_code": "OK" if same else "SCOPE_REJECTED",
+                    "detail_code": "SCOPE_ALREADY_PREPARED" if same else "SCOPE_REPLAY_OR_DRIFT",
+                    "scope_sha256": scope_sha256,
+                    "status": existing["status"],
+                }
+            active = conn.execute(
+                """
+                SELECT * FROM real_dxm_write_scopes
+                 WHERE task_id=? AND status='prepared'
+                 ORDER BY id DESC LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+            if active:
+                try:
+                    active_expiry = datetime.fromisoformat(
+                        str(active["expires_at"]).replace("Z", "+00:00")
+                    )
+                    if active_expiry.tzinfo is None:
+                        active_expiry = active_expiry.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError):
+                    active_expiry = None
+                if active_expiry is None or datetime.now(timezone.utc) < active_expiry:
+                    conn.execute("ROLLBACK")
+                    return {
+                        "ok": False,
+                        "reason_code": "SCOPE_REJECTED",
+                        "detail_code": "TASK_ACTIVE_SCOPE_CONFLICT",
+                        "scope_sha256": active["scope_sha256"],
+                        "status": active["status"],
+                    }
+                conn.execute(
+                    """
+                    UPDATE real_dxm_write_scopes
+                       SET status='expired', updated_at=?
+                     WHERE id=? AND status='prepared'
+                    """,
+                    (now, active["id"]),
+                )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO real_dxm_write_scopes (
+                        scope_sha256, task_id, snapshot_id, snapshot_sha256,
+                        account_ref_hash, shop_id, product_order_sha256,
+                        scope_nonce_sha256, scope_json, expires_at, status,
+                        purpose, lineage_sha256,
+                        lineage_discovery_receipt_sha256,
+                        lineage_predecessor_scope_sha256,
+                        prepared_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scope_sha256,
+                        task_id,
+                        snapshot_id,
+                        snapshot_sha256,
+                        str(account.get("accountContextHash") or ""),
+                        str(shop.get("shopId") or ""),
+                        order_sha256,
+                        nonce_sha256,
+                        scope_json,
+                        str(scope.get("expiresAt") or ""),
+                        purpose,
+                        normalized_lineage,
+                        normalized_discovery,
+                        normalized_predecessor,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                conn.execute("ROLLBACK")
+                return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "SCOPE_NONCE_REPLAY"}
+            conn.execute("COMMIT")
+        return {
+            "ok": True,
+            "reason_code": "OK",
+            "scope_sha256": scope_sha256,
+            "status": "prepared",
+            "purpose": purpose,
+            "lineage_sha256": normalized_lineage,
+            "lineage_discovery_receipt_sha256": normalized_discovery,
+            "lineage_predecessor_scope_sha256": normalized_predecessor,
+        }
+
+    def get_prepared_real_dxm_write_scope_for_task(
+        self,
+        task_id: int,
+    ) -> dict[str, Any] | None:
+        """Return the sole active prepared scope candidate for idempotent Prepare."""
+
+        with connection() as conn:
+            migrate_real_dxm_write_scopes(conn)
+            row = conn.execute(
+                """
+                SELECT * FROM real_dxm_write_scopes
+                 WHERE task_id=? AND status='prepared'
+                 ORDER BY id DESC LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["scope"] = loads(result.pop("scope_json"), {})
+            return result
+
+    def consume_real_dxm_write_approval(
+        self,
+        *,
+        scope: Mapping[str, Any],
+        approval: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Low-level persistence contract retained for isolated contract tests.
+
+        The consume and task-payload binding share one SQLite transaction.  A
+        later start failure leaves the approval consumed, which is fail-closed
+        and requires a newly approved scope instead of replay.  No public API
+        uses this partial operation; production Path B start must call
+        :meth:`approve_and_start_real_dxm_path_b`.
+        """
+
+        scope_sha256 = str(scope.get("scopeSha256") or "")
+        approval_sha256 = str(approval.get("approvalSha256") or "")
+        snapshot = scope.get("snapshot") if isinstance(scope.get("snapshot"), Mapping) else {}
+        task_id = int(snapshot.get("taskId") or 0)
+        now = now_iso()
+        try:
+            real_authorization = _derive_real_dxm_write_authorization_binding(
+                scope,
+                approval,
+                consumed_at=now,
+            )
+        except _RealDxmAuthorizationBindingError:
+            return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "SAVE_LEASE_COUNT_INVALID"}
+        approval_nonce_hash = real_authorization["approval_nonce_sha256"]
+        save_leases = real_authorization["save_leases"]
+        with connection() as conn:
+            migrate_real_dxm_write_scopes(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+                (scope_sha256,),
+            ).fetchone()
+            if not row or row["status"] != "prepared" or int(row["task_id"]) != task_id:
+                conn.execute("ROLLBACK")
+                return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "SCOPE_NOT_PREPARED_OR_CONSUMED"}
+            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task or task["status"] != "draft":
+                conn.execute("ROLLBACK")
+                return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "TASK_NOT_DRAFT"}
+            payload = loads(task["payload_json"], {})
+            if not isinstance(payload, dict) or payload.get("real_dxm_write_authorization") is not None:
+                conn.execute("ROLLBACK")
+                return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "TASK_SCOPE_ALREADY_BOUND"}
+            payload["real_dxm_write_authorization"] = real_authorization
+            updated = conn.execute(
+                """
+                UPDATE real_dxm_write_scopes
+                   SET status='consumed', approval_sha256=?,
+                       approval_nonce_sha256=?, approval_stage=?,
+                       approval_consumed_at=?, updated_at=?
+                 WHERE scope_sha256=? AND status='prepared'
+                """,
+                (
+                    approval_sha256,
+                    approval_nonce_hash,
+                    str(approval.get("stage") or ""),
+                    now,
+                    now,
+                    scope_sha256,
+                ),
+            )
+            if updated.rowcount != 1:
+                conn.execute("ROLLBACK")
+                return {"ok": False, "reason_code": "SCOPE_REJECTED", "detail_code": "APPROVAL_REPLAY"}
+            conn.execute(
+                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=? AND status='draft'",
+                (dumps(payload), now, task_id),
+            )
+            conn.execute("COMMIT")
+        return {
+            "ok": True,
+            "reason_code": "OK",
+            "scope_sha256": scope_sha256,
+            "approval_sha256": approval_sha256,
+            "save_leases": save_leases,
+        }
+
+    def approve_and_start_real_dxm_path_b(
+        self,
+        task_id: int,
+        *,
+        scope: Mapping[str, Any],
+        approval: Mapping[str, Any],
+        token: str,
+        confirmation: str,
+        approved_by: str,
+        lease_id: str,
+        predecessor_scope_sha256: str | None = None,
+        discovery_receipt_sha256: str | None = None,
+        _discovery_context: Mapping[str, Any] | None = None,
+    ) -> AuthorizationLeaseResult:
+        """Consume the external approval and start Path B in one transaction.
+
+        No scope, task payload, or manual-approval state is committed unless
+        every invariant and both compare-and-swap updates succeed.  In
+        particular, an approval can no longer be stranded as ``consumed`` on a
+        draft task when the subsequent task start fails.
+        """
+
+        if (
+            isinstance(task_id, bool)
+            or not isinstance(task_id, int)
+            or task_id <= 0
+            or not isinstance(token, str)
+            or not token
+            or confirmation != BATCH_DRAFT_SAVE_CONFIRMATION
+            or not isinstance(approved_by, str)
+            or not approved_by.strip()
+            or not isinstance(lease_id, str)
+            or not lease_id.strip()
+        ):
+            return AuthorizationLeaseResult(
+                False,
+                "TASK_APPROVAL_INPUT_INVALID",
+                self.get_task(task_id) if isinstance(task_id, int) and task_id > 0 else None,
+                None,
+            )
+
+        discovery_context: dict[str, Any] | None = None
+        raw_predecessor = (
+            predecessor_scope_sha256.strip()
+            if isinstance(predecessor_scope_sha256, str)
+            else ""
+        )
+        raw_discovery_receipt = (
+            discovery_receipt_sha256.strip()
+            if isinstance(discovery_receipt_sha256, str)
+            else ""
+        )
+        formal_lineage_requested = bool(
+            raw_predecessor and raw_discovery_receipt
+        )
+        normalized_predecessor = _normalized_sha256(raw_predecessor)
+        normalized_discovery_receipt = _normalized_sha256(
+            raw_discovery_receipt
+        )
+        if (
+            bool(raw_predecessor) != bool(raw_discovery_receipt)
+            or (
+                formal_lineage_requested
+                and (
+                    normalized_predecessor is None
+                    or normalized_discovery_receipt is None
+                    or normalized_predecessor
+                    == normalized_discovery_receipt
+                )
+            )
+        ):
+            return AuthorizationLeaseResult(
+                False,
+                "FORMAL_LINEAGE_INPUT_INVALID",
+                self.get_task(task_id),
+                None,
+            )
+        if _discovery_context is not None:
+            if formal_lineage_requested:
+                return AuthorizationLeaseResult(
+                    False,
+                    "DISCOVERY_FORMAL_LINEAGE_FORBIDDEN",
+                    self.get_task(task_id),
+                    None,
+                )
+            if not isinstance(_discovery_context, Mapping) or set(
+                _discovery_context
+            ) != {
+                "target_product_id",
+                "discovery_key_sha256",
+                "request_sha256",
+            }:
+                return AuthorizationLeaseResult(
+                    False,
+                    "DISCOVERY_START_INPUT_INVALID",
+                    self.get_task(task_id),
+                    None,
+                )
+            target_product_id = _discovery_context.get("target_product_id")
+            discovery_key_sha256 = _normalized_sha256(
+                _discovery_context.get("discovery_key_sha256")
+            )
+            request_sha256 = _normalized_sha256(
+                _discovery_context.get("request_sha256")
+            )
+            if (
+                isinstance(target_product_id, bool)
+                or not isinstance(target_product_id, int)
+                or target_product_id <= 0
+                or discovery_key_sha256 is None
+                or request_sha256 is None
+            ):
+                return AuthorizationLeaseResult(
+                    False,
+                    "DISCOVERY_START_INPUT_INVALID",
+                    self.get_task(task_id),
+                    None,
+                )
+            discovery_context = {
+                "target_product_id": target_product_id,
+                "discovery_key_sha256": discovery_key_sha256,
+                "request_sha256": request_sha256,
+            }
+        if discovery_context is None and not formal_lineage_requested:
+            return AuthorizationLeaseResult(
+                False,
+                "FORMAL_LINEAGE_REQUIRED",
+                self.get_task(task_id),
+                None,
+            )
+
+        next_approval: dict[str, Any] | None = None
+        try:
+            with connection() as conn:
+                migrate_real_dxm_write_scopes(conn)
+                if discovery_context is not None or formal_lineage_requested:
+                    migrate_real_dxm_path_b_discovery_receipts(conn)
+                conn.execute("BEGIN IMMEDIATE")
+                transaction_time = datetime.now(timezone.utc)
+                transaction_time_text = transaction_time.isoformat()
+                try:
+                    authorization = validate_real_dxm_write_authorization(
+                        scope=scope,
+                        approval=approval,
+                        now=transaction_time,
+                    )
+                except RealDxmWriteScopeError as exc:
+                    raise _AtomicPathBStartRejected(exc.detail_code) from exc
+                canonical_scope = authorization["scope"]
+                canonical_approval = authorization["approval"]
+                snapshot = canonical_scope["snapshot"]
+                if snapshot["taskId"] != task_id:
+                    raise _AtomicPathBStartRejected("SCOPE_TASK_MISMATCH")
+                if not hmac.compare_digest(
+                    canonical_approval["approvedBy"].encode("utf-8"),
+                    approved_by.strip().encode("utf-8"),
+                ):
+                    raise _AtomicPathBStartRejected("APPROVER_MISMATCH")
+
+                try:
+                    real_authorization = _derive_real_dxm_write_authorization_binding(
+                        canonical_scope,
+                        canonical_approval,
+                        consumed_at=transaction_time_text,
+                    )
+                except _RealDxmAuthorizationBindingError as exc:
+                    raise _AtomicPathBStartRejected(exc.reason_code) from exc
+
+                scope_sha256 = canonical_scope["scopeSha256"]
+                stored_scope_json = dumps(canonical_scope)
+                scope_row = conn.execute(
+                    "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+                    (scope_sha256,),
+                ).fetchone()
+                expected_order_sha256 = canonical_sha256(
+                    [item["productId"] for item in canonical_scope["orderedProducts"]]
+                )
+                expected_scope_nonce_sha256 = hashlib.sha256(
+                    canonical_scope["nonce"].encode("utf-8")
+                ).hexdigest().upper()
+                if (
+                    not scope_row
+                    or scope_row["status"] != "prepared"
+                    or int(scope_row["task_id"]) != task_id
+                    or scope_row["scope_json"] != stored_scope_json
+                    or int(scope_row["snapshot_id"]) != snapshot["snapshotId"]
+                    or scope_row["snapshot_sha256"] != snapshot["snapshotSha256"]
+                    or scope_row["account_ref_hash"]
+                    != canonical_scope["account"]["accountContextHash"]
+                    or int(scope_row["shop_id"]) != canonical_scope["shop"]["shopId"]
+                    or scope_row["product_order_sha256"] != expected_order_sha256
+                    or scope_row["scope_nonce_sha256"] != expected_scope_nonce_sha256
+                    or scope_row["expires_at"] != canonical_scope["expiresAt"]
+                ):
+                    raise _AtomicPathBStartRejected("SCOPE_NOT_PREPARED_OR_CONSUMED")
+                if discovery_context is not None and (
+                    str(scope_row.get("purpose") or "general")
+                    not in {"general", "discovery"}
+                    or scope_row.get("lineage_discovery_receipt_sha256") is not None
+                    or scope_row.get("lineage_predecessor_scope_sha256") is not None
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SCOPE_PURPOSE_INVALID"
+                    )
+                formal_lineage: dict[str, Any] | None = None
+                if formal_lineage_requested:
+                    if (
+                        str(scope_row.get("purpose") or "") != "formal"
+                        or _normalized_sha256(
+                            scope_row.get(
+                                "lineage_discovery_receipt_sha256"
+                            )
+                        )
+                        != normalized_discovery_receipt
+                        or _normalized_sha256(
+                            scope_row.get(
+                                "lineage_predecessor_scope_sha256"
+                            )
+                        )
+                        != normalized_predecessor
+                        or _normalized_sha256(
+                            scope_row.get("lineage_sha256")
+                        )
+                        is None
+                        or scope_sha256 == normalized_predecessor
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_LINEAGE_SCOPE_MISMATCH"
+                        )
+                    discovery_attempt = conn.execute(
+                        """
+                        SELECT * FROM real_dxm_path_b_discovery_attempts
+                         WHERE discovery_receipt_sha256=? AND status='sealed'
+                        """,
+                        (normalized_discovery_receipt,),
+                    ).fetchone()
+                    discovery_receipt_row = conn.execute(
+                        """
+                        SELECT * FROM real_dxm_path_b_discovery_receipts
+                         WHERE discovery_receipt_sha256=? AND status='sealed'
+                        """,
+                        (normalized_discovery_receipt,),
+                    ).fetchone()
+                    predecessor_scope = conn.execute(
+                        """
+                        SELECT * FROM real_dxm_write_scopes
+                         WHERE scope_sha256=?
+                           AND status='discovery_sealed'
+                           AND purpose='discovery'
+                        """,
+                        (normalized_predecessor,),
+                    ).fetchone()
+                    discovery_task_row = (
+                        conn.execute(
+                            """
+                            SELECT * FROM tasks WHERE id=?
+                            """,
+                            (discovery_attempt["task_id"],),
+                        ).fetchone()
+                        if discovery_attempt
+                        else None
+                    )
+                    if (
+                        not discovery_attempt
+                        or not discovery_receipt_row
+                        or not predecessor_scope
+                        or not discovery_task_row
+                        or str(discovery_task_row.get("status") or "")
+                        != "stopped"
+                        or int(
+                            discovery_receipt_row.get("attempt_id") or 0
+                        )
+                        != int(discovery_attempt.get("id") or 0)
+                        or _normalized_sha256(
+                            discovery_attempt.get("scope_sha256")
+                        )
+                        != normalized_predecessor
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_RECEIPT_NOT_SEALED"
+                        )
+                    discovery_task_payload = loads(
+                        discovery_task_row.get("payload_json"), None
+                    )
+                    try:
+                        discovery_profile = (
+                            validate_path_b_save1_discovery_profile(
+                                discovery_task_payload.get(
+                                    PATH_B_SAVE1_DISCOVERY_PROFILE_KEY
+                                )
+                                if isinstance(
+                                    discovery_task_payload, Mapping
+                                )
+                                else None
+                            )
+                        )
+                    except BatchCommandContractError as exc:
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_PROFILE_INVALID"
+                        ) from exc
+                    if (
+                        canonical_contract_sha256(discovery_profile)
+                        != _normalized_sha256(
+                            discovery_attempt.get("profile_sha256")
+                        )
+                        or discovery_profile["target_task_id"]
+                        != int(discovery_attempt["task_id"])
+                        or discovery_profile["target_product_id"]
+                        != int(discovery_attempt.get("product_id") or 0)
+                        or discovery_profile["scope_sha256"]
+                        != normalized_predecessor
+                        or discovery_profile["discovery_key_sha256"]
+                        != _normalized_sha256(
+                            discovery_attempt.get(
+                                "discovery_key_sha256"
+                            )
+                        )
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_PROFILE_INVALID"
+                        )
+                    discovery_receipt = loads(
+                        discovery_receipt_row.get("receipt_json"), None
+                    )
+                    if not isinstance(discovery_receipt, Mapping):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_RECEIPT_INVALID"
+                        )
+                    receipt_body = {
+                        key: value
+                        for key, value in discovery_receipt.items()
+                        if key != "discovery_receipt_sha256"
+                    }
+                    recomputed_receipt_sha256 = canonical_contract_sha256(
+                        receipt_body
+                    )
+                    if (
+                        discovery_receipt.get("schema_version")
+                        != _PATH_B_DISCOVERY_RECEIPT_SCHEMA
+                        or _normalized_sha256(
+                            discovery_receipt.get(
+                                "discovery_receipt_sha256"
+                            )
+                        )
+                        != normalized_discovery_receipt
+                        or recomputed_receipt_sha256
+                        != normalized_discovery_receipt
+                        or _normalized_sha256(
+                            discovery_receipt_row.get(
+                                "discovery_receipt_sha256"
+                            )
+                        )
+                        != normalized_discovery_receipt
+                        or _normalized_sha256(
+                            discovery_attempt.get(
+                                "discovery_receipt_sha256"
+                            )
+                        )
+                        != normalized_discovery_receipt
+                        or _normalized_sha256(
+                            discovery_receipt.get("scope_sha256")
+                        )
+                        != normalized_predecessor
+                        or int(discovery_receipt.get("task_id") or 0)
+                        != int(discovery_attempt.get("task_id") or 0)
+                        or int(discovery_receipt.get("job_id") or 0)
+                        != int(discovery_attempt.get("job_id") or 0)
+                        or int(discovery_receipt.get("product_id") or 0)
+                        != int(discovery_attempt.get("product_id") or 0)
+                        or _normalized_sha256(
+                            discovery_receipt.get("profile_sha256")
+                        )
+                        != _normalized_sha256(
+                            discovery_attempt.get("profile_sha256")
+                        )
+                        or _normalized_sha256(
+                            discovery_receipt.get(
+                                "discovery_key_sha256"
+                            )
+                        )
+                        != _normalized_sha256(
+                            discovery_attempt.get(
+                                "discovery_key_sha256"
+                            )
+                        )
+                        or discovery_receipt.get(
+                            "physical_mutation_count"
+                        )
+                        != 1
+                        or discovery_receipt.get("save1_count") != 1
+                        or discovery_receipt.get("save2_count") != 0
+                        or discovery_receipt.get(
+                            "other_product_mutation_count"
+                        )
+                        != 0
+                        or discovery_receipt.get("publish_request_count")
+                        != 0
+                        or discovery_receipt.get("published") is not False
+                        or discovery_receipt.get("unknown_count") != 0
+                        or int(
+                            discovery_receipt_row.get("task_id") or 0
+                        )
+                        != int(discovery_receipt.get("task_id") or 0)
+                        or int(
+                            discovery_receipt_row.get("job_id") or 0
+                        )
+                        != int(discovery_receipt.get("job_id") or 0)
+                        or int(
+                            discovery_receipt_row.get("product_id") or 0
+                        )
+                        != int(discovery_receipt.get("product_id") or 0)
+                        or _normalized_sha256(
+                            discovery_receipt_row.get("scope_sha256")
+                        )
+                        != _normalized_sha256(
+                            discovery_receipt.get("scope_sha256")
+                        )
+                        or _normalized_sha256(
+                            discovery_receipt_row.get("profile_sha256")
+                        )
+                        != _normalized_sha256(
+                            discovery_receipt.get("profile_sha256")
+                        )
+                        or _normalized_sha256(
+                            discovery_receipt_row.get(
+                                "field_readbacks_sha256"
+                            )
+                        )
+                        != _normalized_sha256(
+                            discovery_receipt.get(
+                                "field_readbacks_sha256"
+                            )
+                        )
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_RECEIPT_INVALID"
+                        )
+                    try:
+                        self._validate_sealed_discovery_authority(
+                            conn,
+                            attempt=discovery_attempt,
+                            receipt_row=discovery_receipt_row,
+                            receipt=discovery_receipt,
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_AUTHORITY_DRIFT"
+                        ) from exc
+                    predecessor_scope_payload = loads(
+                        predecessor_scope.get("scope_json"), None
+                    )
+                    if not isinstance(predecessor_scope_payload, Mapping):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_PREDECESSOR_SCOPE_INVALID"
+                        )
+                    try:
+                        rebuilt_discovery_attempt_identity = (
+                            canonical_contract_sha256(
+                                {
+                                    "schema": "dxm.real-dxm-path-b.discovery-attempt-identity.v1",
+                                    "discovery_key_sha256": discovery_profile[
+                                        "discovery_key_sha256"
+                                    ],
+                                    "task_id": int(
+                                        discovery_attempt["task_id"]
+                                    ),
+                                    "snapshot_sha256": predecessor_scope_payload[
+                                        "snapshot"
+                                    ]["snapshotSha256"],
+                                    "scope_sha256": normalized_predecessor,
+                                    "approval_sha256": discovery_profile[
+                                        "approval_sha256"
+                                    ],
+                                    "target_product_ordinal": 1,
+                                    "target_product_id": discovery_profile[
+                                        "target_product_id"
+                                    ],
+                                    "profile_sha256": canonical_contract_sha256(
+                                        discovery_profile
+                                    ),
+                                    "account_ref_hash": predecessor_scope_payload[
+                                        "account"
+                                    ]["accountContextHash"],
+                                    "shop_id": predecessor_scope_payload[
+                                        "shop"
+                                    ]["shopId"],
+                                    "runtime_instance_id": predecessor_scope_payload[
+                                        "runtime"
+                                    ]["runtimeInstanceId"],
+                                    "browser_session_id": predecessor_scope_payload[
+                                        "runtime"
+                                    ]["browserSessionId"],
+                                    "git_head": predecessor_scope_payload[
+                                        "git"
+                                    ]["head"],
+                                    "worktree": predecessor_scope_payload[
+                                        "worktree"
+                                    ],
+                                }
+                            )
+                        )
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_ATTEMPT_IDENTITY_INVALID"
+                        ) from exc
+                    if rebuilt_discovery_attempt_identity != _normalized_sha256(
+                        discovery_attempt.get("attempt_identity_sha256")
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_ATTEMPT_IDENTITY_INVALID"
+                        )
+                    try:
+                        discovery_readbacks = [
+                            item.to_dict()
+                            for item in validated_field_readbacks_from_payload(
+                                discovery_receipt.get("field_readbacks"),
+                                require_nonempty=True,
+                                reason_prefix="DISCOVERY_SAVE1",
+                            )
+                        ]
+                    except ReceiptValidationError as exc:
+                        raise _AtomicPathBStartRejected(exc.reason_code) from exc
+                    discovery_plan = (
+                        discovery_task_payload.get("plan_snapshot")
+                        if isinstance(discovery_task_payload, Mapping)
+                        else None
+                    )
+                    discovery_items = (
+                        discovery_plan.get("item_snapshots")
+                        if isinstance(discovery_plan, Mapping)
+                        else None
+                    )
+                    matching_discovery_items = [
+                        item
+                        for item in discovery_items or []
+                        if isinstance(item, Mapping)
+                        and str(item.get("product_id") or "")
+                        == str(discovery_profile["target_product_id"])
+                    ]
+                    discovery_stage_facts = (
+                        matching_discovery_items[0].get(
+                            "real_write_stage_facts"
+                        )
+                        if len(matching_discovery_items) == 1
+                        and isinstance(
+                            matching_discovery_items[0].get(
+                                "real_write_stage_facts"
+                            ),
+                            Mapping,
+                        )
+                        else None
+                    )
+                    discovery_save1_facts = (
+                        discovery_stage_facts.get("SAVE1")
+                        if isinstance(discovery_stage_facts, Mapping)
+                        else None
+                    )
+                    discovery_expected_after = (
+                        {
+                            str(item.get("field_key") or ""):
+                            _normalized_sha256(
+                                item.get("expected_sha256")
+                            )
+                            for item in discovery_save1_facts
+                            if isinstance(item, Mapping)
+                        }
+                        if isinstance(discovery_save1_facts, list)
+                        and discovery_save1_facts
+                        else None
+                    )
+                    discovery_actual_after = {
+                        str(item["field_key"]): canonical_contract_sha256(
+                            item.get("after_value")
+                        )
+                        for item in discovery_readbacks
+                    }
+                    if (
+                        not isinstance(discovery_expected_after, dict)
+                        or "" in discovery_expected_after
+                        or None in discovery_expected_after.values()
+                        or discovery_expected_after
+                        != discovery_actual_after
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_READBACK_AUTHORITY_DRIFT"
+                        )
+                    discovery_order = discovery_receipt.get(
+                        "ordered_product_ids"
+                    )
+                    formal_order = [
+                        item["productId"]
+                        for item in canonical_scope["orderedProducts"]
+                    ]
+                    identity_pairs = (
+                        (
+                            canonical_scope["account"][
+                                "accountContextHash"
+                            ],
+                            discovery_receipt.get("account_ref_hash"),
+                        ),
+                        (
+                            canonical_scope["shop"]["shopId"],
+                            discovery_receipt.get("shop_id"),
+                        ),
+                        (
+                            canonical_scope["shop"]["shopName"],
+                            discovery_receipt.get("shop_name"),
+                        ),
+                        (
+                            canonical_scope["git"]["head"],
+                            discovery_receipt.get("git_head"),
+                        ),
+                        (
+                            canonical_scope["worktree"],
+                            discovery_receipt.get("worktree"),
+                        ),
+                        (
+                            canonical_scope["runtime"],
+                            discovery_receipt.get("runtime"),
+                        ),
+                        (formal_order, discovery_order),
+                        (
+                            predecessor_scope_payload["account"][
+                                "accountContextHash"
+                            ],
+                            discovery_receipt.get("account_ref_hash"),
+                        ),
+                        (
+                            predecessor_scope_payload["shop"]["shopId"],
+                            discovery_receipt.get("shop_id"),
+                        ),
+                        (
+                            predecessor_scope_payload["shop"]["shopName"],
+                            discovery_receipt.get("shop_name"),
+                        ),
+                        (
+                            predecessor_scope_payload["git"]["head"],
+                            discovery_receipt.get("git_head"),
+                        ),
+                        (
+                            predecessor_scope_payload["worktree"],
+                            discovery_receipt.get("worktree"),
+                        ),
+                        (
+                            predecessor_scope_payload["runtime"],
+                            discovery_receipt.get("runtime"),
+                        ),
+                    )
+                    if (
+                        len(formal_order) != 3
+                        or len(set(formal_order)) != 3
+                        or any(
+                            observed != expected
+                            for observed, expected in identity_pairs
+                        )
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_IDENTITY_DRIFT"
+                        )
+                    if (
+                        int(discovery_receipt.get("task_id") or 0)
+                        == task_id
+                        or int(
+                            discovery_receipt.get("snapshot_id") or 0
+                        )
+                        == int(snapshot["snapshotId"])
+                        or _normalized_sha256(
+                            discovery_receipt.get("snapshot_sha256")
+                        )
+                        == _normalized_sha256(snapshot["snapshotSha256"])
+                        or _normalized_sha256(
+                            discovery_receipt.get("approval_sha256")
+                        )
+                        == _normalized_sha256(
+                            canonical_approval["approvalSha256"]
+                        )
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_TASK_SNAPSHOT_APPROVAL_NOT_FRESH"
+                        )
+                    first_product = canonical_scope["orderedProducts"][0]
+                    formal_save1_preimages = {
+                        str(item.get("field") or ""): _normalized_sha256(
+                            item.get("preimageSha256")
+                        )
+                        for item in first_product.get("allowedFields", [])
+                        if isinstance(item, Mapping)
+                        and item.get("saveStage") == "SAVE1"
+                    }
+                    discovery_after_values = {
+                        str(item["field_key"]): canonical_contract_sha256(
+                            item.get("after_value")
+                        )
+                        for item in discovery_readbacks
+                    }
+                    if (
+                        not formal_save1_preimages
+                        or "" in formal_save1_preimages
+                        or None in formal_save1_preimages.values()
+                        or formal_save1_preimages
+                        != discovery_after_values
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_DISCOVERY_PREIMAGE_MISMATCH"
+                        )
+                    formal_lineage_hash_body = {
+                        "schemaVersion": PATH_B_FORMAL_LINEAGE_SCHEMA,
+                        "predecessorScopeSha256": normalized_predecessor,
+                        "discoveryReceiptSha256": (
+                            normalized_discovery_receipt
+                        ),
+                        "formalScopeSha256": scope_sha256,
+                        "formalTaskId": task_id,
+                        "formalSnapshotId": snapshot["snapshotId"],
+                        "formalSnapshotSha256": snapshot[
+                            "snapshotSha256"
+                        ],
+                    }
+                    formal_lineage_sha256 = canonical_contract_sha256(
+                        formal_lineage_hash_body
+                    )
+                    if formal_lineage_sha256 != _normalized_sha256(
+                        scope_row.get("lineage_sha256")
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_LINEAGE_HASH_MISMATCH"
+                        )
+                    try:
+                        formal_lineage = validate_path_b_formal_lineage(
+                            {
+                                "schema": PATH_B_FORMAL_LINEAGE_SCHEMA,
+                                "predecessor_scope_sha256": (
+                                    normalized_predecessor
+                                ),
+                                "discovery_receipt_sha256": (
+                                    normalized_discovery_receipt
+                                ),
+                                "formal_scope_sha256": scope_sha256,
+                                "lineage_sha256": formal_lineage_sha256,
+                                "discovery_task_id": int(
+                                    discovery_receipt["task_id"]
+                                ),
+                                "discovery_snapshot_id": int(
+                                    discovery_receipt["snapshot_id"]
+                                ),
+                                "discovery_snapshot_sha256": (
+                                    discovery_receipt[
+                                        "snapshot_sha256"
+                                    ]
+                                ),
+                                "formal_task_id": task_id,
+                                "formal_snapshot_id": snapshot[
+                                    "snapshotId"
+                                ],
+                                "formal_snapshot_sha256": snapshot[
+                                    "snapshotSha256"
+                                ],
+                            }
+                        )
+                    except BatchCommandContractError as exc:
+                        raise _AtomicPathBStartRejected(
+                            exc.reason_code
+                        ) from exc
+                elif discovery_context is None and (
+                    str(scope_row.get("purpose") or "general") == "formal"
+                    or scope_row.get("lineage_sha256") is not None
+                    or scope_row.get(
+                        "lineage_discovery_receipt_sha256"
+                    )
+                    is not None
+                    or scope_row.get("lineage_predecessor_scope_sha256")
+                    is not None
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "FORMAL_LINEAGE_REQUIRED"
+                    )
+
+                task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+                if not task:
+                    raise _AtomicPathBStartRejected("AUTH_TASK_NOT_FOUND")
+                if task["status"] != "draft":
+                    raise _AtomicPathBStartRejected("AUTH_TASK_NOT_DRAFT")
+                if task["mode"] != "batch_draft_save":
+                    raise _AtomicPathBStartRejected("AUTH_TASK_MODE_MISMATCH")
+                if task["publish_scene"] != BATCH_DRAFT_SAVE_PUBLISH_SCENE:
+                    raise _AtomicPathBStartRejected("PUBLISH_SCENE_MISMATCH")
+                if self._active_edit_batch_exists(conn):
+                    raise _AtomicPathBStartRejected("AUTH_EDIT_BATCH_ACTIVE")
+                if self._other_running_task_exists(conn, task_id):
+                    raise _AtomicPathBStartRejected("AUTH_ANOTHER_TASK_ACTIVE")
+
+                payload = loads(task["payload_json"], {})
+                plan = payload.get("plan_snapshot") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or not isinstance(plan, Mapping):
+                    raise _AtomicPathBStartRejected("BATCH_PLAN_SNAPSHOT_REQUIRED")
+                frozen_row = conn.execute(
+                    "SELECT * FROM plan_snapshots WHERE id=?",
+                    (snapshot["snapshotId"],),
+                ).fetchone()
+                stored_plan = (
+                    loads(frozen_row["snapshot_json"], {})
+                    if frozen_row and isinstance(frozen_row.get("snapshot_json"), str)
+                    else None
+                )
+                if (
+                    not frozen_row
+                    or int(frozen_row.get("task_id") or 0) != task_id
+                    or frozen_row.get("snapshot_hash") != snapshot["snapshotSha256"]
+                    or not isinstance(stored_plan, dict)
+                    or dict(plan) != stored_plan
+                ):
+                    raise _AtomicPathBStartRejected("BATCH_PLAN_SNAPSHOT_EMBEDDED_DRIFT")
+                if formal_lineage_requested:
+                    def _formal_artifact_time(value: Any) -> datetime:
+                        if not isinstance(value, str) or not value.strip():
+                            raise ValueError("formal artifact timestamp is missing")
+                        parsed = datetime.fromisoformat(
+                            value.strip().replace("Z", "+00:00")
+                        )
+                        if parsed.tzinfo is None or parsed.utcoffset() is None:
+                            raise ValueError(
+                                "formal artifact timestamp must include a timezone"
+                            )
+                        return parsed.astimezone(timezone.utc)
+
+                    try:
+                        discovery_sealed_at = _formal_artifact_time(
+                            discovery_receipt.get("sealed_at")
+                        )
+                        formal_snapshot_created_at = _formal_artifact_time(
+                            frozen_row.get("created_at")
+                        )
+                        formal_task_created_at = _formal_artifact_time(
+                            task.get("created_at")
+                        )
+                        formal_scope_issued_at = _formal_artifact_time(
+                            canonical_scope.get("issuedAt")
+                        )
+                        formal_scope_prepared_at = _formal_artifact_time(
+                            scope_row.get("prepared_at")
+                        )
+                        formal_approval_approved_at = _formal_artifact_time(
+                            canonical_approval.get("approvedAt")
+                        )
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_ARTIFACTS_NOT_AFTER_DISCOVERY"
+                        ) from exc
+                    formal_artifact_times = (
+                        formal_snapshot_created_at,
+                        formal_task_created_at,
+                        formal_scope_issued_at,
+                        formal_scope_prepared_at,
+                        formal_approval_approved_at,
+                    )
+                    scope_clock_precision_drift = (
+                        formal_scope_issued_at - formal_scope_prepared_at
+                    )
+                    if (
+                        any(
+                            timestamp <= discovery_sealed_at
+                            for timestamp in formal_artifact_times
+                        )
+                        or formal_snapshot_created_at > formal_task_created_at
+                        or formal_task_created_at
+                        > min(
+                            formal_scope_issued_at,
+                            formal_scope_prepared_at,
+                        )
+                        or (
+                            formal_scope_prepared_at < formal_scope_issued_at
+                            and scope_clock_precision_drift
+                            >= timedelta(seconds=1)
+                        )
+                        or max(
+                            formal_scope_issued_at,
+                            formal_scope_prepared_at,
+                        )
+                        > formal_approval_approved_at
+                        or formal_approval_approved_at > transaction_time
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "FORMAL_ARTIFACTS_NOT_AFTER_DISCOVERY"
+                        )
+                if payload.get("real_dxm_write_authorization") is not None:
+                    raise _AtomicPathBStartRejected("TASK_SCOPE_ALREADY_BOUND")
+                if isinstance(payload.get("manual_approval"), Mapping):
+                    raise _AtomicPathBStartRejected("TASK_APPROVAL_ALREADY_ISSUED")
+                ordered_product_ids = real_authorization["ordered_product_ids"]
+                job_rows = conn.execute(
+                    "SELECT * FROM jobs WHERE task_id=? ORDER BY id",
+                    (task_id,),
+                ).fetchall()
+                job_product_ids = [int(row["product_id"]) for row in job_rows]
+                plan_session = (
+                    plan.get("session_context")
+                    if isinstance(plan.get("session_context"), Mapping)
+                    else {}
+                )
+                if (
+                    str(payload.get("path") or "").strip().upper() != "B"
+                    or str(plan.get("path") or "").strip().upper() != "B"
+                    or payload.get("publish_allowed") is not False
+                    or plan.get("publish_allowed") is not False
+                    or int(task.get("store_id") or 0) != canonical_scope["shop"]["shopId"]
+                    or int(payload.get("plan_snapshot_id") or 0) != snapshot["snapshotId"]
+                    or str(payload.get("plan_snapshot_hash") or "").upper()
+                    != snapshot["snapshotSha256"]
+                    or str(plan.get("snapshot_hash") or "").upper()
+                    != snapshot["snapshotSha256"]
+                    or str(plan_session.get("account_ref_hash") or "")
+                    != canonical_scope["account"]["accountContextHash"]
+                    or int(plan_session.get("shop_id") or 0)
+                    != canonical_scope["shop"]["shopId"]
+                    or str(plan_session.get("shop_name") or "")
+                    != canonical_scope["shop"]["shopName"]
+                    or payload.get("product_ids") != ordered_product_ids
+                    or job_product_ids != ordered_product_ids
+                    or int(task.get("total_jobs") or 0) != len(ordered_product_ids)
+                ):
+                    raise _AtomicPathBStartRejected("TASK_SCOPE_BINDING_MISMATCH")
+                if discovery_context is not None and (
+                    len(ordered_product_ids) != 3
+                    or len(job_rows) != 3
+                    or len(set(job_product_ids)) != 3
+                    or any(str(row.get("status") or "") != "pending" for row in job_rows)
+                    or int(task.get("completed_jobs") or 0) != 0
+                    or int(task.get("failed_jobs") or 0) != 0
+                ):
+                    raise _AtomicPathBStartRejected("DISCOVERY_QUEUE_INVALID")
+                if formal_lineage_requested and (
+                    len(ordered_product_ids) != 3
+                    or len(job_rows) != 3
+                    or len(set(job_product_ids)) != 3
+                    or any(
+                        str(row.get("status") or "") != "pending"
+                        for row in job_rows
+                    )
+                    or int(task.get("completed_jobs") or 0) != 0
+                    or int(task.get("failed_jobs") or 0) != 0
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "FORMAL_QUEUE_INVALID"
+                    )
+
+                discovery_profile: dict[str, Any] | None = None
+                discovery_profile_sha256: str | None = None
+                discovery_attempt_identity_sha256: str | None = None
+                discovery_save1_lease_id: str | None = None
+                if discovery_context is not None:
+                    profile_payload = dict(payload)
+                    profile_payload["real_dxm_write_authorization"] = real_authorization
+                    profile_task = dict(task)
+                    profile_task["payload"] = profile_payload
+                    profile_task["jobs"] = [dict(row) for row in job_rows]
+                    try:
+                        discovery_profile = build_path_b_save1_discovery_profile(
+                            profile_task,
+                            target_product_id=discovery_context[
+                                "target_product_id"
+                            ],
+                            scope_sha256=scope_sha256,
+                            approval_sha256=canonical_approval["approvalSha256"],
+                            discovery_key_sha256=discovery_context[
+                                "discovery_key_sha256"
+                            ],
+                        )
+                    except BatchCommandContractError as exc:
+                        raise _AtomicPathBStartRejected(exc.reason_code) from exc
+                    discovery_profile_sha256 = canonical_contract_sha256(
+                        discovery_profile
+                    )
+                    save1_leases = [
+                        item
+                        for item in real_authorization["save_leases"]
+                        if isinstance(item, Mapping)
+                        and item.get("product_id")
+                        == discovery_profile["target_product_id"]
+                        and item.get("product_ordinal") == 1
+                        and item.get("save_stage") == "SAVE1"
+                    ]
+                    if len(save1_leases) != 1:
+                        raise _AtomicPathBStartRejected(
+                            "DISCOVERY_SAVE1_LEASE_INVALID"
+                        )
+                    discovery_save1_lease_id = str(
+                        save1_leases[0].get("lease_id") or ""
+                    )
+                    if not discovery_save1_lease_id:
+                        raise _AtomicPathBStartRejected(
+                            "DISCOVERY_SAVE1_LEASE_INVALID"
+                        )
+                    discovery_attempt_identity_sha256 = canonical_contract_sha256(
+                        {
+                            "schema": "dxm.real-dxm-path-b.discovery-attempt-identity.v1",
+                            "discovery_key_sha256": discovery_context[
+                                "discovery_key_sha256"
+                            ],
+                            "task_id": task_id,
+                            "snapshot_sha256": snapshot["snapshotSha256"],
+                            "scope_sha256": scope_sha256,
+                            "approval_sha256": canonical_approval[
+                                "approvalSha256"
+                            ],
+                            "target_product_ordinal": 1,
+                            "target_product_id": discovery_profile[
+                                "target_product_id"
+                            ],
+                            "profile_sha256": discovery_profile_sha256,
+                            "account_ref_hash": canonical_scope["account"][
+                                "accountContextHash"
+                            ],
+                            "shop_id": canonical_scope["shop"]["shopId"],
+                            "runtime_instance_id": canonical_scope["runtime"][
+                                "runtimeInstanceId"
+                            ],
+                            "browser_session_id": canonical_scope["runtime"][
+                                "browserSessionId"
+                            ],
+                            "git_head": canonical_scope["git"]["head"],
+                            "worktree": canonical_scope["worktree"],
+                        }
+                    )
+
+                try:
+                    stage_task_facts = build_batch_draft_save_task_facts(
+                        task_id=task_id,
+                        store_id=int(task["store_id"]),
+                        product_ids=ordered_product_ids,
+                        plan_snapshot_id=snapshot["snapshotId"],
+                        plan_snapshot_hash=snapshot["snapshotSha256"],
+                        path="B",
+                        real_authorization=real_authorization,
+                    )
+                    authorization_context = build_batch_authorization_context(
+                        stage_task_facts=stage_task_facts,
+                        runtime_instance_id=canonical_scope["runtime"]["runtimeInstanceId"],
+                        browser_session_id=canonical_scope["runtime"]["browserSessionId"],
+                        git_head=canonical_scope["git"]["head"],
+                        worktree_identity=canonical_scope["worktree"],
+                        l2_evidence_fingerprint=canonical_scope["l2"]["evidenceFingerprint"],
+                        approved_by=canonical_approval["approvedBy"],
+                    )
+                except BatchDraftAuthorizationError as exc:
+                    raise _AtomicPathBStartRejected(exc.reason_code) from exc
+                context_check = verify_batch_authorization_context(authorization_context)
+                if context_check.get("ok") is not True:
+                    raise _AtomicPathBStartRejected(
+                        str(context_check.get("reason_code") or "AUTH_CONTEXT_MISMATCH")
+                    )
+
+                approval_expiry = datetime.fromisoformat(
+                    canonical_approval["expiresAt"].replace("Z", "+00:00")
+                )
+                manual_expiry = min(
+                    transaction_time + timedelta(minutes=5),
+                    approval_expiry,
+                )
+                if manual_expiry <= transaction_time:
+                    raise _AtomicPathBStartRejected("APPROVAL_EXPIRED")
+                next_approval = {
+                    "approved": True,
+                    "token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                    "approved_by": canonical_approval["approvedBy"],
+                    "approved_at": canonical_approval["approvedAt"],
+                    "source": "server",
+                    "lease_id": lease_id.strip(),
+                    "confirmation": confirmation,
+                    "stage_task_facts": stage_task_facts,
+                    "authorization_context": authorization_context,
+                    "issued_at": transaction_time_text,
+                    "expires_at": manual_expiry.isoformat(),
+                    "consumed": True,
+                    "consumed_at": transaction_time_text,
+                }
+                next_payload = dict(payload)
+                next_payload["real_dxm_write_authorization"] = real_authorization
+                next_payload["manual_approval"] = next_approval
+                if formal_lineage is not None:
+                    next_payload[PATH_B_FORMAL_LINEAGE_KEY] = (
+                        formal_lineage
+                    )
+                if discovery_profile is not None:
+                    next_payload[PATH_B_SAVE1_DISCOVERY_PROFILE_KEY] = (
+                        discovery_profile
+                    )
+
+                if discovery_context is None:
+                    scope_updated = conn.execute(
+                        """
+                        UPDATE real_dxm_write_scopes
+                           SET status='consumed', approval_sha256=?,
+                               approval_nonce_sha256=?, approval_stage=?,
+                               approval_consumed_at=?, updated_at=?
+                         WHERE scope_sha256=? AND task_id=? AND status='prepared'
+                           AND scope_json=?
+                        """,
+                        (
+                            canonical_approval["approvalSha256"],
+                            real_authorization["approval_nonce_sha256"],
+                            canonical_approval["stage"],
+                            transaction_time_text,
+                            transaction_time_text,
+                            scope_sha256,
+                            task_id,
+                            stored_scope_json,
+                        ),
+                    )
+                else:
+                    scope_updated = conn.execute(
+                        """
+                        UPDATE real_dxm_write_scopes
+                           SET status='consumed', approval_sha256=?,
+                               approval_nonce_sha256=?, approval_stage='discovery',
+                               approval_consumed_at=?, purpose='discovery', updated_at=?
+                         WHERE scope_sha256=? AND task_id=? AND status='prepared'
+                           AND scope_json=?
+                           AND COALESCE(purpose, 'general') IN ('general', 'discovery')
+                           AND lineage_discovery_receipt_sha256 IS NULL
+                           AND lineage_predecessor_scope_sha256 IS NULL
+                        """,
+                        (
+                            canonical_approval["approvalSha256"],
+                            real_authorization["approval_nonce_sha256"],
+                            transaction_time_text,
+                            transaction_time_text,
+                            scope_sha256,
+                            task_id,
+                            stored_scope_json,
+                        ),
+                    )
+                if scope_updated.rowcount != 1:
+                    raise _AtomicPathBStartRejected("APPROVAL_REPLAY")
+                if discovery_context is not None:
+                    if not all(
+                        (
+                            discovery_profile,
+                            discovery_profile_sha256,
+                            discovery_attempt_identity_sha256,
+                            discovery_save1_lease_id,
+                        )
+                    ):
+                        raise _AtomicPathBStartRejected(
+                            "DISCOVERY_ATTEMPT_BINDING_INVALID"
+                        )
+                    attempt = conn.execute(
+                        """
+                        INSERT INTO real_dxm_path_b_discovery_attempts (
+                            task_id, scope_sha256, discovery_key_sha256,
+                            attempt_identity_sha256, profile_sha256,
+                            request_sha256, approval_sha256, snapshot_id,
+                            snapshot_sha256, job_id, product_id,
+                            authorization_lease_id, status, reason_code,
+                            discovery_receipt_sha256, armed_at, terminal_at,
+                            created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                  'armed', NULL, NULL, ?, NULL, ?, ?)
+                        """,
+                        (
+                            task_id,
+                            scope_sha256,
+                            discovery_context["discovery_key_sha256"],
+                            discovery_attempt_identity_sha256,
+                            discovery_profile_sha256,
+                            discovery_context["request_sha256"],
+                            canonical_approval["approvalSha256"],
+                            snapshot["snapshotId"],
+                            snapshot["snapshotSha256"],
+                            discovery_profile["target_job_id"],
+                            discovery_profile["target_product_id"],
+                            discovery_save1_lease_id,
+                            transaction_time_text,
+                            transaction_time_text,
+                            transaction_time_text,
+                        ),
+                    )
+                    if attempt.rowcount != 1:
+                        raise _AtomicPathBStartRejected(
+                            "DISCOVERY_ATTEMPT_CLAIM_CONFLICT"
+                        )
+                task_updated = conn.execute(
+                    """
+                    UPDATE tasks
+                       SET status='running', payload_json=?, updated_at=?
+                     WHERE id=? AND mode='batch_draft_save' AND status='draft'
+                       AND payload_json=?
+                    """,
+                    (
+                        dumps(next_payload),
+                        transaction_time_text,
+                        task_id,
+                        task["payload_json"],
+                    ),
+                )
+                if task_updated.rowcount != 1:
+                    raise _AtomicPathBStartRejected("AUTH_START_CAS_CONFLICT")
+        except _AtomicPathBStartRejected as exc:
+            return AuthorizationLeaseResult(
+                False,
+                exc.reason_code,
+                self.get_task(task_id),
+                None,
+            )
+        except (
+            sqlite3.IntegrityError,
+            KeyError,
+            TypeError,
+            ValueError,
+            OverflowError,
+        ):
+            return AuthorizationLeaseResult(
+                False,
+                "AUTH_PERSISTENCE_CONFLICT",
+                self.get_task(task_id),
+                None,
+            )
+
+        return AuthorizationLeaseResult(
+            True,
+            "OK",
+            self.get_task(task_id),
+            self._public_authorization_lease(next_approval),
+        )
+
+    def approve_and_start_real_dxm_path_b_discovery(
+        self,
+        task_id: int,
+        *,
+        scope: Mapping[str, Any],
+        approval: Mapping[str, Any],
+        target_product_id: int,
+        discovery_key_sha256: str,
+        request_sha256: str,
+        token: str,
+        confirmation: str,
+        approved_by: str,
+        lease_id: str,
+    ) -> AuthorizationLeaseResult:
+        """Atomically arm the sole first-product SAVE1 discovery attempt.
+
+        This entry point does not release general Path B.  It delegates to the
+        same scope/approval transaction as formal starts while injecting the
+        narrower persisted profile and one durable, non-replayable claim.
+        """
+
+        return self.approve_and_start_real_dxm_path_b(
+            task_id,
+            scope=scope,
+            approval=approval,
+            token=token,
+            confirmation=confirmation,
+            approved_by=approved_by,
+            lease_id=lease_id,
+            _discovery_context={
+                "target_product_id": target_product_id,
+                "discovery_key_sha256": discovery_key_sha256,
+                "request_sha256": request_sha256,
+            },
+        )
+
+    def get_real_dxm_write_scope(self, scope_sha256: str) -> dict[str, Any] | None:
+        with connection() as conn:
+            migrate_real_dxm_write_scopes(conn)
+            row = conn.execute(
+                "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+                (scope_sha256,),
+            ).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["scope"] = loads(result.pop("scope_json"), {})
+            return result
+
+    @staticmethod
+    def _private_task_from_connection(
+        conn: Any,
+        task_id: int,
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id=? AND mode!='removed_workflow_legacy'",
+            (task_id,),
+        ).fetchone()
+        if not row:
+            return None
+        task = dict(row)
+        task["payload"] = loads(task.pop("payload_json"), {})
+        task["jobs"] = [
+            dict(candidate)
+            for candidate in conn.execute(
+                "SELECT * FROM jobs WHERE task_id=? ORDER BY id ASC",
+                (task_id,),
+            ).fetchall()
+        ]
+        return task
+
+    @staticmethod
+    def _discovery_evidence_paths(value: Mapping[str, Any]) -> set[str]:
+        evidence = value.get("evidence")
+        refs = evidence.get("refs") if isinstance(evidence, Mapping) else None
+        if not isinstance(refs, list):
+            return set()
+        return {
+            str(item.get("path") or "").replace("\\", "/").casefold()
+            for item in refs
+            if isinstance(item, Mapping) and str(item.get("path") or "").strip()
+        }
+
+    @staticmethod
+    def _discovery_evidence_times(
+        value: Mapping[str, Any],
+    ) -> list[datetime]:
+        evidence = value.get("evidence")
+        refs = evidence.get("refs") if isinstance(evidence, Mapping) else None
+        if not isinstance(refs, list):
+            return []
+        result: list[datetime] = []
+        for item in refs:
+            raw = item.get("captured_at") if isinstance(item, Mapping) else None
+            if not isinstance(raw, str) or not raw.strip():
+                return []
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return []
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                return []
+            result.append(parsed.astimezone(timezone.utc))
+        return result
+
+    @staticmethod
+    def _build_discovery_leaf_proof_manifest(
+        *,
+        first_save_action_result: Mapping[str, Any],
+        unpublished_action_result: Mapping[str, Any],
+        field_readbacks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Project the same five leaf proof hashes used by Formal receipts."""
+
+        save_evidence = first_save_action_result.get("evidence")
+        verify_evidence = unpublished_action_result.get("evidence")
+        save_observations = (
+            save_evidence.get("observations")
+            if isinstance(save_evidence, Mapping)
+            else None
+        )
+        handshake = (
+            save_observations.get("first_save_intent_handshake")
+            if isinstance(save_observations, Mapping)
+            else None
+        )
+        network = (
+            handshake.get("network_save_result")
+            if isinstance(handshake, Mapping)
+            else None
+        )
+        save_refs = (
+            save_evidence.get("refs")
+            if isinstance(save_evidence, Mapping)
+            else None
+        )
+        verify_refs = (
+            verify_evidence.get("refs")
+            if isinstance(verify_evidence, Mapping)
+            else None
+        )
+        if (
+            not isinstance(network, Mapping)
+            or not isinstance(save_refs, list)
+            or len(save_refs) != 1
+            or not isinstance(save_refs[0], Mapping)
+            or not isinstance(verify_refs, list)
+            or len(verify_refs) != 1
+            or not isinstance(verify_refs[0], Mapping)
+            or not field_readbacks
+        ):
+            raise ValueError("Discovery leaf proof sources are incomplete")
+        proof_hashes = {
+            "network_request_sha256": _normalized_sha256(
+                network.get("request_body_sha256")
+            ),
+            "network_response_sha256": _normalized_sha256(
+                network.get("response_body_sha256")
+            ),
+            "screenshot_sha256": _normalized_sha256(
+                save_refs[0].get("sha256")
+            ),
+            "readback_sha256": canonical_contract_sha256(field_readbacks),
+            "unpublished_readback_sha256": _normalized_sha256(
+                verify_refs[0].get("sha256")
+            ),
+        }
+        if (
+            any(value is None for value in proof_hashes.values())
+            or len(set(proof_hashes.values())) != len(proof_hashes)
+        ):
+            raise ValueError("Discovery leaf proof hashes are invalid or reused")
+        return {
+            "schema_version": _PATH_B_DISCOVERY_LEAF_PROOF_SCHEMA,
+            **proof_hashes,
+        }
+
+    def _validate_sealed_discovery_authority(
+        self,
+        conn: Any,
+        *,
+        attempt: Mapping[str, Any],
+        receipt_row: Mapping[str, Any],
+        receipt: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Recompute the durable ledger and independent proof chain."""
+
+        ledger_rows = conn.execute(
+            """
+            SELECT * FROM mutation_dispatch_ledger
+             WHERE task_id=? ORDER BY id ASC
+            """,
+            (str(attempt.get("task_id")),),
+        ).fetchall()
+        if len(ledger_rows) != 1:
+            raise ValueError("Discovery ledger cardinality drift")
+        ledger = dict(ledger_rows[0])
+        command = loads(ledger.get("command_json"), None)
+        save_result = loads(ledger.get("save_action_result_json"), None)
+        save_authority = loads(ledger.get("save_authority_json"), None)
+        verify_command = loads(
+            receipt_row.get("verification_command_json"), None
+        )
+        unpublished_result = loads(
+            receipt_row.get("unpublished_action_result_json"), None
+        )
+        stored_manifest = loads(
+            receipt_row.get("leaf_proof_manifest_json"), None
+        )
+        ledger_outcome = loads(ledger.get("outcome_json"), None)
+        if not all(
+            isinstance(value, Mapping)
+            for value in (
+                command,
+                save_result,
+                save_authority,
+                verify_command,
+                unpublished_result,
+                stored_manifest,
+            )
+        ) or not (
+            ledger_outcome is True
+            or (
+                isinstance(ledger_outcome, Mapping)
+                and ledger_outcome.get("dispatched") is True
+            )
+        ):
+            raise ValueError("Discovery persisted authority JSON is incomplete")
+        command_sha256 = canonical_contract_sha256(command)
+        save_result_sha256 = canonical_contract_sha256(save_result)
+        save_authority_sha256 = canonical_contract_sha256(save_authority)
+        verification_command_sha256 = canonical_contract_sha256(verify_command)
+        unpublished_result_sha256 = canonical_contract_sha256(
+            unpublished_result
+        )
+        try:
+            save_command_contract = BrowserAgentCommand(**dict(command))
+            verify_command_contract = BrowserAgentCommand(
+                **dict(verify_command)
+            )
+            validate_browser_agent_command(save_command_contract)
+            validate_browser_agent_command(verify_command_contract)
+            defaults = save_command_contract.params.get("defaults")
+            expected_execution_payload = (
+                defaults.get("_frozen_execution_payload")
+                if isinstance(defaults, Mapping)
+                else None
+            )
+            task = self._private_task_from_connection(
+                conn, int(receipt.get("task_id") or 0)
+            )
+            if not isinstance(task, Mapping):
+                raise ValueError("Discovery task is missing")
+            validated_save_result = validate_action_result_envelope(
+                save_result,
+                expected_state=PATH_B_SAVE1_DISCOVERY_STATE,
+                expected_action=PATH_B_SAVE1_DISCOVERY_ACTION,
+                expected_page="semi_managed",
+                execution_mode="batch_draft_save",
+                expected_runtime_id=save_command_contract.runtime_id,
+                expected_browser_session_id=str(
+                    receipt.get("runtime", {}).get("browserSessionId")
+                    if isinstance(receipt.get("runtime"), Mapping)
+                    else ""
+                ),
+                expected_execution_payload=expected_execution_payload,
+                expected_target_identity=save_command_contract.params.get(
+                    "target_identity"
+                ),
+                expected_store_name=save_command_contract.params.get(
+                    "store_name"
+                ),
+                expected_target_hash=save_command_contract.target_hash,
+            )
+            rebuilt_authority = rebuild_save_verification_authority(
+                task,
+                save_command=dict(command),
+                ledger_entry=ledger,
+            )
+            frozen_verification_context = (
+                save_verification_facts_from_frozen_authority(
+                    save_authority,
+                    save_command=dict(command),
+                    ledger_entry=ledger,
+                    save_action_result_sha256=save_result_sha256,
+                )
+            )
+            verification_context = validate_save_verification_context(
+                verify_command_contract.params.get(
+                    "save_verification_context"
+                ),
+                task_id=int(receipt.get("task_id") or 0),
+                job_id=int(receipt.get("job_id") or 0),
+                runtime_id=save_command_contract.runtime_id,
+                execution_mode="batch_draft_save",
+                save_command=dict(command),
+                save_action_result=validated_save_result,
+                authoritative_facts=rebuilt_authority,
+            )
+            validated_unpublished_result = validate_action_result_envelope(
+                unpublished_result,
+                expected_state="VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+                expected_action="verify_not_published",
+                expected_page="semi_managed",
+                execution_mode="batch_draft_save",
+                expected_runtime_id=save_command_contract.runtime_id,
+                expected_browser_session_id=str(
+                    receipt.get("runtime", {}).get("browserSessionId")
+                    if isinstance(receipt.get("runtime"), Mapping)
+                    else ""
+                ),
+            )
+        except (
+            ActionResultContractError,
+            BatchCommandContractError,
+            DispatchAuthorityError,
+            MutationCommandContractError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise ValueError("Discovery persisted contracts are invalid") from exc
+        save_observations = validated_save_result["evidence"]["observations"]
+        handshake = save_observations.get("first_save_intent_handshake")
+        audit = (
+            handshake.get("network_audit")
+            if isinstance(handshake, Mapping)
+            else None
+        )
+        authorization = (
+            handshake.get("mutation_authorization")
+            if isinstance(handshake, Mapping)
+            else None
+        )
+        verify_observations = validated_unpublished_result["evidence"][
+            "observations"
+        ]
+        fresh_probe = verify_observations.get("fresh_probe")
+        save_target = validated_save_result["before_values"].get(
+            "target_identity"
+        )
+        verify_target = validated_unpublished_result["before_values"].get(
+            "target_identity"
+        )
+        save_times = self._discovery_evidence_times(validated_save_result)
+        verify_times = self._discovery_evidence_times(
+            validated_unpublished_result
+        )
+        opened_observation = (
+            handshake.get("open_semi_managed_editor")
+            if isinstance(handshake, Mapping)
+            else None
+        )
+        authoritative_raw_readbacks = save_observations.get(
+            "save_field_readbacks"
+        )
+        if authoritative_raw_readbacks is None and isinstance(
+            opened_observation, Mapping
+        ):
+            authoritative_raw_readbacks = opened_observation.get(
+                "field_readbacks"
+            )
+        if authoritative_raw_readbacks is None:
+            authoritative_raw_readbacks = validated_save_result[
+                "after_values"
+            ].get("field_readbacks")
+        try:
+            authoritative_field_readbacks = [
+                item.to_dict()
+                for item in validated_field_readbacks_from_payload(
+                    authoritative_raw_readbacks,
+                    require_nonempty=True,
+                    reason_prefix="DISCOVERY_SAVE1",
+                )
+            ]
+        except ReceiptValidationError as exc:
+            raise ValueError(
+                "Discovery authoritative field readbacks are invalid"
+            ) from exc
+        authoritative_unpublished_readback = {
+            "before_values": validated_unpublished_result["before_values"],
+            "after_values": validated_unpublished_result["after_values"],
+            "fresh_probe": fresh_probe,
+        }
+        def _ledger_time(value: Any) -> datetime:
+            parsed = datetime.fromisoformat(
+                str(value or "").replace("Z", "+00:00")
+            )
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise ValueError("ledger timestamp lacks timezone")
+            return parsed.astimezone(timezone.utc)
+
+        try:
+            reserved_at = _ledger_time(ledger.get("reserved_at"))
+            dispatch_started_at = _ledger_time(
+                ledger.get("dispatch_started_at")
+            )
+            dispatched_at = _ledger_time(ledger.get("dispatched_at"))
+            recorded_at = _ledger_time(
+                ledger.get("save_success_recorded_at")
+            )
+            ledger_updated_at = _ledger_time(ledger.get("updated_at"))
+            sealed_at = _ledger_time(receipt.get("sealed_at"))
+            receipt_row_sealed_at = _ledger_time(
+                receipt_row.get("sealed_at")
+            )
+            attempt_terminal_at = _ledger_time(attempt.get("terminal_at"))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Discovery ledger timestamps are invalid") from exc
+        if (
+            frozen_verification_context != verification_context
+            or not isinstance(audit, Mapping)
+            or not isinstance(authorization, Mapping)
+            or audit.get("mutation_request_count") != 1
+            or audit.get("save_request_count") != 1
+            or audit.get("other_mutation_request_count") != 0
+            or audit.get("publish_request_count") != 0
+            or authorization.get("mutation_id") != ledger.get("mutation_id")
+            or authorization.get("mutation_action") != "first_save_intent"
+            or authorization.get("mutation_status") != "DISPATCHED"
+            or save_target != verify_target
+            or not isinstance(fresh_probe, Mapping)
+            or fresh_probe.get("save_verification_context")
+            != verification_context
+            or validated_unpublished_result["before_values"].get(
+                "save_verification_context"
+            )
+            != verification_context
+            or _normalized_sha256(
+                fresh_probe.get("target_identity_sha256")
+            )
+            != canonical_contract_sha256(save_target)
+            or validated_unpublished_result["after_values"].get(
+                "published"
+            )
+            is not False
+            or receipt.get("physical_mutation_count") != 1
+            or receipt.get("save1_count") != 1
+            or receipt.get("save2_count") != 0
+            or receipt.get("other_product_mutation_count") != 0
+            or receipt.get("publish_request_count") != 0
+            or receipt.get("published") is not False
+            or receipt.get("unknown_count") != 0
+            or receipt.get("field_readbacks")
+            != authoritative_field_readbacks
+            or receipt.get("unpublished_readback")
+            != authoritative_unpublished_readback
+            or ledger.get("unknown_at") is not None
+            or not save_times
+            or not verify_times
+            or min(verify_times) <= max(save_times)
+            or not (
+                reserved_at
+                <= dispatch_started_at
+                <= dispatched_at
+                <= recorded_at
+                <= min(verify_times)
+            )
+            or max(save_times) > recorded_at
+            or ledger_updated_at < recorded_at
+            or sealed_at < max(verify_times)
+            or receipt_row_sealed_at != sealed_at
+            or attempt_terminal_at != sealed_at
+        ):
+            raise ValueError("Discovery counters, identity, or chronology drift")
+        manifest = self._build_discovery_leaf_proof_manifest(
+            first_save_action_result=validated_save_result,
+            unpublished_action_result=validated_unpublished_result,
+            field_readbacks=authoritative_field_readbacks,
+        )
+        manifest_sha256 = canonical_contract_sha256(manifest)
+        expected_pairs = (
+            (int(ledger.get("id") or 0), int(receipt.get("ledger_entry_id") or 0)),
+            (ledger.get("status"), "DISPATCHED"),
+            (ledger.get("mutation_action"), "first_save_intent"),
+            (ledger.get("command_state"), PATH_B_SAVE1_DISCOVERY_STATE),
+            (ledger.get("command_action"), PATH_B_SAVE1_DISCOVERY_ACTION),
+            (ledger.get("task_id"), str(receipt.get("task_id"))),
+            (ledger.get("job_id"), str(receipt.get("job_id"))),
+            (ledger.get("command_id"), receipt.get("command_id")),
+            (
+                ledger.get("authorization_lease_id"),
+                receipt.get("authorization_lease_id"),
+            ),
+            (ledger.get("mutation_id"), receipt.get("mutation_id")),
+            (ledger.get("target_hash"), command.get("target_hash")),
+            (_normalized_sha256(ledger.get("command_sha256")), command_sha256),
+            (
+                _normalized_sha256(ledger.get("save_action_result_sha256")),
+                save_result_sha256,
+            ),
+            (
+                _normalized_sha256(ledger.get("save_authority_sha256")),
+                save_authority_sha256,
+            ),
+            (command.get("task_id"), receipt.get("task_id")),
+            (command.get("job_id"), receipt.get("job_id")),
+            (command.get("state"), PATH_B_SAVE1_DISCOVERY_STATE),
+            (command.get("action"), PATH_B_SAVE1_DISCOVERY_ACTION),
+            (command.get("command_id"), receipt.get("command_id")),
+            (
+                command.get("authorization_lease_id"),
+                receipt.get("authorization_lease_id"),
+            ),
+            (verify_command.get("task_id"), receipt.get("task_id")),
+            (verify_command.get("job_id"), receipt.get("job_id")),
+            (
+                verify_command.get("state"),
+                "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+            ),
+            (verify_command.get("action"), "verify_not_published"),
+            (verify_command.get("execution_mode"), "batch_draft_save"),
+            (verify_command.get("runtime_id"), command.get("runtime_id")),
+            (
+                verify_command.get("params", {}).get("target_identity"),
+                command.get("params", {}).get("target_identity"),
+            ),
+            (
+                verify_command.get("params", {}).get("store_name"),
+                command.get("params", {}).get("store_name"),
+            ),
+            (
+                verify_command.get("params", {}).get("save_predecessor"),
+                {
+                    "state": PATH_B_SAVE1_DISCOVERY_STATE,
+                    "action": PATH_B_SAVE1_DISCOVERY_ACTION,
+                },
+            ),
+            (
+                _normalized_sha256(receipt.get("first_save_command_sha256")),
+                command_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt.get("first_save_action_result_sha256")
+                ),
+                save_result_sha256,
+            ),
+            (
+                _normalized_sha256(receipt.get("save_authority_sha256")),
+                save_authority_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt.get("save_verification_context_sha256")
+                ),
+                canonical_contract_sha256(verification_context),
+            ),
+            (
+                _normalized_sha256(receipt.get("field_readbacks_sha256")),
+                canonical_contract_sha256(authoritative_field_readbacks),
+            ),
+            (
+                _normalized_sha256(
+                    receipt.get("unpublished_readback_sha256")
+                ),
+                canonical_contract_sha256(
+                    authoritative_unpublished_readback
+                ),
+            ),
+            (
+                _normalized_sha256(
+                    receipt.get("first_save_intent_handshake_sha256")
+                ),
+                _normalized_sha256(
+                    handshake.get("handshake_sha256")
+                    if isinstance(handshake, Mapping)
+                    else None
+                ),
+            ),
+            (
+                _normalized_sha256(
+                    receipt.get("verification_command_sha256")
+                ),
+                verification_command_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt.get("unpublished_action_result_sha256")
+                ),
+                unpublished_result_sha256,
+            ),
+            (receipt.get("leaf_proof_manifest"), manifest),
+            (
+                _normalized_sha256(
+                    receipt.get("leaf_proof_manifest_sha256")
+                ),
+                manifest_sha256,
+            ),
+            (dict(stored_manifest), manifest),
+            (
+                _normalized_sha256(
+                    receipt_row.get("leaf_proof_manifest_sha256")
+                ),
+                manifest_sha256,
+            ),
+            (attempt.get("authorization_lease_id"), receipt.get("authorization_lease_id")),
+            (attempt.get("command_id"), receipt.get("command_id")),
+            (attempt.get("mutation_id"), receipt.get("mutation_id")),
+            (attempt.get("status"), "sealed"),
+            (receipt_row.get("status"), "sealed"),
+            (receipt_row.get("created_at"), receipt.get("sealed_at")),
+            (receipt_row.get("updated_at"), receipt.get("sealed_at")),
+            (
+                _normalized_sha256(
+                    receipt_row.get("first_save_command_sha256")
+                ),
+                command_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get("first_save_action_result_sha256")
+                ),
+                save_result_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get("save_authority_sha256")
+                ),
+                save_authority_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get("verification_command_sha256")
+                ),
+                verification_command_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get("unpublished_action_result_sha256")
+                ),
+                unpublished_result_sha256,
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get("save_verification_context_sha256")
+                ),
+                canonical_contract_sha256(verification_context),
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get("field_readbacks_sha256")
+                ),
+                canonical_contract_sha256(authoritative_field_readbacks),
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get("unpublished_readback_sha256")
+                ),
+                canonical_contract_sha256(
+                    authoritative_unpublished_readback
+                ),
+            ),
+            (
+                _normalized_sha256(
+                    receipt_row.get(
+                        "first_save_intent_handshake_sha256"
+                    )
+                ),
+                _normalized_sha256(
+                    handshake.get("handshake_sha256")
+                    if isinstance(handshake, Mapping)
+                    else None
+                ),
+            ),
+        )
+        if any(observed != expected for observed, expected in expected_pairs):
+            raise ValueError("Discovery persisted authority binding drift")
+        return manifest
+
+    def seal_path_b_save1_discovery_and_stop(
+        self,
+        *,
+        task_id: int,
+        job_id: int,
+        expected_profile: Mapping[str, Any],
+        expected_profile_sha256: str,
+        first_save_command: Mapping[str, Any],
+        first_save_action_result: Mapping[str, Any],
+        unpublished_command: Mapping[str, Any],
+        unpublished_action_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Seal the one allowed Discovery mutation and stop before SAVE2.
+
+        All mutable facts are re-read under ``BEGIN IMMEDIATE``.  The receipt
+        is inserted in the same transaction that seals the attempt, consumes
+        the scope terminally, and stops the task/job queue.
+        """
+
+        if (
+            isinstance(task_id, bool)
+            or not isinstance(task_id, int)
+            or task_id <= 0
+            or isinstance(job_id, bool)
+            or not isinstance(job_id, int)
+            or job_id <= 0
+            or not isinstance(expected_profile, Mapping)
+            or _normalized_sha256(expected_profile_sha256) is None
+            or not all(
+                isinstance(value, Mapping)
+                for value in (
+                    first_save_command,
+                    first_save_action_result,
+                    unpublished_command,
+                    unpublished_action_result,
+                )
+            )
+        ):
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason_code": "DISCOVERY_SEAL_INPUT_INVALID",
+            }
+
+        try:
+            with connection() as conn:
+                migrate_real_dxm_write_scopes(conn)
+                migrate_real_dxm_path_b_discovery_receipts(conn)
+                conn.execute("BEGIN IMMEDIATE")
+                task = self._private_task_from_connection(conn, task_id)
+                if task is None:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_CURRENT_TASK_MISSING"
+                    )
+                payload = (
+                    task.get("payload")
+                    if isinstance(task.get("payload"), Mapping)
+                    else {}
+                )
+                stored_profile_raw = payload.get(
+                    PATH_B_SAVE1_DISCOVERY_PROFILE_KEY
+                )
+                try:
+                    stored_profile = validate_path_b_save1_discovery_profile(
+                        stored_profile_raw
+                    )
+                    requested_profile = validate_path_b_save1_discovery_profile(
+                        expected_profile
+                    )
+                except BatchCommandContractError as exc:
+                    raise _AtomicPathBStartRejected(exc.reason_code) from exc
+                profile_sha256 = canonical_contract_sha256(stored_profile)
+                if (
+                    stored_profile != requested_profile
+                    or profile_sha256
+                    != _normalized_sha256(expected_profile_sha256)
+                    or stored_profile["target_task_id"] != task_id
+                    or stored_profile["target_job_id"] != job_id
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_PROFILE_PERSISTENCE_DRIFT"
+                    )
+                try:
+                    validated_dispatch_profile = (
+                        validate_path_b_save1_discovery_dispatch(
+                            task,
+                            job_id=job_id,
+                            command_state=first_save_command.get("state"),
+                            command_action=first_save_command.get("action"),
+                        )
+                    )
+                except BatchCommandContractError as exc:
+                    raise _AtomicPathBStartRejected(exc.reason_code) from exc
+                if validated_dispatch_profile != stored_profile:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_DISPATCH_PROFILE_MISMATCH"
+                    )
+
+                attempt = conn.execute(
+                    """
+                    SELECT * FROM real_dxm_path_b_discovery_attempts
+                     WHERE task_id=?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if not attempt or str(attempt.get("status") or "") != "armed":
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_ATTEMPT_NOT_ARMED"
+                    )
+                scope_row = conn.execute(
+                    "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+                    (stored_profile["scope_sha256"],),
+                ).fetchone()
+                if (
+                    not scope_row
+                    or str(scope_row.get("status") or "") != "consumed"
+                    or str(scope_row.get("purpose") or "") != "discovery"
+                    or str(scope_row.get("approval_stage") or "") != "discovery"
+                    or int(scope_row.get("task_id") or 0) != task_id
+                    or _normalized_sha256(scope_row.get("approval_sha256"))
+                    != stored_profile["approval_sha256"]
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SCOPE_PERSISTENCE_DRIFT"
+                    )
+                scope = loads(scope_row.get("scope_json"), {})
+                if not isinstance(scope, Mapping):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SCOPE_PERSISTENCE_DRIFT"
+                    )
+                attempt_pairs = (
+                    (int(attempt.get("task_id") or 0), task_id),
+                    (
+                        _normalized_sha256(attempt.get("scope_sha256")),
+                        stored_profile["scope_sha256"],
+                    ),
+                    (
+                        _normalized_sha256(
+                            attempt.get("discovery_key_sha256")
+                        ),
+                        stored_profile["discovery_key_sha256"],
+                    ),
+                    (
+                        _normalized_sha256(attempt.get("profile_sha256")),
+                        profile_sha256,
+                    ),
+                    (
+                        _normalized_sha256(attempt.get("approval_sha256")),
+                        stored_profile["approval_sha256"],
+                    ),
+                    (
+                        int(attempt.get("snapshot_id") or 0),
+                        int(scope["snapshot"]["snapshotId"]),
+                    ),
+                    (
+                        _normalized_sha256(attempt.get("snapshot_sha256")),
+                        _normalized_sha256(
+                            scope["snapshot"]["snapshotSha256"]
+                        ),
+                    ),
+                    (int(attempt.get("job_id") or 0), job_id),
+                    (
+                        int(attempt.get("product_id") or 0),
+                        stored_profile["target_product_id"],
+                    ),
+                )
+                attempt_identity_sha256 = canonical_contract_sha256(
+                    {
+                        "schema": "dxm.real-dxm-path-b.discovery-attempt-identity.v1",
+                        "discovery_key_sha256": stored_profile[
+                            "discovery_key_sha256"
+                        ],
+                        "task_id": task_id,
+                        "snapshot_sha256": scope["snapshot"][
+                            "snapshotSha256"
+                        ],
+                        "scope_sha256": stored_profile["scope_sha256"],
+                        "approval_sha256": stored_profile[
+                            "approval_sha256"
+                        ],
+                        "target_product_ordinal": 1,
+                        "target_product_id": stored_profile[
+                            "target_product_id"
+                        ],
+                        "profile_sha256": profile_sha256,
+                        "account_ref_hash": scope["account"][
+                            "accountContextHash"
+                        ],
+                        "shop_id": scope["shop"]["shopId"],
+                        "runtime_instance_id": scope["runtime"][
+                            "runtimeInstanceId"
+                        ],
+                        "browser_session_id": scope["runtime"][
+                            "browserSessionId"
+                        ],
+                        "git_head": scope["git"]["head"],
+                        "worktree": scope["worktree"],
+                    }
+                )
+                if (
+                    any(
+                        observed != expected
+                        for observed, expected in attempt_pairs
+                    )
+                    or _normalized_sha256(
+                        attempt.get("attempt_identity_sha256")
+                    )
+                    != attempt_identity_sha256
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_ATTEMPT_PERSISTENCE_DRIFT"
+                    )
+
+                try:
+                    save_command = BrowserAgentCommand(**dict(first_save_command))
+                    verify_command = BrowserAgentCommand(**dict(unpublished_command))
+                    validate_browser_agent_command(save_command)
+                    validate_browser_agent_command(verify_command)
+                except (MutationCommandContractError, TypeError, ValueError) as exc:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_COMMAND_INVALID"
+                    ) from exc
+                if (
+                    save_command.task_id != task_id
+                    or save_command.job_id != job_id
+                    or save_command.state != PATH_B_SAVE1_DISCOVERY_STATE
+                    or save_command.action != PATH_B_SAVE1_DISCOVERY_ACTION
+                    or save_command.execution_mode != "batch_draft_save"
+                    or save_command.expected_page != "editor"
+                    or save_command.pre_dispatch_page != "editor"
+                    or save_command.post_dispatch_page != "semi_managed"
+                    or verify_command.task_id != task_id
+                    or verify_command.job_id != job_id
+                    or verify_command.state
+                    != "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED"
+                    or verify_command.action != "verify_not_published"
+                    or verify_command.execution_mode != "batch_draft_save"
+                    or verify_command.expected_page != "semi_managed"
+                    or save_command.command_id == verify_command.command_id
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_COMMAND_BINDING_MISMATCH"
+                    )
+
+                real_authorization = payload.get(
+                    "real_dxm_write_authorization"
+                )
+                leases = (
+                    real_authorization.get("save_leases")
+                    if isinstance(real_authorization, Mapping)
+                    else None
+                )
+                if not isinstance(leases, list) or len(leases) != 6:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SAVE_LEASE_COUNT_INVALID"
+                    )
+                save1_leases = [
+                    item
+                    for item in leases
+                    if isinstance(item, Mapping)
+                    and item.get("product_id")
+                    == stored_profile["target_product_id"]
+                    and item.get("product_ordinal") == 1
+                    and item.get("save_stage") == "SAVE1"
+                    and item.get("scope_sha256")
+                    == stored_profile["scope_sha256"]
+                ]
+                if (
+                    len(save1_leases) != 1
+                    or save_command.authorization_lease_id
+                    != save1_leases[0].get("lease_id")
+                    or attempt.get("authorization_lease_id")
+                    != save_command.authorization_lease_id
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SAVE1_LEASE_MISMATCH"
+                    )
+
+                ledger_rows = conn.execute(
+                    """
+                    SELECT * FROM mutation_dispatch_ledger
+                     WHERE task_id=?
+                     ORDER BY id ASC
+                    """,
+                    (str(task_id),),
+                ).fetchall()
+                if len(ledger_rows) != 1:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_MUTATION_COUNT_INVALID"
+                    )
+                ledger = dict(ledger_rows[0])
+                command_sha256 = browser_agent_command_sha256(save_command)
+                persisted_command = loads(ledger.get("command_json"), None)
+                persisted_save_result = loads(
+                    ledger.get("save_action_result_json"), None
+                )
+                save_result_sha256 = canonical_contract_sha256(
+                    dict(first_save_action_result)
+                )
+                save_authority = loads(
+                    ledger.get("save_authority_json"), None
+                )
+                save_authority_sha256 = (
+                    canonical_contract_sha256(save_authority)
+                    if isinstance(save_authority, Mapping)
+                    else None
+                )
+                ledger_pairs = (
+                    (ledger.get("mutation_action"), "first_save_intent"),
+                    (int(ledger.get("ordinal") or 0), 1),
+                    (ledger.get("command_state"), PATH_B_SAVE1_DISCOVERY_STATE),
+                    (ledger.get("command_action"), PATH_B_SAVE1_DISCOVERY_ACTION),
+                    (ledger.get("task_id"), str(task_id)),
+                    (ledger.get("job_id"), str(job_id)),
+                    (
+                        ledger.get("authorization_lease_id"),
+                        save_command.authorization_lease_id,
+                    ),
+                    (ledger.get("status"), "DISPATCHED"),
+                    (ledger.get("command_id"), save_command.command_id),
+                    (
+                        _normalized_sha256(ledger.get("command_sha256")),
+                        command_sha256,
+                    ),
+                    (
+                        _normalized_sha256(
+                            ledger.get("save_action_result_sha256")
+                        ),
+                        save_result_sha256,
+                    ),
+                    (
+                        _normalized_sha256(
+                            ledger.get("save_authority_sha256")
+                        ),
+                        save_authority_sha256,
+                    ),
+                )
+                if (
+                    any(
+                        observed != expected
+                        for observed, expected in ledger_pairs
+                    )
+                    or persisted_command != dict(first_save_command)
+                    or persisted_save_result != dict(first_save_action_result)
+                    or not isinstance(save_authority, Mapping)
+                    or not ledger.get("mutation_id")
+                    or not ledger.get("save_success_recorded_at")
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_LEDGER_PERSISTENCE_DRIFT"
+                    )
+
+                defaults = save_command.params.get("defaults")
+                expected_execution_payload = (
+                    defaults.get("_frozen_execution_payload")
+                    if isinstance(defaults, Mapping)
+                    else None
+                )
+                target_identity = save_command.params.get("target_identity")
+                store_name = save_command.params.get("store_name")
+                scope_runtime = (
+                    scope.get("runtime")
+                    if isinstance(scope.get("runtime"), Mapping)
+                    else {}
+                )
+                if (
+                    not isinstance(expected_execution_payload, Mapping)
+                    or not isinstance(target_identity, Mapping)
+                    or not isinstance(store_name, str)
+                    or not store_name.strip()
+                    or save_command.runtime_id
+                    != scope_runtime.get("runtimeInstanceId")
+                    or verify_command.runtime_id != save_command.runtime_id
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_RUNTIME_OR_TARGET_DRIFT"
+                    )
+                browser_session_id = str(
+                    scope_runtime.get("browserSessionId") or ""
+                )
+                try:
+                    validated_save_result = validate_action_result_envelope(
+                        first_save_action_result,
+                        expected_state=PATH_B_SAVE1_DISCOVERY_STATE,
+                        expected_action=PATH_B_SAVE1_DISCOVERY_ACTION,
+                        expected_page="semi_managed",
+                        execution_mode="batch_draft_save",
+                        expected_runtime_id=save_command.runtime_id,
+                        expected_browser_session_id=browser_session_id,
+                        expected_execution_payload=expected_execution_payload,
+                        expected_target_identity=target_identity,
+                        expected_store_name=store_name,
+                        expected_target_hash=save_command.target_hash,
+                    )
+                    authoritative_facts = rebuild_save_verification_authority(
+                        task,
+                        save_command=dict(first_save_command),
+                        ledger_entry=ledger,
+                    )
+                    verification_context = validate_save_verification_context(
+                        verify_command.params.get(
+                            "save_verification_context"
+                        ),
+                        task_id=task_id,
+                        job_id=job_id,
+                        runtime_id=save_command.runtime_id,
+                        execution_mode="batch_draft_save",
+                        save_command=dict(first_save_command),
+                        save_action_result=validated_save_result,
+                        authoritative_facts=authoritative_facts,
+                    )
+                    validated_unpublished_result = (
+                        validate_action_result_envelope(
+                            unpublished_action_result,
+                            expected_state=(
+                                "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED"
+                            ),
+                            expected_action="verify_not_published",
+                            expected_page="semi_managed",
+                            execution_mode="batch_draft_save",
+                            expected_runtime_id=save_command.runtime_id,
+                            expected_browser_session_id=browser_session_id,
+                        )
+                    )
+                except (
+                    ActionResultContractError,
+                    BatchCommandContractError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_CAUSAL_EVIDENCE_INVALID"
+                    ) from exc
+                if (
+                    validated_save_result != dict(first_save_action_result)
+                    or validated_unpublished_result
+                    != dict(unpublished_action_result)
+                    or verify_command.params.get("save_predecessor")
+                    != {
+                        "state": PATH_B_SAVE1_DISCOVERY_STATE,
+                        "action": PATH_B_SAVE1_DISCOVERY_ACTION,
+                    }
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_CAUSAL_EVIDENCE_DRIFT"
+                    )
+
+                verify_observations = validated_unpublished_result[
+                    "evidence"
+                ]["observations"]
+                fresh_probe = verify_observations.get("fresh_probe")
+                save_target = validated_save_result["before_values"].get(
+                    "target_identity"
+                )
+                verify_target = validated_unpublished_result[
+                    "before_values"
+                ].get("target_identity")
+                if (
+                    save_target != verify_target
+                    or not isinstance(fresh_probe, Mapping)
+                    or fresh_probe.get("save_verification_context")
+                    != verification_context
+                    or validated_unpublished_result["before_values"].get(
+                        "save_verification_context"
+                    )
+                    != verification_context
+                    or _normalized_sha256(
+                        fresh_probe.get("target_identity_sha256")
+                    )
+                    != canonical_contract_sha256(save_target)
+                    or validated_unpublished_result["after_values"].get(
+                        "published"
+                    )
+                    is not False
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_IDENTITY_CONTINUITY_INVALID"
+                    )
+                save_paths = self._discovery_evidence_paths(
+                    validated_save_result
+                )
+                verify_paths = self._discovery_evidence_paths(
+                    validated_unpublished_result
+                )
+                save_times = self._discovery_evidence_times(
+                    validated_save_result
+                )
+                verify_times = self._discovery_evidence_times(
+                    validated_unpublished_result
+                )
+                if (
+                    not save_paths
+                    or not verify_paths
+                    or bool(save_paths & verify_paths)
+                    or not save_times
+                    or not verify_times
+                    or min(verify_times) <= max(save_times)
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_INDEPENDENT_PROOF_INVALID"
+                    )
+
+                save_observations = validated_save_result["evidence"][
+                    "observations"
+                ]
+                handshake = save_observations.get(
+                    "first_save_intent_handshake"
+                )
+                if not isinstance(handshake, Mapping):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_HANDSHAKE_MISSING"
+                    )
+                audit = handshake.get("network_audit")
+                authorization = handshake.get("mutation_authorization")
+                if (
+                    not isinstance(audit, Mapping)
+                    or not isinstance(authorization, Mapping)
+                    or audit.get("mutation_request_count") != 1
+                    or audit.get("save_request_count") != 1
+                    or audit.get("other_mutation_request_count") != 0
+                    or audit.get("publish_request_count") != 0
+                    or authorization.get("mutation_id")
+                    != ledger.get("mutation_id")
+                    or authorization.get("mutation_action")
+                    != "first_save_intent"
+                    or authorization.get("mutation_status") != "DISPATCHED"
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_WRITE_COUNTER_INVALID"
+                    )
+
+                unpublished_result_sha256 = canonical_contract_sha256(
+                    validated_unpublished_result
+                )
+                handshake_sha256 = _normalized_sha256(
+                    handshake.get("handshake_sha256")
+                )
+                verification_command_sha256 = canonical_contract_sha256(
+                    dict(unpublished_command)
+                )
+                opened_observation = handshake.get(
+                    "open_semi_managed_editor"
+                )
+                raw_field_readbacks = save_observations.get(
+                    "save_field_readbacks"
+                )
+                if raw_field_readbacks is None and isinstance(
+                    opened_observation, Mapping
+                ):
+                    raw_field_readbacks = opened_observation.get(
+                        "field_readbacks"
+                    )
+                if raw_field_readbacks is None:
+                    raw_field_readbacks = validated_save_result[
+                        "after_values"
+                    ].get("field_readbacks")
+                try:
+                    field_readbacks = [
+                        item.to_dict()
+                        for item in validated_field_readbacks_from_payload(
+                            raw_field_readbacks,
+                            require_nonempty=True,
+                            reason_prefix="DISCOVERY_SAVE1",
+                        )
+                    ]
+                except ReceiptValidationError as exc:
+                    raise _AtomicPathBStartRejected(exc.reason_code) from exc
+                plan = payload.get("plan_snapshot")
+                item_snapshots = (
+                    plan.get("item_snapshots")
+                    if isinstance(plan, Mapping)
+                    else None
+                )
+                matching_items = [
+                    item
+                    for item in item_snapshots or []
+                    if isinstance(item, Mapping)
+                    and str(item.get("product_id") or "")
+                    == str(stored_profile["target_product_id"])
+                ]
+                stage_facts = (
+                    matching_items[0].get("real_write_stage_facts")
+                    if len(matching_items) == 1
+                    and isinstance(
+                        matching_items[0].get("real_write_stage_facts"),
+                        Mapping,
+                    )
+                    else None
+                )
+                expected_save1_facts = (
+                    stage_facts.get("SAVE1")
+                    if isinstance(stage_facts, Mapping)
+                    else None
+                )
+                if (
+                    not isinstance(expected_save1_facts, list)
+                    or not expected_save1_facts
+                    or any(
+                        not isinstance(item, Mapping)
+                        for item in expected_save1_facts
+                    )
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SAVE1_STAGE_FACTS_INVALID"
+                    )
+                expected_after_by_field = {
+                    str(item.get("field_key") or ""): _normalized_sha256(
+                        item.get("expected_sha256")
+                    )
+                    for item in expected_save1_facts
+                }
+                actual_after_by_field = {
+                    str(item["field_key"]): canonical_contract_sha256(
+                        item.get("after_value")
+                    )
+                    for item in field_readbacks
+                }
+                if (
+                    "" in expected_after_by_field
+                    or None in expected_after_by_field.values()
+                    or expected_after_by_field != actual_after_by_field
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SAVE1_FIELD_READBACK_MISMATCH"
+                    )
+                field_readbacks_sha256 = canonical_contract_sha256(
+                    field_readbacks
+                )
+                unpublished_readback = {
+                    "before_values": validated_unpublished_result[
+                        "before_values"
+                    ],
+                    "after_values": validated_unpublished_result[
+                        "after_values"
+                    ],
+                    "fresh_probe": fresh_probe,
+                }
+                unpublished_readback_sha256 = canonical_contract_sha256(
+                    unpublished_readback
+                )
+                leaf_proof_manifest = (
+                    self._build_discovery_leaf_proof_manifest(
+                        first_save_action_result=validated_save_result,
+                        unpublished_action_result=(
+                            validated_unpublished_result
+                        ),
+                        field_readbacks=field_readbacks,
+                    )
+                )
+                leaf_proof_manifest_sha256 = canonical_contract_sha256(
+                    leaf_proof_manifest
+                )
+                if (
+                    handshake_sha256 is None
+                    or handshake_sha256 == unpublished_result_sha256
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_PROOF_REUSE_INVALID"
+                    )
+
+                sealed_at = now_iso()
+                receipt: dict[str, Any] = {
+                    "schema_version": _PATH_B_DISCOVERY_RECEIPT_SCHEMA,
+                    "attempt_identity_sha256": _normalized_sha256(
+                        attempt.get("attempt_identity_sha256")
+                    ),
+                    "task_id": task_id,
+                    "job_id": job_id,
+                    "product_id": stored_profile["target_product_id"],
+                    "snapshot_id": int(scope["snapshot"]["snapshotId"]),
+                    "snapshot_sha256": _normalized_sha256(
+                        scope["snapshot"]["snapshotSha256"]
+                    ),
+                    "ordered_product_ids": [
+                        int(item["productId"])
+                        for item in scope["orderedProducts"]
+                    ],
+                    "account_ref_hash": scope["account"][
+                        "accountContextHash"
+                    ],
+                    "shop_id": scope["shop"]["shopId"],
+                    "shop_name": scope["shop"]["shopName"],
+                    "git_head": scope["git"]["head"],
+                    "worktree": dict(scope["worktree"]),
+                    "runtime": dict(scope["runtime"]),
+                    "scope_sha256": stored_profile["scope_sha256"],
+                    "approval_sha256": stored_profile["approval_sha256"],
+                    "discovery_key_sha256": stored_profile[
+                        "discovery_key_sha256"
+                    ],
+                    "profile_sha256": profile_sha256,
+                    "command_id": save_command.command_id,
+                    "authorization_lease_id": (
+                        save_command.authorization_lease_id
+                    ),
+                    "mutation_id": ledger["mutation_id"],
+                    "ledger_entry_id": int(ledger["id"]),
+                    "first_save_command_sha256": command_sha256,
+                    "first_save_action_result_sha256": save_result_sha256,
+                    "save_authority_sha256": save_authority_sha256,
+                    "verification_command_sha256": (
+                        verification_command_sha256
+                    ),
+                    "save_verification_context_sha256": (
+                        verification_context["context_sha256"]
+                    ),
+                    "field_readbacks": field_readbacks,
+                    "field_readbacks_sha256": field_readbacks_sha256,
+                    "unpublished_readback": unpublished_readback,
+                    "unpublished_readback_sha256": (
+                        unpublished_readback_sha256
+                    ),
+                    "physical_mutation_count": 1,
+                    "save1_count": 1,
+                    "save2_count": 0,
+                    "other_product_mutation_count": 0,
+                    "publish_request_count": 0,
+                    "published": False,
+                    "unknown_count": 0,
+                    "first_save_intent_handshake_sha256": handshake_sha256,
+                    "unpublished_action_result_sha256": (
+                        unpublished_result_sha256
+                    ),
+                    "leaf_proof_manifest": leaf_proof_manifest,
+                    "leaf_proof_manifest_sha256": (
+                        leaf_proof_manifest_sha256
+                    ),
+                    "sealed_at": sealed_at,
+                }
+                receipt["discovery_receipt_sha256"] = canonical_contract_sha256(
+                    receipt
+                )
+                receipt_sha256 = receipt["discovery_receipt_sha256"]
+                inserted = conn.execute(
+                    """
+                    INSERT INTO real_dxm_path_b_discovery_receipts (
+                        attempt_id, attempt_identity_sha256, task_id, job_id,
+                        product_id, scope_sha256, approval_sha256,
+                        discovery_key_sha256, profile_sha256, command_id,
+                        authorization_lease_id, mutation_id, ledger_entry_id,
+                        first_save_command_sha256,
+                        first_save_action_result_sha256, save_authority_sha256,
+                        verification_command_sha256,
+                        save_verification_context_sha256,
+                        field_readbacks_sha256, unpublished_readback_sha256,
+                        first_save_intent_handshake_sha256,
+                        unpublished_action_result_sha256,
+                        verification_command_json,
+                        unpublished_action_result_json,
+                        leaf_proof_manifest_sha256,
+                        leaf_proof_manifest_json,
+                        discovery_receipt_sha256, receipt_json, status,
+                        sealed_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              'sealed', ?, ?, ?)
+                    """,
+                    (
+                        int(attempt["id"]),
+                        receipt["attempt_identity_sha256"],
+                        task_id,
+                        job_id,
+                        receipt["product_id"],
+                        receipt["scope_sha256"],
+                        receipt["approval_sha256"],
+                        receipt["discovery_key_sha256"],
+                        receipt["profile_sha256"],
+                        receipt["command_id"],
+                        receipt["authorization_lease_id"],
+                        receipt["mutation_id"],
+                        receipt["ledger_entry_id"],
+                        receipt["first_save_command_sha256"],
+                        receipt["first_save_action_result_sha256"],
+                        receipt["save_authority_sha256"],
+                        receipt["verification_command_sha256"],
+                        receipt["save_verification_context_sha256"],
+                        receipt["field_readbacks_sha256"],
+                        receipt["unpublished_readback_sha256"],
+                        receipt["first_save_intent_handshake_sha256"],
+                        receipt["unpublished_action_result_sha256"],
+                        dumps(dict(unpublished_command)),
+                        dumps(validated_unpublished_result),
+                        receipt["leaf_proof_manifest_sha256"],
+                        dumps(receipt["leaf_proof_manifest"]),
+                        receipt_sha256,
+                        dumps(receipt),
+                        sealed_at,
+                        sealed_at,
+                        sealed_at,
+                    ),
+                )
+                if inserted.rowcount != 1:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_RECEIPT_INSERT_CONFLICT"
+                    )
+                attempt_updated = conn.execute(
+                    """
+                    UPDATE real_dxm_path_b_discovery_attempts
+                       SET status='sealed', reason_code=NULL,
+                           discovery_receipt_sha256=?, command_id=?,
+                           mutation_id=?, terminal_at=?, updated_at=?
+                     WHERE id=? AND status='armed'
+                       AND discovery_receipt_sha256 IS NULL
+                    """,
+                    (
+                        receipt_sha256,
+                        receipt["command_id"],
+                        receipt["mutation_id"],
+                        sealed_at,
+                        sealed_at,
+                        attempt["id"],
+                    ),
+                )
+                scope_updated = conn.execute(
+                    """
+                    UPDATE real_dxm_write_scopes
+                       SET status='discovery_sealed', updated_at=?
+                     WHERE id=? AND status='consumed'
+                       AND purpose='discovery' AND approval_stage='discovery'
+                    """,
+                    (sealed_at, scope_row["id"]),
+                )
+                job_updated = conn.execute(
+                    """
+                    UPDATE jobs
+                       SET status='stopped',
+                           current_step_code='DISCOVERY_SEAL_STOP',
+                           current_step_name='Discovery SAVE1 已封存，停止后续写入',
+                           updated_at=?
+                     WHERE id=? AND task_id=? AND status='running'
+                    """,
+                    (sealed_at, job_id, task_id),
+                )
+                next_payload = dict(payload)
+                next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                    payload.get("runner_dispatch"),
+                    released_at=sealed_at,
+                    reason="path_b_save1_discovery_sealed",
+                )
+                task_updated = conn.execute(
+                    """
+                    UPDATE tasks
+                       SET status='stopped', payload_json=?, completed_jobs=0,
+                           failed_jobs=0, updated_at=?
+                     WHERE id=? AND status='running' AND completed_jobs=0
+                       AND failed_jobs=0
+                    """,
+                    (dumps(next_payload), sealed_at, task_id),
+                )
+                if any(
+                    cursor.rowcount != 1
+                    for cursor in (
+                        attempt_updated,
+                        scope_updated,
+                        job_updated,
+                        task_updated,
+                    )
+                ):
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_SEAL_CAS_CONFLICT"
+                    )
+                pending_count = conn.execute(
+                    """
+                    SELECT COUNT(*) AS value FROM jobs
+                     WHERE task_id=? AND status='pending'
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if int(pending_count["value"] or 0) != 2:
+                    raise _AtomicPathBStartRejected(
+                        "DISCOVERY_REMAINING_QUEUE_DRIFT"
+                    )
+        except _AtomicPathBStartRejected as exc:
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason_code": exc.reason_code,
+            }
+        except (
+            sqlite3.IntegrityError,
+            KeyError,
+            TypeError,
+            ValueError,
+            OverflowError,
+        ):
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason_code": "DISCOVERY_SEAL_PERSISTENCE_CONFLICT",
+            }
+        return {
+            "ok": True,
+            "status": "stopped",
+            "reason_code": "PATH_B_SAVE1_DISCOVERY_SEALED",
+            "receipt_sha256": receipt_sha256,
+        }
+
+    def _get_real_dxm_path_b_discovery(
+        self,
+        *,
+        lookup_column: str,
+        lookup_sha256: str,
+    ) -> dict[str, Any] | None:
+        normalized = _normalized_sha256(lookup_sha256)
+        if normalized is None or lookup_column not in {
+            "discovery_key_sha256",
+            "discovery_receipt_sha256",
+        }:
+            return None
+        with connection() as conn:
+            migrate_real_dxm_write_scopes(conn)
+            migrate_real_dxm_path_b_discovery_receipts(conn)
+            attempt = conn.execute(
+                f"""
+                SELECT * FROM real_dxm_path_b_discovery_attempts
+                 WHERE {lookup_column}=?
+                """,
+                (normalized,),
+            ).fetchone()
+            if not attempt:
+                return None
+            task = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (attempt["task_id"],),
+            ).fetchone()
+            scope = conn.execute(
+                "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+                (attempt["scope_sha256"],),
+            ).fetchone()
+            scope_payload = (
+                loads(scope.get("scope_json"), {}) if scope else {}
+            )
+            receipt_row = None
+            if attempt.get("discovery_receipt_sha256"):
+                receipt_row = conn.execute(
+                    """
+                    SELECT * FROM real_dxm_path_b_discovery_receipts
+                     WHERE discovery_receipt_sha256=?
+                    """,
+                    (attempt["discovery_receipt_sha256"],),
+                ).fetchone()
+
+            drift = False
+            payload = (
+                loads(task.get("payload_json"), {}) if task else {}
+            )
+            raw_profile = (
+                payload.get(PATH_B_SAVE1_DISCOVERY_PROFILE_KEY)
+                if isinstance(payload, Mapping)
+                else None
+            )
+            try:
+                profile = validate_path_b_save1_discovery_profile(raw_profile)
+            except (BatchCommandContractError, TypeError, ValueError):
+                profile = None
+                drift = True
+            if (
+                not task
+                or not scope
+                or profile is None
+                or canonical_contract_sha256(profile)
+                != _normalized_sha256(attempt.get("profile_sha256"))
+                or profile["target_task_id"] != int(attempt["task_id"])
+                or profile["target_job_id"] != int(attempt.get("job_id") or 0)
+                or profile["target_product_id"]
+                != int(attempt.get("product_id") or 0)
+                or profile["scope_sha256"]
+                != _normalized_sha256(attempt.get("scope_sha256"))
+                or profile["discovery_key_sha256"]
+                != _normalized_sha256(
+                    attempt.get("discovery_key_sha256")
+                )
+                or profile["approval_sha256"]
+                != _normalized_sha256(attempt.get("approval_sha256"))
+                or int(scope.get("task_id") or 0) != int(attempt["task_id"])
+                or not isinstance(scope_payload, Mapping)
+            ):
+                drift = True
+            if profile is not None and isinstance(scope_payload, Mapping):
+                try:
+                    rebuilt_attempt_identity = canonical_contract_sha256(
+                        {
+                            "schema": "dxm.real-dxm-path-b.discovery-attempt-identity.v1",
+                            "discovery_key_sha256": profile[
+                                "discovery_key_sha256"
+                            ],
+                            "task_id": int(attempt["task_id"]),
+                            "snapshot_sha256": scope_payload["snapshot"][
+                                "snapshotSha256"
+                            ],
+                            "scope_sha256": profile["scope_sha256"],
+                            "approval_sha256": profile[
+                                "approval_sha256"
+                            ],
+                            "target_product_ordinal": 1,
+                            "target_product_id": profile[
+                                "target_product_id"
+                            ],
+                            "profile_sha256": canonical_contract_sha256(
+                                profile
+                            ),
+                            "account_ref_hash": scope_payload["account"][
+                                "accountContextHash"
+                            ],
+                            "shop_id": scope_payload["shop"]["shopId"],
+                            "runtime_instance_id": scope_payload["runtime"][
+                                "runtimeInstanceId"
+                            ],
+                            "browser_session_id": scope_payload["runtime"][
+                                "browserSessionId"
+                            ],
+                            "git_head": scope_payload["git"]["head"],
+                            "worktree": scope_payload["worktree"],
+                        }
+                    )
+                except (KeyError, TypeError, ValueError):
+                    rebuilt_attempt_identity = None
+                if rebuilt_attempt_identity != _normalized_sha256(
+                    attempt.get("attempt_identity_sha256")
+                ):
+                    drift = True
+
+            receipt: dict[str, Any] | None = None
+            attempt_status = str(attempt.get("status") or "")
+            if attempt_status == "sealed":
+                if not receipt_row:
+                    drift = True
+                else:
+                    loaded = loads(receipt_row.get("receipt_json"), None)
+                    if isinstance(loaded, dict):
+                        receipt = loaded
+                    else:
+                        drift = True
+                    if receipt is not None:
+                        receipt_hash = receipt.get(
+                            "discovery_receipt_sha256"
+                        )
+                        body = {
+                            key: value
+                            for key, value in receipt.items()
+                            if key != "discovery_receipt_sha256"
+                        }
+                        expected_hash = canonical_contract_sha256(body)
+                        try:
+                            expected_ordered_product_ids = [
+                                int(item["productId"])
+                                for item in scope_payload["orderedProducts"]
+                            ]
+                            expected_snapshot_id = int(
+                                scope_payload["snapshot"]["snapshotId"]
+                            )
+                            expected_snapshot_sha256 = _normalized_sha256(
+                                scope_payload["snapshot"]["snapshotSha256"]
+                            )
+                            expected_account_ref_hash = scope_payload[
+                                "account"
+                            ]["accountContextHash"]
+                            expected_shop_id = scope_payload["shop"]["shopId"]
+                            expected_shop_name = scope_payload["shop"][
+                                "shopName"
+                            ]
+                            expected_git_head = scope_payload["git"]["head"]
+                            expected_worktree = scope_payload["worktree"]
+                            expected_runtime = scope_payload["runtime"]
+                        except (KeyError, TypeError, ValueError):
+                            expected_ordered_product_ids = None
+                            expected_snapshot_id = 0
+                            expected_snapshot_sha256 = None
+                            expected_account_ref_hash = None
+                            expected_shop_id = None
+                            expected_shop_name = None
+                            expected_git_head = None
+                            expected_worktree = None
+                            expected_runtime = None
+                            drift = True
+                        row_pairs = (
+                            (
+                                receipt.get("schema_version"),
+                                _PATH_B_DISCOVERY_RECEIPT_SCHEMA,
+                            ),
+                            (
+                                _normalized_sha256(receipt_hash),
+                                expected_hash,
+                            ),
+                            (
+                                _normalized_sha256(
+                                    receipt_row.get(
+                                        "discovery_receipt_sha256"
+                                    )
+                                ),
+                                expected_hash,
+                            ),
+                            (
+                                _normalized_sha256(
+                                    attempt.get(
+                                        "discovery_receipt_sha256"
+                                    )
+                                ),
+                                expected_hash,
+                            ),
+                            (
+                                int(receipt.get("task_id") or 0),
+                                int(attempt["task_id"]),
+                            ),
+                            (
+                                int(receipt.get("job_id") or 0),
+                                int(attempt.get("job_id") or 0),
+                            ),
+                            (
+                                int(receipt.get("product_id") or 0),
+                                int(attempt.get("product_id") or 0),
+                            ),
+                            (
+                                int(receipt.get("snapshot_id") or 0),
+                                expected_snapshot_id,
+                            ),
+                            (
+                                _normalized_sha256(
+                                    receipt.get("snapshot_sha256")
+                                ),
+                                expected_snapshot_sha256,
+                            ),
+                            (
+                                receipt.get("ordered_product_ids"),
+                                expected_ordered_product_ids,
+                            ),
+                            (
+                                receipt.get("account_ref_hash"),
+                                expected_account_ref_hash,
+                            ),
+                            (receipt.get("shop_id"), expected_shop_id),
+                            (
+                                receipt.get("shop_name"),
+                                expected_shop_name,
+                            ),
+                            (receipt.get("git_head"), expected_git_head),
+                            (receipt.get("worktree"), expected_worktree),
+                            (receipt.get("runtime"), expected_runtime),
+                            (
+                                _normalized_sha256(
+                                    receipt.get("scope_sha256")
+                                ),
+                                _normalized_sha256(
+                                    attempt.get("scope_sha256")
+                                ),
+                            ),
+                            (
+                                _normalized_sha256(
+                                    receipt.get("discovery_key_sha256")
+                                ),
+                                _normalized_sha256(
+                                    attempt.get("discovery_key_sha256")
+                                ),
+                            ),
+                            (
+                                receipt.get("physical_mutation_count"),
+                                1,
+                            ),
+                            (receipt.get("save1_count"), 1),
+                            (receipt.get("save2_count"), 0),
+                            (
+                                receipt.get(
+                                    "other_product_mutation_count"
+                                ),
+                                0,
+                            ),
+                            (receipt.get("publish_request_count"), 0),
+                            (receipt.get("published"), False),
+                            (receipt.get("unknown_count"), 0),
+                            (
+                                canonical_contract_sha256(
+                                    receipt.get("field_readbacks")
+                                ),
+                                _normalized_sha256(
+                                    receipt.get("field_readbacks_sha256")
+                                ),
+                            ),
+                            (
+                                canonical_contract_sha256(
+                                    receipt.get("unpublished_readback")
+                                ),
+                                _normalized_sha256(
+                                    receipt.get(
+                                        "unpublished_readback_sha256"
+                                    )
+                                ),
+                            ),
+                        )
+                        if any(
+                            observed != expected
+                            for observed, expected in row_pairs
+                        ):
+                            drift = True
+                        try:
+                            canonical_readbacks = [
+                                item.to_dict()
+                                for item in validated_field_readbacks_from_payload(
+                                    receipt.get("field_readbacks"),
+                                    require_nonempty=True,
+                                    reason_prefix="DISCOVERY_SAVE1",
+                                )
+                            ]
+                        except ReceiptValidationError:
+                            canonical_readbacks = None
+                            drift = True
+                        if canonical_readbacks != receipt.get(
+                            "field_readbacks"
+                        ):
+                            drift = True
+                        plan = (
+                            payload.get("plan_snapshot")
+                            if isinstance(payload, Mapping)
+                            else None
+                        )
+                        item_snapshots = (
+                            plan.get("item_snapshots")
+                            if isinstance(plan, Mapping)
+                            else None
+                        )
+                        matching_items = [
+                            item
+                            for item in item_snapshots or []
+                            if isinstance(item, Mapping)
+                            and str(item.get("product_id") or "")
+                            == str(attempt.get("product_id") or "")
+                        ]
+                        stage_facts = (
+                            matching_items[0].get(
+                                "real_write_stage_facts"
+                            )
+                            if len(matching_items) == 1
+                            and isinstance(
+                                matching_items[0].get(
+                                    "real_write_stage_facts"
+                                ),
+                                Mapping,
+                            )
+                            else None
+                        )
+                        expected_save1_facts = (
+                            stage_facts.get("SAVE1")
+                            if isinstance(stage_facts, Mapping)
+                            else None
+                        )
+                        expected_after_by_field = (
+                            {
+                                str(item.get("field_key") or ""):
+                                _normalized_sha256(
+                                    item.get("expected_sha256")
+                                )
+                                for item in expected_save1_facts
+                                if isinstance(item, Mapping)
+                            }
+                            if isinstance(expected_save1_facts, list)
+                            and expected_save1_facts
+                            else None
+                        )
+                        actual_after_by_field = (
+                            {
+                                str(item["field_key"]):
+                                canonical_contract_sha256(
+                                    item.get("after_value")
+                                )
+                                for item in canonical_readbacks
+                            }
+                            if isinstance(canonical_readbacks, list)
+                            else None
+                        )
+                        if (
+                            not isinstance(expected_after_by_field, dict)
+                            or "" in expected_after_by_field
+                            or None in expected_after_by_field.values()
+                            or expected_after_by_field
+                            != actual_after_by_field
+                        ):
+                            drift = True
+                        if (
+                            int(receipt_row.get("attempt_id") or 0)
+                            != int(attempt["id"])
+                            or int(receipt_row.get("task_id") or 0)
+                            != int(attempt["task_id"])
+                            or int(receipt_row.get("job_id") or 0)
+                            != int(attempt.get("job_id") or 0)
+                            or int(receipt_row.get("product_id") or 0)
+                            != int(attempt.get("product_id") or 0)
+                            or str(receipt_row.get("status") or "")
+                            != "sealed"
+                        ):
+                            drift = True
+                        row_receipt_fields = (
+                            "attempt_identity_sha256",
+                            "scope_sha256",
+                            "approval_sha256",
+                            "discovery_key_sha256",
+                            "profile_sha256",
+                            "command_id",
+                            "authorization_lease_id",
+                            "mutation_id",
+                            "ledger_entry_id",
+                            "first_save_command_sha256",
+                            "first_save_action_result_sha256",
+                            "save_authority_sha256",
+                            "verification_command_sha256",
+                            "save_verification_context_sha256",
+                            "field_readbacks_sha256",
+                            "unpublished_readback_sha256",
+                            "first_save_intent_handshake_sha256",
+                            "unpublished_action_result_sha256",
+                            "leaf_proof_manifest_sha256",
+                        )
+                        if any(
+                            receipt.get(key) != receipt_row.get(key)
+                            for key in row_receipt_fields
+                        ):
+                            drift = True
+                        try:
+                            self._validate_sealed_discovery_authority(
+                                conn,
+                                attempt=attempt,
+                                receipt_row=receipt_row,
+                                receipt=receipt,
+                            )
+                        except (TypeError, ValueError):
+                            drift = True
+                if (
+                    str(task.get("status") or "") != "stopped"
+                    or str(scope.get("status") or "")
+                    != "discovery_sealed"
+                ):
+                    drift = True
+            elif attempt_status == "armed":
+                if (
+                    str(scope.get("status") or "") != "consumed"
+                    or str(scope.get("purpose") or "") != "discovery"
+                    or str(scope.get("approval_stage") or "") != "discovery"
+                    or str(task.get("status") or "") != "running"
+                    or receipt_row is not None
+                ):
+                    drift = True
+            elif attempt_status not in {"unknown", "blocked"}:
+                drift = True
+
+            status = (
+                "UNKNOWN"
+                if drift
+                else _discovery_attempt_public_status(
+                    attempt_status,
+                    task_status=task.get("status") if task else None,
+                )
+            )
+            result: dict[str, Any] = {
+                "ok": True,
+                "status": status,
+                "reasonCode": (
+                    "DISCOVERY_PERSISTENCE_DRIFT"
+                    if drift
+                    else attempt.get("reason_code") or "OK"
+                ),
+                "taskId": int(attempt["task_id"]),
+                "discoveryKeySha256": str(
+                    attempt["discovery_key_sha256"]
+                ),
+                "scopeSha256": str(attempt["scope_sha256"]),
+                "discoveryReceiptSha256": (
+                    str(attempt["discovery_receipt_sha256"])
+                    if attempt.get("discovery_receipt_sha256")
+                    else None
+                ),
+            }
+            if not drift and status == "DISCOVERY_SEALED" and receipt is not None:
+                result["receipt"] = receipt
+            return result
+
+    def get_real_dxm_path_b_discovery_by_key_sha256(
+        self,
+        discovery_key_sha256: str,
+    ) -> dict[str, Any] | None:
+        """Return a revalidated public recovery projection for one opaque key."""
+
+        return self._get_real_dxm_path_b_discovery(
+            lookup_column="discovery_key_sha256",
+            lookup_sha256=discovery_key_sha256,
+        )
+
+    def get_real_dxm_path_b_discovery_by_receipt_sha256(
+        self,
+        discovery_receipt_sha256: str,
+    ) -> dict[str, Any] | None:
+        """Return the same projection for Formal lineage verification."""
+
+        return self._get_real_dxm_path_b_discovery(
+            lookup_column="discovery_receipt_sha256",
+            lookup_sha256=discovery_receipt_sha256,
+        )
+
+    def mark_real_dxm_path_b_discovery_unknown(
+        self,
+        task_id: int,
+        *,
+        reason_code: str,
+    ) -> dict[str, Any]:
+        """Terminally quarantine an armed attempt after ambiguous runner exit."""
+
+        normalized_reason = str(reason_code or "UNKNOWN").strip().upper()
+        if (
+            isinstance(task_id, bool)
+            or not isinstance(task_id, int)
+            or task_id <= 0
+            or len(normalized_reason) < 3
+            or len(normalized_reason) > 96
+            or any(
+                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+                for character in normalized_reason
+            )
+        ):
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason_code": "DISCOVERY_UNKNOWN_INPUT_INVALID",
+            }
+        now = now_iso()
+        with connection() as conn:
+            migrate_real_dxm_write_scopes(conn)
+            migrate_real_dxm_path_b_discovery_receipts(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            attempt = conn.execute(
+                """
+                SELECT * FROM real_dxm_path_b_discovery_attempts
+                 WHERE task_id=?
+                """,
+                (task_id,),
+            ).fetchone()
+            if not attempt:
+                return {
+                    "ok": False,
+                    "status": "UNKNOWN",
+                    "reason_code": "DISCOVERY_ATTEMPT_NOT_FOUND",
+                }
+            status = str(attempt.get("status") or "")
+            if status == "sealed":
+                return {
+                    "ok": True,
+                    "status": "DISCOVERY_SEALED",
+                    "reason_code": "PATH_B_SAVE1_DISCOVERY_SEALED",
+                    "receipt_sha256": attempt.get(
+                        "discovery_receipt_sha256"
+                    ),
+                }
+            if status in {"unknown", "blocked"}:
+                return {
+                    "ok": True,
+                    "status": status.upper(),
+                    "reason_code": attempt.get("reason_code")
+                    or normalized_reason,
+                    "idempotent": True,
+                }
+            if status != "armed":
+                return {
+                    "ok": False,
+                    "status": "UNKNOWN",
+                    "reason_code": "DISCOVERY_ATTEMPT_STATE_INVALID",
+                }
+            attempt_updated = conn.execute(
+                """
+                UPDATE real_dxm_path_b_discovery_attempts
+                   SET status='unknown', reason_code=?, terminal_at=?, updated_at=?
+                 WHERE id=? AND status='armed'
+                   AND discovery_receipt_sha256 IS NULL
+                """,
+                (normalized_reason, now, now, attempt["id"]),
+            )
+            scope_updated = conn.execute(
+                """
+                UPDATE real_dxm_write_scopes
+                   SET status='unknown', approval_stage='discovery_unknown',
+                       updated_at=?
+                 WHERE scope_sha256=? AND status='consumed'
+                   AND purpose='discovery'
+                """,
+                (now, attempt["scope_sha256"]),
+            )
+            task = conn.execute(
+                "SELECT status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not task:
+                conn.execute("ROLLBACK")
+                return {
+                    "ok": False,
+                    "status": "UNKNOWN",
+                    "reason_code": "DISCOVERY_CURRENT_TASK_MISSING",
+                }
+            payload = loads(task["payload_json"], {})
+            next_payload = dict(payload)
+            next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                payload.get("runner_dispatch"),
+                released_at=now,
+                reason="path_b_save1_discovery_unknown",
+            )
+            task_updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='needs_manual_review', payload_json=?, updated_at=?
+                 WHERE id=? AND status IN (
+                     'running', 'pause_requested', 'stop_requested',
+                     'failed', 'needs_manual_review'
+                 )
+                """,
+                (dumps(next_payload), now, task_id),
+            )
+            conn.execute(
+                """
+                UPDATE jobs
+                   SET status='needs_manual_review',
+                       error_code='UNKNOWN',
+                       error_detail=?, updated_at=?
+                 WHERE task_id=? AND status='running'
+                """,
+                (normalized_reason, now, task_id),
+            )
+            if (
+                attempt_updated.rowcount != 1
+                or scope_updated.rowcount != 1
+                or task_updated.rowcount != 1
+            ):
+                conn.execute("ROLLBACK")
+                return {
+                    "ok": False,
+                    "status": "UNKNOWN",
+                    "reason_code": "DISCOVERY_UNKNOWN_CAS_CONFLICT",
+                }
+        return {
+            "ok": True,
+            "status": "UNKNOWN",
+            "reason_code": normalized_reason,
+        }
+
     def add_receipt(self, receipt: dict[str, Any]) -> int:
         """
         Persist a CanonicalReceipt dict to the canonical_receipts table.
@@ -3882,34 +7775,718 @@ class Repository:
         now = now_iso()
         with connection() as conn:
             migrate_canonical_receipts(conn)
-            cursor = conn.execute(
-                """
-                INSERT INTO canonical_receipts (
-                    task_id, job_id, product_id, mode, claim_mark,
-                    canonical_receipt_sha256, started_at, completed_at,
-                    job_status, error_code, error_detail, needs_manual_review,
-                    receipt_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    receipt.get("task_id"),
-                    receipt.get("job_id"),
-                    receipt.get("product_id"),
-                    receipt.get("mode"),
-                    receipt.get("claim_mark"),
-                    receipt.get("canonical_receipt_sha256"),
-                    receipt.get("started_at"),
-                    receipt.get("completed_at"),
-                    receipt.get("job_status"),
-                    receipt.get("error_code"),
-                    receipt.get("error_detail"),
-                    1 if receipt.get("needs_manual_review") else 0,
-                    dumps(receipt),
-                    now,
-                    now,
-                ),
-            )
+            cursor = self._insert_canonical_receipt(conn, receipt, now=now)
             return cursor.lastrowid or 0
+
+    @staticmethod
+    def _insert_canonical_receipt(
+        conn: Any,
+        receipt: Mapping[str, Any],
+        *,
+        now: str,
+        verification_command: Mapping[str, Any] | None = None,
+        verification_action_result: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Insert one canonical receipt using the caller's transaction."""
+
+        return conn.execute(
+            """
+            INSERT INTO canonical_receipts (
+                task_id, job_id, product_id, receipt_kind, save_stage,
+                parent_canonical_receipt_sha256, scope_sha256,
+                mode, claim_mark,
+                canonical_receipt_sha256, started_at, completed_at,
+                job_status, error_code, error_detail, needs_manual_review,
+                verification_command_sha256,
+                verification_action_result_sha256,
+                verification_command_json, verification_action_result_json,
+                receipt_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?)
+            """,
+            (
+                receipt.get("task_id"),
+                receipt.get("job_id"),
+                receipt.get("product_id"),
+                receipt.get("receipt_kind") or "product_aggregate",
+                receipt.get("save_stage"),
+                receipt.get("parent_canonical_receipt_sha256"),
+                receipt.get("scope_sha256"),
+                receipt.get("mode"),
+                receipt.get("claim_mark"),
+                receipt.get("canonical_receipt_sha256"),
+                receipt.get("started_at"),
+                receipt.get("completed_at"),
+                receipt.get("job_status"),
+                receipt.get("error_code"),
+                receipt.get("error_detail"),
+                1 if receipt.get("needs_manual_review") else 0,
+                (
+                    canonical_contract_sha256(verification_command)
+                    if isinstance(verification_command, Mapping)
+                    else None
+                ),
+                (
+                    canonical_contract_sha256(verification_action_result)
+                    if isinstance(verification_action_result, Mapping)
+                    else None
+                ),
+                (
+                    dumps(dict(verification_command))
+                    if isinstance(verification_command, Mapping)
+                    else None
+                ),
+                (
+                    dumps(dict(verification_action_result))
+                    if isinstance(verification_action_result, Mapping)
+                    else None
+                ),
+                dumps(dict(receipt)),
+                now,
+                now,
+            ),
+        )
+
+    @staticmethod
+    def _build_canonical_save_stage_receipt(
+        conn: Any,
+        raw_save: Mapping[str, Any],
+        *,
+        task_id: int,
+        job_id: int,
+        product_id: int | None,
+        scope_sha256: str,
+        save_stage: str,
+        verification_command: Mapping[str, Any] | None = None,
+        verification_action_result: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build one canonical stage wrapper from a verified SAVE pair."""
+
+        expected = {
+            "SAVE1": (
+                ReceiptPhase.PHASE_1_FIRST_SAVE,
+                "SAVE_ONLY",
+                "VERIFY_SAVE1_NOT_PUBLISHED",
+            ),
+            "SAVE2": (
+                ReceiptPhase.PHASE_2_SECOND_SAVE,
+                "SAVE2_ONLY",
+                "VERIFY_SAVE2_NOT_PUBLISHED",
+            ),
+        }.get(save_stage)
+        normalized_scope = _normalized_sha256(scope_sha256)
+        if expected is None or normalized_scope is None:
+            raise ValueError("canonical SAVE stage/scope is invalid")
+        expected_phase, expected_state, expected_verification_state = expected
+        validated_save = SaveReceipt.from_dict(raw_save)
+        nested_digest = _normalized_sha256(
+            raw_save.get("canonical_save_receipt_sha256")
+        )
+        if (
+            validated_save.save_phase != expected_phase
+            or nested_digest is None
+            or _normalized_sha256(validated_save.finalize()) != nested_digest
+            or validated_save.physical_mutation_count != 1
+            or validated_save.publish_request_count != 0
+            or validated_save.published is not False
+        ):
+            raise ValueError(f"{save_stage} canonical receipt is not acceptable")
+
+        ledger_row = conn.execute(
+            "SELECT * FROM mutation_dispatch_ledger WHERE id=?",
+            (validated_save.ledger_entry_id,),
+        ).fetchone()
+        persisted_command = (
+            loads(ledger_row.get("command_json"), None)
+            if ledger_row
+            else None
+        )
+        persisted_save_result = (
+            loads(ledger_row.get("save_action_result_json"), None)
+            if ledger_row
+            else None
+        )
+        persisted_save_authority = (
+            loads(ledger_row.get("save_authority_json"), None)
+            if ledger_row
+            else None
+        )
+        ledger_outcome = (
+            loads(ledger_row.get("outcome_json"), None)
+            if ledger_row
+            else None
+        )
+        command_sha256 = (
+            canonical_contract_sha256(persisted_command)
+            if isinstance(persisted_command, Mapping)
+            else None
+        )
+        save_result_sha256 = (
+            canonical_contract_sha256(persisted_save_result)
+            if isinstance(persisted_save_result, Mapping)
+            else None
+        )
+        save_authority_sha256 = (
+            canonical_contract_sha256(persisted_save_authority)
+            if isinstance(persisted_save_authority, Mapping)
+            else None
+        )
+        if not isinstance(verification_command, Mapping) or not isinstance(
+            verification_action_result, Mapping
+        ):
+            persisted_stage_source = conn.execute(
+                """
+                SELECT verification_command_json,
+                       verification_action_result_json
+                  FROM canonical_receipts
+                 WHERE task_id=? AND job_id=?
+                   AND receipt_kind='save_stage' AND save_stage=?
+                """,
+                (task_id, job_id, save_stage),
+            ).fetchone()
+            verification_command = (
+                loads(
+                    persisted_stage_source.get("verification_command_json"),
+                    None,
+                )
+                if persisted_stage_source
+                else None
+            )
+            verification_action_result = (
+                loads(
+                    persisted_stage_source.get(
+                        "verification_action_result_json"
+                    ),
+                    None,
+                )
+                if persisted_stage_source
+                else None
+            )
+        verification_command_sha256 = (
+            canonical_contract_sha256(verification_command)
+            if isinstance(verification_command, Mapping)
+            else None
+        )
+        verification_action_result_sha256 = (
+            canonical_contract_sha256(verification_action_result)
+            if isinstance(verification_action_result, Mapping)
+            else None
+        )
+        rebuilt_save_receipt: Mapping[str, Any] | None = None
+        if (
+            isinstance(persisted_command, Mapping)
+            and isinstance(persisted_save_result, Mapping)
+            and isinstance(verification_command, Mapping)
+            and isinstance(verification_action_result, Mapping)
+            and ledger_row
+        ):
+            save_params = persisted_command.get("params")
+            defaults = (
+                save_params.get("defaults")
+                if isinstance(save_params, Mapping)
+                and isinstance(save_params.get("defaults"), Mapping)
+                else None
+            )
+            verification_params = verification_command.get("params")
+            try:
+                save_command_contract = BrowserAgentCommand(
+                    **dict(persisted_command)
+                )
+                verification_command_contract = BrowserAgentCommand(
+                    **dict(verification_command)
+                )
+                validate_browser_agent_command(save_command_contract)
+                validate_browser_agent_command(
+                    verification_command_contract
+                )
+                validated_persisted_save_result = (
+                    validate_action_result_envelope(
+                        persisted_save_result,
+                        expected_state=expected_state,
+                        expected_action="save_only",
+                        expected_page=(
+                            "editor"
+                            if save_stage == "SAVE1"
+                            else "semi_managed"
+                        ),
+                        execution_mode="batch_draft_save",
+                        expected_runtime_id=(
+                            save_command_contract.runtime_id
+                        ),
+                        expected_execution_payload=(
+                            defaults.get("_frozen_execution_payload")
+                            if isinstance(defaults, Mapping)
+                            else None
+                        ),
+                        expected_target_identity=(
+                            save_command_contract.params.get(
+                                "target_identity"
+                            )
+                        ),
+                        expected_store_name=(
+                            save_command_contract.params.get("store_name")
+                        ),
+                        expected_target_hash=(
+                            save_command_contract.target_hash
+                        ),
+                    )
+                )
+                save_page_identity = validated_persisted_save_result.get(
+                    "page_identity"
+                )
+                validated_verification_action_result = (
+                    validate_action_result_envelope(
+                        verification_action_result,
+                        expected_state=expected_verification_state,
+                        expected_action="verify_not_published",
+                        expected_page=(
+                            "editor"
+                            if save_stage == "SAVE1"
+                            else "semi_managed"
+                        ),
+                        execution_mode="batch_draft_save",
+                        expected_runtime_id=(
+                            verification_command_contract.runtime_id
+                        ),
+                        expected_browser_session_id=(
+                            save_page_identity.get("browser_session_id")
+                            if isinstance(save_page_identity, Mapping)
+                            else None
+                        ),
+                    )
+                )
+                frozen_verification_context = (
+                    save_verification_facts_from_frozen_authority(
+                        persisted_save_authority,
+                        save_command=persisted_command,
+                        ledger_entry=dict(ledger_row),
+                        save_action_result_sha256=save_result_sha256,
+                    )
+                )
+                persisted_verification_context = (
+                    verification_params.get(
+                        "save_verification_context"
+                    )
+                    if isinstance(verification_params, Mapping)
+                    else None
+                )
+                if (
+                    persisted_verification_context
+                    != frozen_verification_context
+                ):
+                    raise ReceiptValidationError(
+                        "SAVE_STAGE_VERIFICATION_AUTHORITY_DRIFT",
+                        save_stage,
+                    )
+                rebuilt_save_receipt = (
+                    build_save_receipt_from_verified_pair(
+                        save_command=persisted_command,
+                        ledger_entry=dict(ledger_row),
+                        save_action_result=(
+                            validated_persisted_save_result
+                        ),
+                        verification_action_result=(
+                            validated_verification_action_result
+                        ),
+                        expected_execution_payload=(
+                            defaults.get("_frozen_execution_payload")
+                            if isinstance(defaults, Mapping)
+                            else None
+                        ),
+                        expected_verification_context=(
+                            verification_params.get(
+                                "save_verification_context"
+                            )
+                            if isinstance(verification_params, Mapping)
+                            else None
+                        ),
+                    ).to_persisted_dict()
+                )
+            except (
+                ActionResultContractError,
+                BatchCommandContractError,
+                DispatchAuthorityError,
+                MutationCommandContractError,
+                ReceiptValidationError,
+            ) as exc:
+                raise ValueError(
+                    f"{save_stage} persisted SAVE/VERIFY pair is invalid"
+                ) from exc
+        if (
+            not ledger_row
+            or ledger_row.get("status") != "DISPATCHED"
+            or ledger_row.get("unknown_at") is not None
+            or not (
+                ledger_outcome is True
+                or (
+                    isinstance(ledger_outcome, Mapping)
+                    and ledger_outcome.get("dispatched") is True
+                )
+            )
+            or ledger_row.get("mutation_action") != "save_only_click"
+            or ledger_row.get("command_state") != expected_state
+            or str(ledger_row.get("task_id") or "") != str(task_id)
+            or str(ledger_row.get("job_id") or "") != str(job_id)
+            or ledger_row.get("mutation_id") != validated_save.mutation_id
+            or ledger_row.get("command_id") != validated_save.action_grant_id
+            or ledger_row.get("authorization_lease_id")
+            != validated_save.save_lease_id
+            or _normalized_sha256(ledger_row.get("target_hash"))
+            != _normalized_sha256(validated_save.target_hash)
+            or not isinstance(persisted_command, Mapping)
+            or not isinstance(persisted_save_result, Mapping)
+            or not isinstance(persisted_save_authority, Mapping)
+            or not isinstance(verification_command, Mapping)
+            or not isinstance(verification_action_result, Mapping)
+            or verification_command_sha256 is None
+            or verification_action_result_sha256 is None
+            or rebuilt_save_receipt != dict(raw_save)
+            or str(verification_command.get("task_id")) != str(task_id)
+            or str(verification_command.get("job_id")) != str(job_id)
+            or verification_command.get("state")
+            != expected_verification_state
+            or verification_command.get("action") != "verify_not_published"
+            or verification_command.get("execution_mode")
+            != "batch_draft_save"
+            or verification_command.get("runtime_id")
+            != persisted_command.get("runtime_id")
+            or not isinstance(verification_command.get("params"), Mapping)
+            or verification_command.get("params", {}).get("target_identity")
+            != persisted_command.get("params", {}).get("target_identity")
+            or verification_command.get("params", {}).get("store_name")
+            != persisted_command.get("params", {}).get("store_name")
+            or verification_action_result.get("attempted_state")
+            != expected_verification_state
+            or _normalized_sha256(ledger_row.get("command_sha256"))
+            != command_sha256
+            or _normalized_sha256(
+                ledger_row.get("save_action_result_sha256")
+            )
+            != save_result_sha256
+            or _normalized_sha256(ledger_row.get("save_authority_sha256"))
+            != save_authority_sha256
+            or str(persisted_command.get("task_id")) != str(task_id)
+            or str(persisted_command.get("job_id")) != str(job_id)
+            or persisted_command.get("state") != expected_state
+            or persisted_command.get("action") != "save_only"
+            or persisted_command.get("command_id")
+            != validated_save.action_grant_id
+            or persisted_command.get("authorization_lease_id")
+            != validated_save.save_lease_id
+            or _normalized_sha256(persisted_command.get("target_hash"))
+            != _normalized_sha256(validated_save.target_hash)
+            or not isinstance(ledger_row.get("save_success_recorded_at"), str)
+            or not str(ledger_row.get("save_success_recorded_at") or "").strip()
+        ):
+            raise ValueError(f"{save_stage} mutation ledger binding is incomplete")
+
+        task_row = conn.execute(
+            "SELECT payload_json FROM tasks WHERE id=?",
+            (task_id,),
+        ).fetchone()
+        task_payload = loads(task_row.get("payload_json"), {}) if task_row else {}
+        real_authorization = (
+            task_payload.get("real_dxm_write_authorization")
+            if isinstance(task_payload, Mapping)
+            and isinstance(task_payload.get("real_dxm_write_authorization"), Mapping)
+            else None
+        )
+        job_rows = conn.execute(
+            "SELECT id, product_id FROM jobs WHERE task_id=? ORDER BY id ASC",
+            (task_id,),
+        ).fetchall()
+        ordered_product_ids = [row.get("product_id") for row in job_rows]
+        ordinal_matches = [
+            ordinal
+            for ordinal, row in enumerate(job_rows, start=1)
+            if row.get("id") == job_id and row.get("product_id") == product_id
+        ]
+        raw_leases = (
+            real_authorization.get("save_leases")
+            if isinstance(real_authorization, Mapping)
+            else None
+        )
+        lease_matches = [
+            lease
+            for lease in raw_leases or []
+            if isinstance(lease, Mapping)
+            and lease.get("product_id") == product_id
+            and lease.get("product_ordinal")
+            == (ordinal_matches[0] if len(ordinal_matches) == 1 else None)
+            and lease.get("save_stage") == save_stage
+            and _normalized_sha256(lease.get("scope_sha256"))
+            == normalized_scope
+            and _normalized_sha256(lease.get("lease_id"))
+            == _normalized_sha256(validated_save.save_lease_id)
+            and lease.get("single_use") is True
+        ]
+        if (
+            not isinstance(real_authorization, Mapping)
+            or real_authorization.get("schema")
+            != "real_dxm_write_authorization.v1"
+            or real_authorization.get("publish_allowed") is not False
+            or _normalized_sha256(real_authorization.get("scope_sha256"))
+            != normalized_scope
+            or real_authorization.get("ordered_product_ids")
+            != ordered_product_ids
+            or not isinstance(raw_leases, list)
+            or len(raw_leases) != 6
+            or len(ordinal_matches) != 1
+            or len(lease_matches) != 1
+        ):
+            raise ValueError(f"{save_stage} scope lease binding is incomplete")
+
+        unsigned_stage_receipt = {
+            "receipt_kind": "save_stage",
+            "task_id": task_id,
+            "job_id": job_id,
+            "product_id": product_id,
+            "scope_sha256": normalized_scope,
+            "save_stage": save_stage,
+            "mode": "batch_draft_save",
+            "claim_mark": normalized_scope,
+            "canonical_save_receipt_sha256": nested_digest,
+            "verification_command_sha256": verification_command_sha256,
+            "verification_action_result_sha256": (
+                verification_action_result_sha256
+            ),
+            "started_at": validated_save.dispatched_at,
+            "completed_at": validated_save.completed_at,
+            "job_status": "succeeded",
+            "error_code": None,
+            "error_detail": None,
+            "needs_manual_review": False,
+            "save_receipt": dict(raw_save),
+        }
+        return {
+            "schema_version": "dxm.path-b.canonical-save-stage-receipt.v1",
+            **unsigned_stage_receipt,
+            "canonical_receipt_sha256": canonical_sha256(
+                unsigned_stage_receipt
+            ),
+        }
+
+    def persist_canonical_save_stage_receipt(
+        self,
+        task_id: int,
+        job_id: int,
+        product_id: int | None,
+        *,
+        save_stage: str,
+        save_receipt: Mapping[str, Any],
+        verification_command: Mapping[str, Any],
+        verification_action_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Persist SAVE1/SAVE2 immediately after its independent VERIFY closes."""
+
+        now = now_iso()
+        with connection() as conn:
+            migrate_canonical_receipts(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute(
+                "SELECT status, mode, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            job = conn.execute(
+                "SELECT status, product_id FROM jobs WHERE id=? AND task_id=?",
+                (job_id, task_id),
+            ).fetchone()
+            payload = loads(task.get("payload_json"), {}) if task else {}
+            real_authorization = (
+                payload.get("real_dxm_write_authorization")
+                if isinstance(payload, Mapping)
+                and isinstance(payload.get("real_dxm_write_authorization"), Mapping)
+                else None
+            )
+            scope_sha256 = (
+                str(real_authorization.get("scope_sha256") or "")
+                if isinstance(real_authorization, Mapping)
+                else ""
+            )
+            scope_row = conn.execute(
+                "SELECT task_id, status FROM real_dxm_write_scopes WHERE scope_sha256=?",
+                (scope_sha256,),
+            ).fetchone()
+            if (
+                not task
+                or task.get("status") != "running"
+                or task.get("mode") != "batch_draft_save"
+                or not isinstance(payload, Mapping)
+                or str(payload.get("path") or "").strip().upper() != "B"
+                or not job
+                or job.get("status") != "running"
+                or job.get("product_id") != product_id
+                or _normalized_sha256(scope_sha256) is None
+                or not scope_row
+                or int(scope_row.get("task_id") or 0) != task_id
+                or scope_row.get("status") != "consumed"
+            ):
+                raise ValueError("SAVE stage persistence authority is not live")
+            canonical_stage = self._build_canonical_save_stage_receipt(
+                conn,
+                save_receipt,
+                task_id=task_id,
+                job_id=job_id,
+                product_id=product_id,
+                scope_sha256=scope_sha256,
+                save_stage=save_stage,
+                verification_command=verification_command,
+                verification_action_result=verification_action_result,
+            )
+            existing = conn.execute(
+                """
+                SELECT * FROM canonical_receipts
+                 WHERE task_id=? AND job_id=? AND receipt_kind='save_stage'
+                   AND save_stage=?
+                """,
+                (task_id, job_id, save_stage),
+            ).fetchone()
+            if existing:
+                if (
+                    _normalized_sha256(existing.get("canonical_receipt_sha256"))
+                    != _normalized_sha256(
+                        canonical_stage.get("canonical_receipt_sha256")
+                    )
+                    or loads(existing.get("receipt_json"), {}) != canonical_stage
+                    or loads(
+                        existing.get("verification_command_json"), None
+                    )
+                    != dict(verification_command)
+                    or loads(
+                        existing.get(
+                            "verification_action_result_json"
+                        ),
+                        None,
+                    )
+                    != dict(verification_action_result)
+                    or _normalized_sha256(
+                        existing.get("verification_command_sha256")
+                    )
+                    != _normalized_sha256(
+                        canonical_stage.get(
+                            "verification_command_sha256"
+                        )
+                    )
+                    or _normalized_sha256(
+                        existing.get(
+                            "verification_action_result_sha256"
+                        )
+                    )
+                    != _normalized_sha256(
+                        canonical_stage.get(
+                            "verification_action_result_sha256"
+                        )
+                    )
+                ):
+                    raise ValueError("SAVE stage receipt persistence conflict")
+                return canonical_stage
+            self._insert_canonical_receipt(
+                conn,
+                canonical_stage,
+                now=now,
+                verification_command=verification_command,
+                verification_action_result=verification_action_result,
+            )
+            return canonical_stage
+
+    def _validate_persisted_save_stage_receipts(
+        self,
+        conn: Any,
+        canonical_receipt: Mapping[str, Any],
+        *,
+        task_id: int,
+        job_id: int,
+        product_id: int | None,
+        scope_sha256: str,
+    ) -> None:
+        """Require the aggregate receipt to match two already durable stages."""
+
+        normalized_scope = _normalized_sha256(scope_sha256)
+        parent_digest = _normalized_sha256(
+            canonical_receipt.get("canonical_receipt_sha256")
+        )
+        parent_unsigned = {
+            key: value
+            for key, value in canonical_receipt.items()
+            if key not in {"schema_version", "canonical_receipt_sha256"}
+        }
+        if (
+            canonical_receipt.get("schema_version")
+            != "dxm.path-b.canonical-receipt.v1"
+            or normalized_scope is None
+            or parent_digest is None
+            or canonical_sha256(parent_unsigned) != parent_digest
+            or canonical_receipt.get("task_id") != task_id
+            or canonical_receipt.get("job_id") != job_id
+            or canonical_receipt.get("product_id") != product_id
+            or canonical_receipt.get("mode") != "batch_draft_save"
+            or _normalized_sha256(canonical_receipt.get("claim_mark"))
+            != normalized_scope
+            or canonical_receipt.get("job_status") != "succeeded"
+            or canonical_receipt.get("error_code") is not None
+            or canonical_receipt.get("error_detail") is not None
+            or canonical_receipt.get("needs_manual_review") is not False
+        ):
+            raise ValueError("canonical product receipt is not scope/identity bound")
+        raw_saves = canonical_receipt.get("save_receipts")
+        if not isinstance(raw_saves, list) or len(raw_saves) != 2:
+            raise ValueError("canonical product receipt must contain exactly two SAVE receipts")
+        stage_hashes: list[str] = []
+        for raw_save, save_stage in zip(
+            raw_saves,
+            ("SAVE1", "SAVE2"),
+            strict=True,
+        ):
+            if not isinstance(raw_save, Mapping):
+                raise ValueError(f"{save_stage} canonical receipt is not an object")
+            expected_stage = self._build_canonical_save_stage_receipt(
+                conn,
+                raw_save,
+                task_id=task_id,
+                job_id=job_id,
+                product_id=product_id,
+                scope_sha256=scope_sha256,
+                save_stage=save_stage,
+            )
+            persisted = conn.execute(
+                """
+                SELECT * FROM canonical_receipts
+                 WHERE task_id=? AND job_id=? AND receipt_kind='save_stage'
+                   AND save_stage=?
+                """,
+                (task_id, job_id, save_stage),
+            ).fetchone()
+            if (
+                not persisted
+                or _normalized_sha256(persisted.get("canonical_receipt_sha256"))
+                != _normalized_sha256(
+                    expected_stage.get("canonical_receipt_sha256")
+                )
+                or loads(persisted.get("receipt_json"), {}) != expected_stage
+            ):
+                raise ValueError(f"{save_stage} persisted canonical receipt mismatch")
+            persisted_parent = _normalized_sha256(
+                persisted.get("parent_canonical_receipt_sha256")
+            )
+            if persisted_parent is not None and persisted_parent != parent_digest:
+                raise ValueError(f"{save_stage} product receipt parent conflict")
+            if persisted_parent is None:
+                parent_bound = conn.execute(
+                    """
+                    UPDATE canonical_receipts
+                       SET parent_canonical_receipt_sha256=?, updated_at=?
+                     WHERE id=? AND receipt_kind='save_stage'
+                       AND parent_canonical_receipt_sha256 IS NULL
+                    """,
+                    (parent_digest, now_iso(), persisted.get("id")),
+                )
+                if parent_bound.rowcount != 1:
+                    raise ValueError(
+                        f"{save_stage} product receipt parent compare-and-set failed"
+                    )
+            stage_hashes.append(expected_stage["canonical_receipt_sha256"])
+        if len(set(stage_hashes)) != 2:
+            raise ValueError("SAVE1/SAVE2 canonical stage receipt digest reused")
 
     def get_receipt(self, task_id: int, job_id: int) -> dict[str, Any] | None:
         """Retrieve the canonical receipt for a specific job, if it exists."""
@@ -3918,6 +8495,7 @@ class Repository:
                 """
                 SELECT receipt_json FROM canonical_receipts
                 WHERE task_id=? AND job_id=?
+                  AND receipt_kind='product_aggregate'
                 ORDER BY id DESC LIMIT 1
                 """,
                 (task_id, job_id),
@@ -3944,6 +8522,141 @@ class Repository:
                 r["needs_manual_review"] = bool(r["needs_manual_review"])
                 results.append(r)
             return results
+
+    def revalidate_task_save_stage_authority(
+        self,
+        task_id: int,
+    ) -> dict[str, Any]:
+        """Rebuild every durable Formal SAVE/VERIFY stage from private sources."""
+
+        failures: list[dict[str, Any]] = []
+        validated_pairs: list[tuple[int, str]] = []
+        with connection() as conn:
+            migrate_canonical_receipts(conn)
+            job_rows = conn.execute(
+                "SELECT id FROM jobs WHERE task_id=? ORDER BY id ASC",
+                (task_id,),
+            ).fetchall()
+            expected_pairs = {
+                (int(job.get("id") or 0), save_stage)
+                for job in job_rows
+                for save_stage in ("SAVE1", "SAVE2")
+            }
+            rows = conn.execute(
+                """
+                SELECT * FROM canonical_receipts
+                 WHERE task_id=? AND receipt_kind='save_stage'
+                 ORDER BY job_id ASC, save_stage ASC
+                """,
+                (task_id,),
+            ).fetchall()
+            for row in rows:
+                receipt = loads(row.get("receipt_json"), None)
+                stage = str(row.get("save_stage") or "")
+                job_id = int(row.get("job_id") or 0)
+                try:
+                    if not isinstance(receipt, Mapping):
+                        raise ValueError("stage receipt JSON is missing")
+                    rebuilt = self._build_canonical_save_stage_receipt(
+                        conn,
+                        receipt.get("save_receipt")
+                        if isinstance(receipt.get("save_receipt"), Mapping)
+                        else {},
+                        task_id=task_id,
+                        job_id=job_id,
+                        product_id=row.get("product_id"),
+                        scope_sha256=str(row.get("scope_sha256") or ""),
+                        save_stage=stage,
+                    )
+                    if (
+                        rebuilt != dict(receipt)
+                        or _normalized_sha256(
+                            row.get("canonical_receipt_sha256")
+                        )
+                        != _normalized_sha256(
+                            rebuilt.get("canonical_receipt_sha256")
+                        )
+                        or _normalized_sha256(
+                            row.get("verification_command_sha256")
+                        )
+                        != _normalized_sha256(
+                            rebuilt.get("verification_command_sha256")
+                        )
+                        or _normalized_sha256(
+                            row.get(
+                                "verification_action_result_sha256"
+                            )
+                        )
+                        != _normalized_sha256(
+                            rebuilt.get(
+                                "verification_action_result_sha256"
+                            )
+                        )
+                    ):
+                        raise ValueError("stage receipt rebuild drift")
+                    validated_pairs.append((job_id, stage))
+                except (
+                    KeyError,
+                    ReceiptValidationError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    failures.append(
+                        {
+                            "job_id": job_id,
+                            "save_stage": stage or None,
+                            "reason_code": "SAVE_STAGE_AUTHORITY_DRIFT",
+                            "detail": str(exc),
+                        }
+                    )
+        return {
+            "ok": (
+                len(job_rows) == 3
+                and len(rows) == 6
+                and len(validated_pairs) == 6
+                and set(validated_pairs) == expected_pairs
+                and not failures
+            ),
+            "count": len(validated_pairs),
+            "pairs": validated_pairs,
+            "failures": failures,
+        }
+
+    def list_task_mutation_ledger(self, task_id: int) -> list[dict[str, Any]]:
+        """Read persisted mutation authority rows for one task.
+
+        Callers must explicitly project safe fields before exposing this data;
+        command/outcome/authority JSON can contain runtime-only evidence.
+        """
+
+        with connection() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM mutation_dispatch_ledger
+                     WHERE task_id=?
+                     ORDER BY id ASC
+                    """,
+                    (str(task_id),),
+                ).fetchall()
+            ]
+
+    def list_task_writer_fences(self, task_id: int) -> list[dict[str, Any]]:
+        """Read the durable per-shop writer-fence lineage for one task."""
+
+        with connection() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM writer_fences
+                     WHERE task_id=?
+                     ORDER BY id ASC
+                    """,
+                    (str(task_id),),
+                ).fetchall()
+            ]
 
     def add_exception(self, task_id: int, job_id: int | None, error_code: str, field_domain: str, title: str, detail: str, suggestion: str):
         now = now_iso()
@@ -4008,12 +8721,16 @@ class Repository:
         published: bool | None,
         save_result: dict[str, Any],
         summary: dict[str, Any],
+        canonical_receipt: Mapping[str, Any] | None = None,
     ) -> JobFinalizationResult:
         now = now_iso()
         report_id: int | None = None
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            task = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            task = conn.execute(
+                "SELECT status, mode, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
             if not task:
                 conflict_code = "TASK_NOT_FOUND"
                 reason = "task does not exist"
@@ -4032,6 +8749,68 @@ class Repository:
                     conflict_code = "JOB_TERMINAL_STATE_CONFLICT"
                     reason = f"job status is {job.get('status')!r}, expected 'running'"
                 else:
+                    task_payload = loads(task.get("payload_json"), {})
+                    task_path = (
+                        str(task_payload.get("path") or "").strip().upper()
+                        if isinstance(task_payload, Mapping)
+                        else ""
+                    )
+                    if (
+                        task.get("mode") == "batch_draft_save"
+                        and task_path == "B"
+                        and canonical_receipt is None
+                    ):
+                        raise ValueError(
+                            "Path B job success requires a canonical product receipt"
+                        )
+                    if canonical_receipt is not None and (
+                        canonical_receipt.get("task_id") != task_id
+                        or canonical_receipt.get("job_id") != job_id
+                        or canonical_receipt.get("product_id") != product_id
+                        or canonical_receipt.get("job_status") != "succeeded"
+                    ):
+                        raise ValueError(
+                            "canonical receipt identity/status does not match job success"
+                        )
+                    if canonical_receipt is not None:
+                        real_authorization = (
+                            task_payload.get("real_dxm_write_authorization")
+                            if isinstance(task_payload, Mapping)
+                            and isinstance(
+                                task_payload.get("real_dxm_write_authorization"),
+                                Mapping,
+                            )
+                            else None
+                        )
+                        scope_sha256 = (
+                            str(real_authorization.get("scope_sha256") or "")
+                            if isinstance(real_authorization, Mapping)
+                            else ""
+                        )
+                        scope_row = conn.execute(
+                            """
+                            SELECT task_id, status FROM real_dxm_write_scopes
+                             WHERE scope_sha256=?
+                            """,
+                            (scope_sha256,),
+                        ).fetchone()
+                        if (
+                            _normalized_sha256(scope_sha256) is None
+                            or not scope_row
+                            or int(scope_row.get("task_id") or 0) != task_id
+                            or scope_row.get("status") != "consumed"
+                        ):
+                            raise ValueError(
+                                "canonical receipt scope is not consumed by this task"
+                            )
+                        self._validate_persisted_save_stage_receipts(
+                            conn,
+                            canonical_receipt,
+                            task_id=task_id,
+                            job_id=job_id,
+                            product_id=product_id,
+                            scope_sha256=scope_sha256,
+                        )
                     existing = conn.execute(
                         "SELECT status FROM reports WHERE task_id=? AND job_id IS ? ORDER BY id LIMIT 1",
                         (task_id, job_id),
@@ -4051,6 +8830,12 @@ class Repository:
                             summary,
                             now,
                         )
+                        if canonical_receipt is not None:
+                            self._insert_canonical_receipt(
+                                conn,
+                                canonical_receipt,
+                                now=now,
+                            )
                         updated = conn.execute(
                             """
                             UPDATE jobs

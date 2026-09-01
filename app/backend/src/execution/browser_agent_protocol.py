@@ -18,10 +18,25 @@ from src.execution.product_identity import is_stable_product_id
 
 
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
+    ("FIRST_SAVE_INTENT", "first_save_intent"): {
+        "first_save_intent": 1,
+    },
     ("SAVE_ONLY", "save_only"): {
         "save_only_click": 1,
     },
+    ("SAVE2_ONLY", "save_only"): {
+        "save_only_click": 1,
+    },
 }
+
+_BATCH_SAVE_VERIFICATION_STATES = frozenset(
+    {
+        "VERIFY_NOT_PUBLISHED",
+        "VERIFY_SAVE1_NOT_PUBLISHED",
+        "VERIFY_SAVE2_NOT_PUBLISHED",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+    }
+)
 
 _MUTATION_STATES = frozenset(state for state, _action in MUTATION_COMMAND_PLANS)
 _MUTATION_COMMAND_ACTIONS = frozenset(action for _state, action in MUTATION_COMMAND_PLANS)
@@ -512,6 +527,8 @@ class BrowserAgentCommand:
     authorization_lease_id: str | None = None
     authorization_lease_fingerprint: str | None = None
     stage_task_facts_fingerprint: str | None = None
+    pre_dispatch_page: str | None = None
+    post_dispatch_page: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         payload = {
@@ -537,11 +554,27 @@ class BrowserAgentCommand:
             "authorization_lease_fingerprint",
             "stage_task_facts_fingerprint",
             "execution_payload_hash",
+            "pre_dispatch_page",
+            "post_dispatch_page",
         ):
             value = getattr(self, key)
             if value is not None:
                 payload[key] = value
         return payload
+
+
+def command_pre_dispatch_page(command: BrowserAgentCommand) -> str:
+    """Return the page identity that must hold immediately before dispatch."""
+
+    value = command.pre_dispatch_page or command.expected_page
+    return str(value or "").strip()
+
+
+def command_post_dispatch_page(command: BrowserAgentCommand) -> str:
+    """Return the page identity required for the successful action result."""
+
+    value = command.post_dispatch_page or command.expected_page
+    return str(value or "").strip()
 
 
 def browser_agent_command_sha256(command: BrowserAgentCommand) -> str:
@@ -560,7 +593,16 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
 
     pair = (str(command.state or ""), str(command.action or ""))
     plan = MUTATION_COMMAND_PLANS.get(pair)
-    mutation_adjacent = pair[0] in _MUTATION_STATES or pair[1] in _MUTATION_COMMAND_ACTIONS
+    verification_pair = (
+        pair[0] in _BATCH_SAVE_VERIFICATION_STATES
+        and pair[1] == "verify_not_published"
+    )
+    mutation_adjacent = (
+        pair[0] in _MUTATION_STATES
+        or pair[1] in _MUTATION_COMMAND_ACTIONS
+        or (pair[0] in _BATCH_SAVE_VERIFICATION_STATES and not verification_pair)
+        or (pair[1] == "verify_not_published" and not verification_pair)
+    )
     mutation_fields = (
         command.mutation_scope_id,
         command.target_hash,
@@ -581,9 +623,23 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
                 "NON_MUTATION_SCOPE_FORBIDDEN",
                 "non-mutation commands cannot carry mutation scope fields",
             )
-        if pair == ("VERIFY_NOT_PUBLISHED", "verify_not_published") and (
-            str(command.execution_mode or "") == "batch_draft_save"
+        if (
+            verification_pair
+            and str(command.execution_mode or "") == "batch_draft_save"
         ):
+            expected_verification_page = {
+                "VERIFY_SAVE1_NOT_PUBLISHED": "editor",
+                "VERIFY_SAVE2_NOT_PUBLISHED": "semi_managed",
+                "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED": "semi_managed",
+            }.get(pair[0])
+            if (
+                expected_verification_page is not None
+                and command.expected_page != expected_verification_page
+            ):
+                raise MutationCommandContractError(
+                    "SAVE_VERIFICATION_PHASE_MISMATCH",
+                    f"{pair[0]} must execute on {expected_verification_page}",
+                )
             try:
                 validate_save_verification_context(
                     command.params.get("save_verification_context"),
@@ -596,8 +652,23 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
             except BatchCommandContractError as exc:
                 raise MutationCommandContractError(
                     exc.reason_code,
-                    "batch VERIFY_NOT_PUBLISHED is not bound to one exact SAVE",
+                    f"batch {pair[0]} is not bound to one exact SAVE",
                 ) from exc
+            save_predecessor = command.params.get("save_predecessor")
+            if pair[0] == "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED":
+                if save_predecessor != {
+                    "state": "FIRST_SAVE_INTENT",
+                    "action": "first_save_intent",
+                }:
+                    raise MutationCommandContractError(
+                        "SAVE_VERIFICATION_PREDECESSOR_MISMATCH",
+                        "Discovery VERIFY must be bound to FIRST_SAVE_INTENT",
+                    )
+            elif save_predecessor is not None:
+                raise MutationCommandContractError(
+                    "SAVE_VERIFICATION_PREDECESSOR_FORBIDDEN",
+                    "save_predecessor is reserved for Discovery VERIFY",
+                )
         return {}
 
     execution_mode = _required_text(
@@ -613,6 +684,32 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         )
 
     if execution_mode == "batch_draft_save":
+        expected_pre_dispatch_page = {
+            "FIRST_SAVE_INTENT": "editor",
+            "SAVE_ONLY": "editor",
+            "SAVE2_ONLY": "semi_managed",
+        }.get(pair[0])
+        pre_dispatch_page = command_pre_dispatch_page(command)
+        post_dispatch_page = command_post_dispatch_page(command)
+        if command.expected_page != expected_pre_dispatch_page:
+            raise MutationCommandContractError(
+                "MUTATION_COMMAND_PAGE_MISMATCH",
+                f"{pair[0]} must begin on {expected_pre_dispatch_page}",
+            )
+        if pair == ("FIRST_SAVE_INTENT", "first_save_intent"):
+            if pre_dispatch_page != "editor" or post_dispatch_page != "semi_managed":
+                raise MutationCommandContractError(
+                    "FIRST_SAVE_INTENT_PAGE_CONTRACT_INVALID",
+                    "FIRST_SAVE_INTENT requires pre=editor and post=semi_managed",
+                )
+        elif (
+            pre_dispatch_page != expected_pre_dispatch_page
+            or post_dispatch_page != expected_pre_dispatch_page
+        ):
+            raise MutationCommandContractError(
+                "MUTATION_COMMAND_PAGE_MISMATCH",
+                f"{pair[0]} cannot change controlled page identity",
+            )
         try:
             validate_batch_queue_guard_shape(command.params.get("batch_queue_guard"))
         except BatchCommandContractError as exc:
@@ -774,4 +871,6 @@ def browser_agent_command_from_worker_request(
             "authorization_lease_fingerprint"
         ),
         stage_task_facts_fingerprint=request.get("stage_task_facts_fingerprint"),
+        pre_dispatch_page=request.get("pre_dispatch_page"),
+        post_dispatch_page=request.get("post_dispatch_page"),
     )

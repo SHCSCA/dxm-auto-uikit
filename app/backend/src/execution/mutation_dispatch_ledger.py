@@ -42,6 +42,56 @@ from src.state_machine.batch_draft_authorization import verify_authorization_con
 from src.utils import now_iso
 
 
+_BATCH_SAVE_EXPECTED_PAGE = {
+    "SAVE_ONLY": "editor",
+    "SAVE2_ONLY": "semi_managed",
+    "FIRST_SAVE_INTENT": "editor",
+}
+_BATCH_SAVE_ACTION = {
+    "SAVE_ONLY": "save_only",
+    "SAVE2_ONLY": "save_only",
+    "FIRST_SAVE_INTENT": "first_save_intent",
+}
+_BATCH_SAVE_RESULT_PAGE = {
+    "SAVE_ONLY": "editor",
+    "SAVE2_ONLY": "semi_managed",
+    "FIRST_SAVE_INTENT": "semi_managed",
+}
+_BATCH_MUTATION_ACTION = {
+    "SAVE_ONLY": "save_only_click",
+    "SAVE2_ONLY": "save_only_click",
+    "FIRST_SAVE_INTENT": "first_save_intent",
+}
+_VERIFY_PREDECESSOR_STATE = {
+    "VERIFY_NOT_PUBLISHED": "SAVE_ONLY",
+    "VERIFY_SAVE1_NOT_PUBLISHED": "SAVE_ONLY",
+    "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED": "FIRST_SAVE_INTENT",
+    "VERIFY_SAVE2_NOT_PUBLISHED": "SAVE2_ONLY",
+}
+_VERIFY_EXPECTED_PAGE = {
+    "VERIFY_SAVE1_NOT_PUBLISHED": "editor",
+    "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED": "semi_managed",
+    "VERIFY_SAVE2_NOT_PUBLISHED": "semi_managed",
+}
+
+
+def _is_batch_save_command(command: BrowserAgentCommand) -> bool:
+    return (
+        command.execution_mode == "batch_draft_save"
+        and command.state in _BATCH_SAVE_EXPECTED_PAGE
+        and command.action == _BATCH_SAVE_ACTION[command.state]
+        and command.expected_page == _BATCH_SAVE_EXPECTED_PAGE[command.state]
+    )
+
+
+def _is_batch_save_verification(command: BrowserAgentCommand) -> bool:
+    return (
+        command.execution_mode == "batch_draft_save"
+        and command.state in _VERIFY_PREDECESSOR_STATE
+        and command.action == "verify_not_published"
+    )
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(
         value,
@@ -79,9 +129,9 @@ def _validate_frozen_batch_save_action_result(
     )
     return validate_action_result_envelope(
         action_result,
-        expected_state="SAVE_ONLY",
-        expected_action="save_only",
-        expected_page="editor",
+        expected_state=command.state,
+        expected_action=_BATCH_SAVE_ACTION[command.state],
+        expected_page=_BATCH_SAVE_RESULT_PAGE[command.state],
         execution_mode="batch_draft_save",
         expected_runtime_id=command.runtime_id,
         expected_browser_session_id=(
@@ -107,24 +157,21 @@ def _dispatched_batch_save_proof_failure(row: dict[str, Any]) -> str | None:
         command = BrowserAgentCommand(**command_payload)
     except (TypeError, ValueError, json.JSONDecodeError):
         return "SAVE_COMMAND_INVALID_AFTER_RESTART"
-    if not (
-        command.execution_mode == "batch_draft_save"
-        and command.state == "SAVE_ONLY"
-        and command.action == "save_only"
-    ):
+    if not _is_batch_save_command(command):
         return "SAVE_COMMAND_INVALID_AFTER_RESTART"
     try:
         plan = validate_browser_agent_command(command)
-        ordinal = mutation_ordinal_for_command(command, "save_only_click")
+        mutation_action = _BATCH_MUTATION_ACTION[command.state]
+        ordinal = mutation_ordinal_for_command(command, mutation_action)
         expected_binding = {
             "mutation_id": build_mutation_id(
                 mutation_scope_id=str(command.mutation_scope_id),
                 state=command.state,
                 ordinal=ordinal,
-                mutation_action="save_only_click",
+                mutation_action=mutation_action,
             ),
             "mutation_scope_id": str(command.mutation_scope_id),
-            "mutation_action": "save_only_click",
+            "mutation_action": mutation_action,
             "ordinal": ordinal,
             "command_state": command.state,
             "command_action": command.action,
@@ -144,7 +191,7 @@ def _dispatched_batch_save_proof_failure(row: dict[str, Any]) -> str | None:
         }
         command_is_valid = (
             bool(plan)
-            and plan.get("save_only_click") == ordinal
+            and plan.get(mutation_action) == ordinal
             and all(row.get(key) == value for key, value in expected_binding.items())
             and raw_command == _canonical_json(command.to_payload())
             and str(row.get("command_sha256") or "").casefold()
@@ -332,21 +379,6 @@ class MutationDispatchLedger:
         )
 
     @staticmethod
-    def _reserved_row_is_pristine(row: dict[str, Any]) -> bool:
-        return all(
-            row.get(key) is None
-            for key in (
-                "browser_session_id",
-                "page_url",
-                "page_kind",
-                "outcome_json",
-                "dispatch_started_at",
-                "dispatched_at",
-                "unknown_at",
-            )
-        )
-
-    @staticmethod
     def _terminal_reason(status: str) -> str:
         return {
             "DISPATCHING": "MUTATION_ALREADY_DISPATCHING",
@@ -361,11 +393,7 @@ class MutationDispatchLedger:
         except MutationCommandContractError as exc:
             return self._contract_failure(exc)
         if not plan:
-            if (
-                command.state == "VERIFY_NOT_PUBLISHED"
-                and command.action == "verify_not_published"
-                and command.execution_mode == "batch_draft_save"
-            ):
+            if _is_batch_save_verification(command):
                 return self._verify_dispatched_save_predecessor(command)
             return MutationLedgerDecision(True, "NON_MUTATION_COMMAND", idempotent=True)
 
@@ -374,11 +402,7 @@ class MutationDispatchLedger:
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             snapshot_row_authority_sha256 = None
-            if (
-                command.execution_mode == "batch_draft_save"
-                and command.state == "SAVE_ONLY"
-                and command.action == "save_only"
-            ):
+            if _is_batch_save_command(command):
                 try:
                     snapshot_row_authority_sha256 = (
                         snapshot_row_authority_fingerprint_in_transaction(
@@ -504,6 +528,15 @@ class MutationDispatchLedger:
         self,
         command: BrowserAgentCommand,
     ) -> MutationLedgerDecision:
+        expected_save_state = _VERIFY_PREDECESSOR_STATE.get(command.state)
+        expected_verify_page = _VERIFY_EXPECTED_PAGE.get(command.state)
+        if expected_save_state is None or (
+            expected_verify_page is not None
+            and command.expected_page != expected_verify_page
+        ):
+            return MutationLedgerDecision(False, "SAVE_VERIFICATION_PHASE_MISMATCH")
+        expected_mutation_action = _BATCH_MUTATION_ACTION[expected_save_state]
+        expected_command_action = _BATCH_SAVE_ACTION[expected_save_state]
         try:
             context = validate_save_verification_context(
                 command.params.get("save_verification_context"),
@@ -521,9 +554,12 @@ class MutationDispatchLedger:
             row = conn.execute(
                 """
                 SELECT * FROM mutation_dispatch_ledger
-                 WHERE mutation_scope_id=? AND mutation_action='save_only_click'
+                 WHERE mutation_scope_id=? AND mutation_action=?
                 """,
-                (str(context["mutation_scope_id"]).lower(),),
+                (
+                    str(context["mutation_scope_id"]).lower(),
+                    expected_mutation_action,
+                ),
             ).fetchone()
             if row is None:
                 return MutationLedgerDecision(
@@ -639,6 +675,18 @@ class MutationDispatchLedger:
                 persisted_save_command_object = BrowserAgentCommand(
                     **persisted_save_command
                 )
+                if (
+                    persisted_save_command_object.state != expected_save_state
+                    or persisted_save_command_object.action
+                    != expected_command_action
+                    or persisted_save_command_object.expected_page
+                    != _BATCH_SAVE_EXPECTED_PAGE[expected_save_state]
+                ):
+                    return MutationLedgerDecision(
+                        False,
+                        "SAVE_VERIFICATION_PHASE_MISMATCH",
+                        entry,
+                    )
                 validated_persisted_result = _validate_frozen_batch_save_action_result(
                     persisted_action_result,
                     command=persisted_save_command_object,
@@ -656,6 +704,14 @@ class MutationDispatchLedger:
                     "SAVE_VERIFICATION_PREDECESSOR_FACTS_INVALID",
                     entry,
                 )
+
+            lease_rejection = self._validate_batch_authorization_lease_cas(
+                conn,
+                persisted_save_command_object,
+                checked_at=utc_now_iso(),
+            )
+            if lease_rejection is not None:
+                return lease_rejection
 
             current_authority = validate_current_task_against_frozen_authority(
                 conn,
@@ -730,21 +786,18 @@ class MutationDispatchLedger:
     ) -> MutationLedgerDecision:
         """Freeze one canonical validated batch SAVE ActionResult exactly once."""
 
-        if not (
-            command.execution_mode == "batch_draft_save"
-            and command.state == "SAVE_ONLY"
-            and command.action == "save_only"
-        ):
+        if not _is_batch_save_command(command):
             return MutationLedgerDecision(False, "SAVE_SUCCESS_COMMAND_INVALID")
+        mutation_action = _BATCH_MUTATION_ACTION[command.state]
         command_sha256 = browser_agent_command_sha256(command)
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT * FROM mutation_dispatch_ledger
-                 WHERE mutation_scope_id=? AND mutation_action='save_only_click'
+                 WHERE mutation_scope_id=? AND mutation_action=?
                 """,
-                (command.mutation_scope_id,),
+                (command.mutation_scope_id, mutation_action),
             ).fetchone()
             if row is None:
                 return MutationLedgerDecision(False, "MUTATION_NOT_RESERVED")
@@ -821,6 +874,16 @@ class MutationDispatchLedger:
             existing_json = entry.get("save_action_result_json")
             existing_sha256 = entry.get("save_action_result_sha256")
             if existing_json is not None or existing_sha256 is not None:
+                task_authority = frozen_authority.get("task_authority")
+                if (
+                    isinstance(task_authority, dict)
+                    and task_authority.get("path") == "B"
+                ):
+                    return MutationLedgerDecision(
+                        False,
+                        "SAVE_SUCCESS_EVIDENCE_ALREADY_RECORDED",
+                        entry,
+                    )
                 if (
                     existing_json == action_result_json
                     and str(existing_sha256 or "").casefold()
@@ -840,7 +903,7 @@ class MutationDispatchLedger:
                        save_success_recorded_at=?,
                        updated_at=?
                  WHERE mutation_scope_id=?
-                   AND mutation_action='save_only_click'
+                   AND mutation_action=?
                    AND status='DISPATCHED'
                    AND save_action_result_sha256 IS NULL
                    AND save_action_result_json IS NULL
@@ -851,6 +914,7 @@ class MutationDispatchLedger:
                     now,
                     now,
                     command.mutation_scope_id,
+                    mutation_action,
                 ),
             )
             if updated.rowcount != 1:
@@ -862,9 +926,9 @@ class MutationDispatchLedger:
             persisted = conn.execute(
                 """
                 SELECT * FROM mutation_dispatch_ledger
-                 WHERE mutation_scope_id=? AND mutation_action='save_only_click'
+                 WHERE mutation_scope_id=? AND mutation_action=?
                 """,
-                (command.mutation_scope_id,),
+                (command.mutation_scope_id, mutation_action),
             ).fetchone()
             return MutationLedgerDecision(True, "OK", dict(persisted))
 
@@ -873,11 +937,7 @@ class MutationDispatchLedger:
         conn: Any,
         command: BrowserAgentCommand,
     ) -> MutationLedgerDecision | None:
-        if not (
-            command.execution_mode == "batch_draft_save"
-            and command.state == "SAVE_ONLY"
-            and command.action == "save_only"
-        ):
+        if not _is_batch_save_command(command):
             return None
         task = conn.execute(
             "SELECT * FROM tasks WHERE id=?",
@@ -911,13 +971,9 @@ class MutationDispatchLedger:
         *,
         checked_at: str,
     ) -> MutationLedgerDecision | None:
-        """Re-read the persisted approval lease in the dispatch transaction."""
+        """Re-read parent approval and the exact phase lease in the dispatch CAS."""
 
-        if not (
-            command.execution_mode == "batch_draft_save"
-            and command.state == "SAVE_ONLY"
-            and command.action == "save_only"
-        ):
+        if not _is_batch_save_command(command):
             return None
         task = conn.execute(
             "SELECT payload_json FROM tasks WHERE id=?",
@@ -933,8 +989,6 @@ class MutationDispatchLedger:
         )
         if approval.get("approved") is not True or approval.get("source") != "server":
             return MutationLedgerDecision(False, "AUTH_LEASE_NOT_APPROVED")
-        if str(approval.get("lease_id") or "") != str(command.authorization_lease_id or ""):
-            return MutationLedgerDecision(False, "AUTH_COMMAND_AUTHORIZATION_MISMATCH")
         if approval.get("consumed") is not True or not approval.get("consumed_at"):
             return MutationLedgerDecision(False, "AUTH_LEASE_NOT_CONSUMED")
         stored_context = approval.get("authorization_context")
@@ -959,15 +1013,183 @@ class MutationDispatchLedger:
         ):
             return MutationLedgerDecision(False, "AUTH_LEASE_EXPIRED")
         try:
-            current_lease_fingerprint = authorization_lease_authority_fingerprint(
+            parent_lease_fingerprint = authorization_lease_authority_fingerprint(
                 approval
             )
         except ValueError:
             return MutationLedgerDecision(False, "AUTH_LEASE_AUTHORITY_MISMATCH")
-        if str(command.authorization_lease_fingerprint or "").casefold() != (
-            current_lease_fingerprint.casefold()
+        path = str(payload.get("path") or "")
+        if path == "A":
+            if str(approval.get("lease_id") or "") != str(
+                command.authorization_lease_id or ""
+            ):
+                return MutationLedgerDecision(
+                    False, "AUTH_COMMAND_AUTHORIZATION_MISMATCH"
+                )
+            if str(command.authorization_lease_fingerprint or "").casefold() != (
+                parent_lease_fingerprint.casefold()
+            ):
+                return MutationLedgerDecision(False, "AUTH_LEASE_AUTHORITY_MISMATCH")
+            return None
+        if path != "B":
+            return MutationLedgerDecision(False, "AUTH_COMMAND_MODE_MISMATCH")
+
+        real_authorization = payload.get("real_dxm_write_authorization")
+        if not isinstance(real_authorization, dict) or (
+            real_authorization.get("schema") != "real_dxm_write_authorization.v1"
+            or real_authorization.get("publish_allowed") is not False
         ):
-            return MutationLedgerDecision(False, "AUTH_LEASE_AUTHORITY_MISMATCH")
+            return MutationLedgerDecision(
+                False, "AUTH_REAL_WRITE_AUTHORIZATION_INVALID"
+            )
+        raw_leases = real_authorization.get("save_leases")
+        if not isinstance(raw_leases, list) or len(raw_leases) != 6:
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_INVALID")
+        jobs = conn.execute(
+            "SELECT id, product_id FROM jobs WHERE task_id=? ORDER BY id ASC",
+            (command.task_id,),
+        ).fetchall()
+        job_matches = [
+            (ordinal, dict(job))
+            for ordinal, job in enumerate(jobs, start=1)
+            if job.get("id") == command.job_id
+        ]
+        if len(job_matches) != 1:
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_MISMATCH")
+        product_ordinal, persisted_job = job_matches[0]
+        try:
+            product_id = int(persisted_job.get("product_id"))
+        except (TypeError, ValueError):
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_INVALID")
+        expected_stage = (
+            "SAVE1"
+            if command.state in {"SAVE_ONLY", "FIRST_SAVE_INTENT"}
+            else "SAVE2"
+        )
+        required_keys = {
+            "product_id",
+            "product_ordinal",
+            "save_stage",
+            "lease_id",
+            "scope_sha256",
+            "expires_at",
+            "single_use",
+        }
+        canonical_leases: list[dict[str, Any]] = []
+        for raw_lease in raw_leases:
+            if not isinstance(raw_lease, dict) or set(raw_lease) != required_keys:
+                return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_INVALID")
+            lease = dict(raw_lease)
+            if (
+                isinstance(lease.get("product_id"), bool)
+                or not isinstance(lease.get("product_id"), int)
+                or int(lease["product_id"]) <= 0
+                or isinstance(lease.get("product_ordinal"), bool)
+                or not isinstance(lease.get("product_ordinal"), int)
+                or int(lease["product_ordinal"]) <= 0
+                or lease.get("save_stage") not in {"SAVE1", "SAVE2"}
+                or lease.get("single_use") is not True
+                or not authorization_lease_is_active(
+                    checked_at=checked_at,
+                    expires_at=lease.get("expires_at"),
+                )
+            ):
+                return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_INVALID")
+            for hash_field in ("lease_id", "scope_sha256"):
+                hash_value = lease.get(hash_field)
+                if (
+                    not isinstance(hash_value, str)
+                    or len(hash_value) != 64
+                    or any(
+                        character not in "0123456789abcdefABCDEF"
+                        for character in hash_value
+                    )
+                ):
+                    return MutationLedgerDecision(
+                        False, "AUTH_REAL_SAVE_LEASE_INVALID"
+                    )
+            canonical_leases.append(lease)
+        ordered_product_ids = real_authorization.get("ordered_product_ids")
+        expected_pairs = [
+            (ordinal, candidate_product_id, save_stage)
+            for ordinal, candidate_product_id in enumerate(
+                ordered_product_ids if isinstance(ordered_product_ids, list) else [],
+                start=1,
+            )
+            for save_stage in ("SAVE1", "SAVE2")
+        ]
+        actual_pairs = [
+            (lease["product_ordinal"], lease["product_id"], lease["save_stage"])
+            for lease in canonical_leases
+        ]
+        if actual_pairs != expected_pairs or len({
+            str(lease["lease_id"]).casefold() for lease in canonical_leases
+        }) != len(canonical_leases):
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_INVALID")
+        matches = [
+            lease
+            for lease in canonical_leases
+            if lease["product_id"] == product_id
+            and lease["product_ordinal"] == product_ordinal
+            and lease["save_stage"] == expected_stage
+        ]
+        if len(matches) != 1:
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_MISMATCH")
+        child_lease = matches[0]
+        scope_sha256 = str(real_authorization.get("scope_sha256") or "")
+        approval_sha256 = str(real_authorization.get("approval_sha256") or "")
+        approval_nonce_sha256 = str(
+            real_authorization.get("approval_nonce_sha256") or ""
+        )
+        if (
+            str(command.authorization_lease_id or "") != child_lease["lease_id"]
+            or str(command.authorization_lease_fingerprint or "").casefold()
+            != _canonical_sha256(child_lease).casefold()
+            or str(child_lease["scope_sha256"]).casefold()
+            != scope_sha256.casefold()
+            or child_lease["expires_at"]
+            != real_authorization.get("approval_expires_at")
+        ):
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_MISMATCH")
+        scope_row = conn.execute(
+            "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+            (scope_sha256,),
+        ).fetchone()
+        if scope_row is None:
+            return MutationLedgerDecision(False, "AUTH_REAL_WRITE_SCOPE_NOT_CONSUMED")
+        if (
+            scope_row.get("status") != "consumed"
+            or int(scope_row.get("task_id") or 0) != int(command.task_id)
+            or str(scope_row.get("approval_sha256") or "").casefold()
+            != approval_sha256.casefold()
+            or str(scope_row.get("approval_nonce_sha256") or "").casefold()
+            != approval_nonce_sha256.casefold()
+            or scope_row.get("expires_at") != child_lease["expires_at"]
+        ):
+            return MutationLedgerDecision(
+                False, "AUTH_REAL_WRITE_SCOPE_BINDING_MISMATCH"
+            )
+        lease_rows = conn.execute(
+            """
+            SELECT mutation_scope_id, command_state, task_id, job_id,
+                   authorization_lease_fingerprint
+              FROM mutation_dispatch_ledger
+             WHERE authorization_lease_id=?
+            """,
+            (child_lease["lease_id"],),
+        ).fetchall()
+        if len(lease_rows) != 1:
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_REUSED")
+        lease_row = lease_rows[0]
+        if (
+            lease_row.get("mutation_scope_id") != command.mutation_scope_id
+            or lease_row.get("command_state") != command.state
+            or str(lease_row.get("task_id")) != str(command.task_id)
+            or str(lease_row.get("job_id")) != str(command.job_id)
+            or str(lease_row.get("authorization_lease_fingerprint") or "").casefold()
+            != _canonical_sha256(child_lease).casefold()
+        ):
+            return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_REUSED")
         return None
 
     def begin_dispatch(
@@ -1024,11 +1246,7 @@ class MutationDispatchLedger:
                     dict(row),
                 )
 
-            if (
-                command.execution_mode == "batch_draft_save"
-                and command.state == "SAVE_ONLY"
-                and command.action == "save_only"
-            ):
+            if _is_batch_save_command(command):
                 try:
                     current_snapshot_row_authority_sha256 = (
                         snapshot_row_authority_fingerprint_in_transaction(
@@ -1065,11 +1283,7 @@ class MutationDispatchLedger:
 
             save_authority_json = None
             save_authority_sha256 = None
-            if (
-                command.execution_mode == "batch_draft_save"
-                and command.state == "SAVE_ONLY"
-                and command.action == "save_only"
-            ):
+            if _is_batch_save_command(command):
                 provider = self._live_facts_provider
                 if not callable(provider):
                     return MutationLedgerDecision(
@@ -1149,11 +1363,7 @@ class MutationDispatchLedger:
             if final_lease_rejection is not None:
                 return final_lease_rejection
 
-            if (
-                command.execution_mode == "batch_draft_save"
-                and command.state == "SAVE_ONLY"
-                and command.action == "save_only"
-            ):
+            if _is_batch_save_command(command):
                 try:
                     final_snapshot_row_authority_sha256 = (
                         snapshot_row_authority_fingerprint_in_transaction(
@@ -1409,6 +1619,21 @@ class MutationDispatchLedger:
                 return MutationLedgerDecision(False, "MUTATION_COMMAND_DIGEST_MISMATCH", dict(row))
             status = str(row.get("status") or "")
             if status == "DISPATCHED":
+                # A phase-specific real Path B lease is a one-shot physical
+                # mutation authority. Re-observing its terminal row is never
+                # reported as a fresh success to the caller.
+                if (
+                    command.state in {"SAVE2_ONLY", "FIRST_SAVE_INTENT"}
+                    or (
+                        command.state == "SAVE_ONLY"
+                        and len(str(command.authorization_lease_id or "")) == 64
+                    )
+                ):
+                    return MutationLedgerDecision(
+                        False,
+                        "MUTATION_ALREADY_DISPATCHED",
+                        dict(row),
+                    )
                 if row.get("outcome_json") != outcome_json:
                     return MutationLedgerDecision(
                         False,
@@ -1481,9 +1706,7 @@ class MutationDispatchLedger:
                 return MutationLedgerDecision(True, "OK", dict(row), idempotent=True)
             unproven_batch_save = (
                 status == "DISPATCHED"
-                and command.execution_mode == "batch_draft_save"
-                and command.state == "SAVE_ONLY"
-                and command.action == "save_only"
+                and _is_batch_save_command(command)
                 and _dispatched_batch_save_proof_failure(dict(row)) is not None
             )
             if status != "DISPATCHING" and not unproven_batch_save:
@@ -1497,8 +1720,16 @@ class MutationDispatchLedger:
                        status='DISPATCHING'
                        OR (
                            status='DISPATCHED'
-                           AND command_state='SAVE_ONLY'
-                           AND command_action='save_only'
+                           AND (
+                               (
+                                   command_state IN ('SAVE_ONLY', 'SAVE2_ONLY')
+                                   AND command_action='save_only'
+                               )
+                               OR (
+                                   command_state='FIRST_SAVE_INTENT'
+                                   AND command_action='first_save_intent'
+                               )
+                           )
                        )
                    )
                 """,
@@ -1544,8 +1775,16 @@ class MutationDispatchLedger:
                 """
                 SELECT * FROM mutation_dispatch_ledger
                  WHERE status='DISPATCHED'
-                   AND command_state='SAVE_ONLY'
-                   AND command_action='save_only'
+                   AND (
+                       (
+                           command_state IN ('SAVE_ONLY', 'SAVE2_ONLY')
+                           AND command_action='save_only'
+                       )
+                       OR (
+                           command_state='FIRST_SAVE_INTENT'
+                           AND command_action='first_save_intent'
+                       )
+                   )
                 """,
             ).fetchall()
             for raw_row in dispatched_rows:

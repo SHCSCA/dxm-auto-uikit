@@ -17,10 +17,13 @@ from src.batch_edit.scope_contract import ScopeContractError, canonical_sha256
 from src.db import loads
 from src.execution.action_result_contract import controlled_dxm_page_identity
 from src.execution.batch_command_contract import (
+    PATH_B_SAVE1_DISCOVERY_ACTION,
+    PATH_B_SAVE1_DISCOVERY_STATE,
     SAVE_VERIFICATION_CONTEXT_SCHEMA,
     BatchCommandContractError,
     canonical_contract_sha256,
     validate_current_batch_queue_guard,
+    validate_path_b_save1_discovery_dispatch,
 )
 from src.execution.browser_agent_protocol import (
     BrowserAgentCommand,
@@ -31,14 +34,57 @@ from src.execution.browser_agent_protocol import (
     validate_browser_agent_command,
 )
 from src.execution.e3_authority_contract import (
+    StrictUtcTimestampError,
     authorization_lease_authority_fingerprint,
+    authorization_lease_is_active,
     canonical_authorization_lease_authority,
+    parse_strict_utc_timestamp,
+    utc_now_iso,
+)
+from src.real_dxm_write_scope import (
+    RealDxmWriteScopeError,
+    validate_real_dxm_write_scope,
 )
 from src.state_machine.batch_draft_authorization import (
     BatchDraftAuthorizationError,
     authorization_context_fingerprint,
     build_batch_draft_save_task_facts,
     verify_authorization_context,
+)
+
+
+_BATCH_SAVE_BINDINGS = {
+    "SAVE_ONLY": ("SAVE1", "editor"),
+    "SAVE2_ONLY": ("SAVE2", "semi_managed"),
+    PATH_B_SAVE1_DISCOVERY_STATE: ("SAVE1", "editor"),
+}
+_BATCH_SAVE_ACTIONS = {
+    "SAVE_ONLY": "save_only",
+    "SAVE2_ONLY": "save_only",
+    PATH_B_SAVE1_DISCOVERY_STATE: PATH_B_SAVE1_DISCOVERY_ACTION,
+}
+_BATCH_SAVE_AND_VERIFY_STATES = frozenset(
+    {
+        "SAVE_ONLY",
+        PATH_B_SAVE1_DISCOVERY_STATE,
+        "VERIFY_NOT_PUBLISHED",
+        "VERIFY_SAVE1_NOT_PUBLISHED",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+        "DISCOVERY_SEAL_STOP",
+        "SAVE2_ONLY",
+        "VERIFY_SAVE2_NOT_PUBLISHED",
+    }
+)
+_PATH_B_SAVE_LEASE_KEYS = frozenset(
+    {
+        "product_id",
+        "product_ordinal",
+        "save_stage",
+        "lease_id",
+        "scope_sha256",
+        "expires_at",
+        "single_use",
+    }
 )
 
 
@@ -367,12 +413,17 @@ def save_verification_facts_from_frozen_authority(
         _reject("SAVE_VERIFICATION_PREDECESSOR_FACTS_INVALID")
     frozen_command = canonical["command"]
     command_sha256 = canonical_contract_sha256(command_payload)
+    expected_mutation_action = (
+        "first_save_intent"
+        if command_payload.get("state") == PATH_B_SAVE1_DISCOVERY_STATE
+        else "save_only_click"
+    )
     if (
         command_payload != frozen_command["payload"]
         or command_sha256 != frozen_command["sha256"]
         or not isinstance(ledger_entry, Mapping)
         or ledger_entry.get("status") != "DISPATCHED"
-        or ledger_entry.get("mutation_action") != "save_only_click"
+        or ledger_entry.get("mutation_action") != expected_mutation_action
         or str(ledger_entry.get("task_id"))
         != str(canonical["task_authority"]["task_id"])
         or str(ledger_entry.get("job_id"))
@@ -471,22 +522,45 @@ def _validate(
         validate_browser_agent_command(command)
     except (MutationCommandContractError, TypeError, ValueError):
         _reject("AUTH_COMMAND_CONTRACT_INVALID")
+    save_binding = _BATCH_SAVE_BINDINGS.get(command.state)
     if (
         command.execution_mode != "batch_draft_save"
-        or command.state != "SAVE_ONLY"
-        or command.action != "save_only"
-        or command.expected_page != "editor"
+        or save_binding is None
+        or command.action != _BATCH_SAVE_ACTIONS.get(command.state)
+        or command.expected_page != save_binding[1]
     ):
         _reject("AUTH_COMMAND_MODE_MISMATCH")
 
     task = _load_task(conn, command)
+    try:
+        discovery_profile = validate_path_b_save1_discovery_dispatch(
+            task,
+            job_id=command.job_id,
+            command_state=command.state,
+            command_action=command.action,
+        )
+    except BatchCommandContractError as exc:
+        _reject(exc.reason_code)
+    if (
+        command.state == PATH_B_SAVE1_DISCOVERY_STATE
+        and discovery_profile is None
+    ):
+        _reject("DISCOVERY_PROFILE_REQUIRED")
     snapshot, item_snapshot, job, snapshot_row = _load_snapshot_binding(
         conn, task, command
     )
     current_queue_guard = _validate_queue(task, command)
-    stage_facts, stored_context, lease_authority = _validate_authorization(
+    (
+        stage_facts,
+        stored_context,
+        lease_authority,
+        parent_lease_authority,
+        save_stage,
+    ) = _validate_authorization(
+        conn,
         task,
         snapshot,
+        job,
         command,
         live,
     )
@@ -516,16 +590,24 @@ def _validate(
         for ordinal, candidate in enumerate(task["jobs"], start=1)
     ]
     task_authority = _task_authority_projection(task)
+    authorization_authority = {
+        "lease_id": str(command.authorization_lease_id),
+        "lease_fingerprint": str(command.authorization_lease_fingerprint),
+        "lease_authority": lease_authority,
+        "authorization_context": deepcopy(stored_context),
+        "stage_task_facts": deepcopy(stage_facts),
+    }
+    if parent_lease_authority is not None:
+        authorization_authority.update(
+            {
+                "parent_lease_authority": parent_lease_authority,
+                "save_stage": save_stage,
+            }
+        )
     return {
         "schema": "dxm.batch_draft_save.dispatch_authority.v1",
         "task_authority": task_authority,
-        "authorization": {
-            "lease_id": str(command.authorization_lease_id),
-            "lease_fingerprint": str(command.authorization_lease_fingerprint),
-            "lease_authority": lease_authority,
-            "authorization_context": deepcopy(stored_context),
-            "stage_task_facts": deepcopy(stage_facts),
-        },
+        "authorization": authorization_authority,
         "l2": {
             "status": live.l2_status,
             "evidence_fingerprint": live.l2_evidence_fingerprint,
@@ -678,7 +760,7 @@ def _validate_current_queue_against_frozen_authority(
     ):
         _reject("AUTH_CURRENT_QUEUE_DRIFT")
     step = str(current_jobs[current_index].get("current_step_code") or "")
-    if step not in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}:
+    if step not in _BATCH_SAVE_AND_VERIFY_STATES:
         _reject("AUTH_CURRENT_QUEUE_DRIFT")
 
 
@@ -707,6 +789,7 @@ def _load_snapshot_binding(
     except (ScopeContractError, TypeError, ValueError):
         _reject("AUTH_COMMAND_SNAPSHOT_MISMATCH")
     row_task_id = stored_row.get("task_id")
+    task_path = payload.get("path")
     if (
         not isinstance(snapshot_hash, str)
         or not hmac.compare_digest(snapshot_hash, reproduced_hash)
@@ -715,8 +798,8 @@ def _load_snapshot_binding(
         or embedded_hash != stored_hash
         or row_task_id != task.get("id")
         or payload.get("execution_mode") != "batch_draft_save"
-        or payload.get("path") != "A"
-        or snapshot.get("path") != "A"
+        or task_path not in {"A", "B"}
+        or snapshot.get("path") != task_path
         or payload.get("publish_allowed") is not False
         or snapshot.get("publish_allowed") is not False
     ):
@@ -777,12 +860,234 @@ def _validate_queue(
         _reject("AUTH_COMMAND_QUEUE_STATE_MISMATCH")
 
 
-def _validate_authorization(
+def _canonical_path_b_save_lease(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != _PATH_B_SAVE_LEASE_KEYS:
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    lease = deepcopy(dict(value))
+    for field_name in ("product_id", "product_ordinal"):
+        field_value = lease.get(field_name)
+        if isinstance(field_value, bool) or not isinstance(field_value, int) or field_value <= 0:
+            _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    if lease.get("save_stage") not in {"SAVE1", "SAVE2"}:
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    if lease.get("single_use") is not True:
+        _reject("AUTH_REAL_SAVE_LEASE_NOT_SINGLE_USE")
+    for field_name in ("lease_id", "scope_sha256"):
+        field_value = lease.get(field_name)
+        if (
+            not isinstance(field_value, str)
+            or len(field_value) != 64
+            or any(character not in "0123456789abcdefABCDEF" for character in field_value)
+        ):
+            _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    try:
+        parse_strict_utc_timestamp(lease.get("expires_at"), field="expires_at")
+        canonical_sha256(lease)
+    except (StrictUtcTimestampError, ScopeContractError, TypeError, ValueError):
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    return lease
+
+
+def _validated_path_b_save_lease(
+    conn: Any,
     task: Mapping[str, Any],
     snapshot: Mapping[str, Any],
+    job: Mapping[str, Any],
     command: BrowserAgentCommand,
     live: LiveDispatchFacts,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    *,
+    checked_at: str,
+) -> dict[str, Any]:
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    real_authorization = payload.get("real_dxm_write_authorization")
+    if not isinstance(real_authorization, Mapping):
+        _reject("AUTH_REAL_WRITE_AUTHORIZATION_MISSING")
+    if (
+        real_authorization.get("schema") != "real_dxm_write_authorization.v1"
+        or real_authorization.get("publish_allowed") is not False
+    ):
+        _reject("AUTH_REAL_WRITE_AUTHORIZATION_INVALID")
+    scope_sha256 = _sha256_text(
+        real_authorization.get("scope_sha256"),
+        "AUTH_REAL_WRITE_AUTHORIZATION_INVALID",
+    )
+    approval_sha256 = _sha256_text(
+        real_authorization.get("approval_sha256"),
+        "AUTH_REAL_WRITE_AUTHORIZATION_INVALID",
+    )
+    approval_nonce_sha256 = _sha256_text(
+        real_authorization.get("approval_nonce_sha256"),
+        "AUTH_REAL_WRITE_AUTHORIZATION_INVALID",
+    )
+    product_ids = snapshot.get("product_ids")
+    ordered_product_ids = real_authorization.get("ordered_product_ids")
+    if (
+        not isinstance(product_ids, list)
+        or not isinstance(ordered_product_ids, list)
+        or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in ordered_product_ids)
+        or [str(value) for value in ordered_product_ids]
+        != [str(value) for value in product_ids]
+    ):
+        _reject("AUTH_REAL_WRITE_PRODUCT_ORDER_MISMATCH")
+    jobs = task.get("jobs")
+    if not isinstance(jobs, list):
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    job_indexes = [
+        index
+        for index, candidate in enumerate(jobs, start=1)
+        if isinstance(candidate, Mapping) and candidate.get("id") == job.get("id")
+    ]
+    if len(job_indexes) != 1:
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    try:
+        product_id = int(job.get("product_id"))
+    except (TypeError, ValueError):
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    if str(product_id) != str(job.get("product_id")) or product_id <= 0:
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    expected_pairs = [
+        (product_ordinal, int(candidate_product_id), save_stage)
+        for product_ordinal, candidate_product_id in enumerate(ordered_product_ids, start=1)
+        for save_stage in ("SAVE1", "SAVE2")
+    ]
+    raw_leases = real_authorization.get("save_leases")
+    if not isinstance(raw_leases, list) or len(raw_leases) != len(expected_pairs):
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    leases = [_canonical_path_b_save_lease(value) for value in raw_leases]
+    actual_pairs = [
+        (lease["product_ordinal"], lease["product_id"], lease["save_stage"])
+        for lease in leases
+    ]
+    lease_ids = [str(lease["lease_id"]).casefold() for lease in leases]
+    if (
+        actual_pairs != expected_pairs
+        or len(set(lease_ids)) != len(lease_ids)
+        or any(
+            str(lease["scope_sha256"]).casefold() != scope_sha256.casefold()
+            or lease["expires_at"] != real_authorization.get("approval_expires_at")
+            for lease in leases
+        )
+    ):
+        _reject("AUTH_REAL_SAVE_LEASE_INVALID")
+    save_stage, _expected_page = _BATCH_SAVE_BINDINGS[command.state]
+    matches = [
+        lease
+        for lease in leases
+        if lease["product_id"] == product_id
+        and lease["product_ordinal"] == job_indexes[0]
+        and lease["save_stage"] == save_stage
+    ]
+    if len(matches) != 1:
+        _reject("AUTH_REAL_SAVE_LEASE_MISMATCH")
+    selected = matches[0]
+    if str(command.authorization_lease_id or "") != str(selected["lease_id"]):
+        _reject("AUTH_COMMAND_AUTHORIZATION_MISMATCH")
+    selected_fingerprint = canonical_sha256(selected)
+    if not hmac.compare_digest(
+        str(command.authorization_lease_fingerprint or "").casefold(),
+        selected_fingerprint.casefold(),
+    ):
+        _reject("AUTH_LEASE_AUTHORITY_MISMATCH")
+    if not authorization_lease_is_active(
+        checked_at=checked_at,
+        expires_at=selected["expires_at"],
+    ):
+        _reject("AUTH_LEASE_EXPIRED")
+
+    row = conn.execute(
+        "SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?",
+        (real_authorization.get("scope_sha256"),),
+    ).fetchone()
+    if row is None:
+        _reject("AUTH_REAL_WRITE_SCOPE_NOT_CONSUMED")
+    stored = dict(row)
+    scope = loads(stored.get("scope_json"), {})
+    try:
+        canonical_scope = validate_real_dxm_write_scope(scope, now=checked_at)
+    except (RealDxmWriteScopeError, TypeError, ValueError):
+        _reject("AUTH_REAL_WRITE_SCOPE_INVALID")
+    scope_snapshot = canonical_scope.get("snapshot")
+    scope_products = canonical_scope.get("orderedProducts")
+    scope_account = canonical_scope.get("account")
+    scope_shop = canonical_scope.get("shop")
+    scope_git = canonical_scope.get("git")
+    scope_worktree = canonical_scope.get("worktree")
+    scope_runtime = canonical_scope.get("runtime")
+    scope_l2 = canonical_scope.get("l2")
+    scope_product_ids = [
+        item.get("productId")
+        for item in scope_products
+        if isinstance(item, Mapping)
+    ] if isinstance(scope_products, list) else []
+    try:
+        scope_worktree_sha256 = canonical_sha256(scope_worktree)
+        live_worktree_sha256 = canonical_sha256(dict(live.worktree_identity))
+        product_order_sha256 = canonical_sha256(ordered_product_ids)
+    except (ScopeContractError, TypeError, ValueError):
+        _reject("AUTH_REAL_WRITE_SCOPE_BINDING_MISMATCH")
+    if (
+        stored.get("status") != "consumed"
+        or int(stored.get("task_id") or 0) != int(task["id"])
+        or str(stored.get("scope_sha256") or "").casefold() != scope_sha256.casefold()
+        or str(stored.get("approval_sha256") or "").casefold() != approval_sha256.casefold()
+        or str(stored.get("approval_nonce_sha256") or "").casefold()
+        != approval_nonce_sha256.casefold()
+        or str(stored.get("scope_nonce_sha256") or "").casefold()
+        != approval_nonce_sha256.casefold()
+        or stored.get("expires_at") != selected["expires_at"]
+        or int(stored.get("snapshot_id") or 0) != int(payload.get("plan_snapshot_id") or 0)
+        or str(stored.get("snapshot_sha256") or "").casefold()
+        != str(payload.get("plan_snapshot_hash") or "").casefold()
+        or str(stored.get("account_ref_hash") or "").casefold()
+        != str(live.account_ref_hash or "").casefold()
+        or str(stored.get("shop_id") or "") != str(task["store_id"])
+        or str(stored.get("product_order_sha256") or "").casefold()
+        != product_order_sha256.casefold()
+        or stored.get("approval_stage") != canonical_scope.get("stage")
+        or canonical_scope.get("expiresAt") != selected["expires_at"]
+        or not isinstance(scope_snapshot, Mapping)
+        or int(scope_snapshot.get("taskId") or 0) != int(task["id"])
+        or int(scope_snapshot.get("snapshotId") or 0) != int(payload.get("plan_snapshot_id") or 0)
+        or str(scope_snapshot.get("snapshotSha256") or "").casefold()
+        != str(payload.get("plan_snapshot_hash") or "").casefold()
+        or [str(value) for value in scope_product_ids]
+        != [str(value) for value in ordered_product_ids]
+        or not isinstance(scope_account, Mapping)
+        or str(scope_account.get("accountContextHash") or "").casefold()
+        != str(live.account_ref_hash or "").casefold()
+        or not isinstance(scope_shop, Mapping)
+        or int(scope_shop.get("shopId") or 0) != int(task["store_id"])
+        or not isinstance(scope_git, Mapping)
+        or scope_git.get("head") != live.git_head
+        or not isinstance(scope_worktree, Mapping)
+        or scope_worktree_sha256 != live_worktree_sha256
+        or not isinstance(scope_runtime, Mapping)
+        or scope_runtime.get("runtimeInstanceId") != live.runtime_instance_id
+        or scope_runtime.get("browserRuntimeId") != live.browser_runtime_id
+        or scope_runtime.get("browserSessionId") != live.browser_session_id
+        or not isinstance(scope_l2, Mapping)
+        or scope_l2.get("status") != "passed"
+        or scope_l2.get("status") != live.l2_status
+        or scope_l2.get("evidenceFingerprint") != live.l2_evidence_fingerprint
+    ):
+        _reject("AUTH_REAL_WRITE_SCOPE_BINDING_MISMATCH")
+    return selected
+
+
+def _validate_authorization(
+    conn: Any,
+    task: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    job: Mapping[str, Any],
+    command: BrowserAgentCommand,
+    live: LiveDispatchFacts,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any] | None,
+    str | None,
+]:
     payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
     approval = (
         payload.get("manual_approval")
@@ -793,8 +1098,12 @@ def _validate_authorization(
         _reject("AUTH_LEASE_NOT_APPROVED")
     if approval.get("consumed") is not True or not approval.get("consumed_at"):
         _reject("AUTH_LEASE_NOT_CONSUMED")
-    if str(approval.get("lease_id") or "") != str(command.authorization_lease_id or ""):
-        _reject("AUTH_COMMAND_AUTHORIZATION_MISMATCH")
+    checked_at = utc_now_iso()
+    if not authorization_lease_is_active(
+        checked_at=checked_at,
+        expires_at=approval.get("expires_at"),
+    ):
+        _reject("AUTH_LEASE_EXPIRED")
     stored_context = (
         dict(approval.get("authorization_context"))
         if isinstance(approval.get("authorization_context"), Mapping)
@@ -818,6 +1127,11 @@ def _validate_authorization(
             plan_snapshot_id=int(payload.get("plan_snapshot_id") or 0),
             plan_snapshot_hash=str(payload.get("plan_snapshot_hash") or ""),
             path=str(payload.get("path") or ""),
+            real_authorization=(
+                payload.get("real_dxm_write_authorization")
+                if str(payload.get("path") or "") == "B"
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError, BatchDraftAuthorizationError):
         _reject("AUTH_STAGE_FACTS_MISMATCH")
@@ -827,15 +1141,36 @@ def _validate_authorization(
     ):
         _reject("AUTH_STAGE_FACTS_MISMATCH")
     try:
-        lease_authority = canonical_authorization_lease_authority(approval)
-        lease_fingerprint = authorization_lease_authority_fingerprint(approval)
+        parent_lease_authority = canonical_authorization_lease_authority(approval)
+        parent_lease_fingerprint = authorization_lease_authority_fingerprint(approval)
     except ValueError:
         _reject("AUTH_LEASE_AUTHORITY_MISMATCH")
-    if not hmac.compare_digest(
-        str(command.authorization_lease_fingerprint or "").casefold(),
-        lease_fingerprint.casefold(),
-    ):
-        _reject("AUTH_LEASE_AUTHORITY_MISMATCH")
+    path = str(payload.get("path") or "")
+    if path == "A":
+        if str(approval.get("lease_id") or "") != str(command.authorization_lease_id or ""):
+            _reject("AUTH_COMMAND_AUTHORIZATION_MISMATCH")
+        if not hmac.compare_digest(
+            str(command.authorization_lease_fingerprint or "").casefold(),
+            parent_lease_fingerprint.casefold(),
+        ):
+            _reject("AUTH_LEASE_AUTHORITY_MISMATCH")
+        lease_authority = parent_lease_authority
+        frozen_parent_lease_authority = None
+        save_stage = None
+    elif path == "B":
+        lease_authority = _validated_path_b_save_lease(
+            conn,
+            task,
+            snapshot,
+            job,
+            command,
+            live,
+            checked_at=checked_at,
+        )
+        frozen_parent_lease_authority = parent_lease_authority
+        save_stage = _BATCH_SAVE_BINDINGS[command.state][0]
+    else:
+        _reject("AUTH_COMMAND_MODE_MISMATCH")
 
     if live.l2_status != "passed":
         _reject("AUTH_L2_GATE_NOT_PASSED")
@@ -880,7 +1215,13 @@ def _validate_authorization(
         context_fingerprint.casefold(),
     ):
         _reject("AUTH_COMMAND_AUTHORIZATION_MISMATCH")
-    return current_stage, stored_context, lease_authority
+    return (
+        current_stage,
+        stored_context,
+        lease_authority,
+        frozen_parent_lease_authority,
+        save_stage,
+    )
 
 
 def _validate_target(
@@ -901,7 +1242,7 @@ def _validate_target(
         )
         actual = canonical_mutation_target_payload(command.action, command.params)
         expected = canonical_mutation_target_payload(
-            "save_only",
+            command.action,
             {
                 "store_name": store_name,
                 "target_identity": frozen_target,
@@ -959,9 +1300,12 @@ def _validate_live_identity(
         _reject("AUTH_BROWSER_IDENTITY_UNAVAILABLE")
     if identity.get("browser_session_id") != live.browser_session_id:
         _reject("AUTH_BROWSER_SESSION_MISMATCH")
-    if identity.get("page_kind") != "editor" or controlled_dxm_page_identity(
-        identity.get("page_url")
-    ) != "editor":
+    expected_page = _BATCH_SAVE_BINDINGS.get(command.state, (None, None))[1]
+    if (
+        expected_page is None
+        or identity.get("page_kind") != expected_page
+        or controlled_dxm_page_identity(identity.get("page_url")) != expected_page
+    ):
         _reject("AUTH_BROWSER_PAGE_MISMATCH")
     stable_identity = target_identity.get("stable_identity")
     if isinstance(stable_identity, Mapping) and stable_identity.get("kind") == "product_id":
@@ -1027,24 +1371,81 @@ def _validated_authority(value: Mapping[str, Any]) -> dict[str, Any]:
     context = authorization.get("authorization_context")
     stage = authorization.get("stage_task_facts")
     lease_authority = authorization.get("lease_authority")
+    task_authority = canonical["task_authority"]
+    task_path = task_authority.get("path")
     if (
         not isinstance(context, dict)
         or not isinstance(stage, dict)
         or not isinstance(lease_authority, dict)
         or verify_authorization_context(context).get("ok") is not True
         or context.get("stage_task_facts") != stage
-        or canonical["task_authority"].get("manual_approval", {}).get(
+        or task_authority.get("manual_approval", {}).get(
             "authorization_context"
         )
         != context
-        or canonical["task_authority"].get("manual_approval", {}).get(
+        or task_authority.get("manual_approval", {}).get(
             "stage_task_facts"
         )
         != stage
-        or authorization.get("lease_id") != lease_authority.get("lease_id")
-        or authorization.get("lease_fingerprint")
-        != authorization_lease_authority_fingerprint(lease_authority)
     ):
+        _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+    if task_path == "A":
+        try:
+            lease_fingerprint = authorization_lease_authority_fingerprint(
+                lease_authority
+            )
+        except ValueError:
+            _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+        if (
+            authorization.get("lease_id") != lease_authority.get("lease_id")
+            or str(authorization.get("lease_fingerprint") or "").casefold()
+            != lease_fingerprint.casefold()
+            or "parent_lease_authority" in authorization
+            or "save_stage" in authorization
+        ):
+            _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+    elif task_path == "B":
+        parent_lease_authority = authorization.get("parent_lease_authority")
+        save_stage = authorization.get("save_stage")
+        command_payload = canonical["command"].get("payload")
+        task_payload = task_authority.get("task_payload")
+        real_authorization = (
+            task_payload.get("real_dxm_write_authorization")
+            if isinstance(task_payload, dict)
+            else None
+        )
+        real_save_leases = (
+            real_authorization.get("save_leases")
+            if isinstance(real_authorization, dict)
+            else None
+        )
+        try:
+            canonical_child_lease = _canonical_path_b_save_lease(lease_authority)
+            canonical_parent_lease = canonical_authorization_lease_authority(
+                parent_lease_authority
+            )
+            persisted_parent_lease = canonical_authorization_lease_authority(
+                task_authority.get("manual_approval")
+            )
+        except (DispatchAuthorityError, TypeError, ValueError):
+            _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+        if (
+            not isinstance(command_payload, dict)
+            or command_payload.get("state") not in _BATCH_SAVE_BINDINGS
+            or command_payload.get("action")
+            != _BATCH_SAVE_ACTIONS.get(command_payload.get("state"))
+            or save_stage != _BATCH_SAVE_BINDINGS[command_payload["state"]][0]
+            or canonical_child_lease.get("save_stage") != save_stage
+            or authorization.get("lease_id") != canonical_child_lease.get("lease_id")
+            or str(authorization.get("lease_fingerprint") or "").casefold()
+            != canonical_sha256(canonical_child_lease).casefold()
+            or canonical_parent_lease != persisted_parent_lease
+            or not isinstance(real_authorization, dict)
+            or not isinstance(real_save_leases, list)
+            or canonical_child_lease not in real_save_leases
+        ):
+            _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+    else:
         _reject("AUTH_FROZEN_AUTHORITY_INVALID")
     snapshot = canonical["snapshot"]
     plan_snapshot = snapshot.get("plan_snapshot")

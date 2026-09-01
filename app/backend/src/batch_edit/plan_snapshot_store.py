@@ -160,11 +160,17 @@ class PlanSnapshotStore:
         now: str,
     ) -> int:
         product_ids = [int(value) for value in snapshot["product_ids"]]
+        snapshot_path = str(snapshot.get("path") or "").strip().upper()
+        if snapshot_path not in {"A", "B"}:
+            raise PlanSnapshotStoreError(
+                "PLAN_PATH_INVALID",
+                "frozen plan_snapshot path must be A or B",
+            )
         task_payload = {
             "plan_snapshot_id": snapshot_id,
             "plan_snapshot_hash": snapshot["snapshot_hash"],
             "plan_snapshot": dict(snapshot),
-            "path": "A",
+            "path": snapshot_path,
             "publish_allowed": False,
             "runner_released": False,
             "product_ids": product_ids,

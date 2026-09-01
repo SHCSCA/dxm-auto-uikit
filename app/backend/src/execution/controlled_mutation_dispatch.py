@@ -1,31 +1,36 @@
-"""
-ControlledMutationDispatch — dispatch controller for mutation dispatch ledger.
+"""Single controlled entry point for externally visible mutations.
 
-Implements the mutation dispatch ledger contract:
-- Mutation commands require: authorization_lease_id, mutation_id, stage_task_facts_fingerprint
-- Ledger entries: mutation_id, mutation_scope_id, mutation_action, ordinal,
-  command_state, command_action, authorization_lease_id, target_hash, etc.
-- Three write path scenarios:
-  1. snapshot_row_authority_sha256 present → use mutation_dispatch_ledger
-  2. mutation_id present but no ledger → insert
-  3. Neither → reject (fail-closed)
-- Ledger entries immutable after creation (ordinal strictly increasing)
+``MutationDispatchLedger`` is the production authority for reservation,
+just-in-time dispatch CAS, restart recovery, and terminal evidence.  This
+module intentionally contains no SQL and owns no second ledger.  It is a
+strict facade that keeps the older public names available while ensuring that
+all state changes are delegated to that authority.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
-from src.db import connection
+from src.execution.browser_agent_protocol import (
+    BrowserAgentCommand,
+    MutationCommandContractError,
+    browser_agent_command_sha256,
+    build_mutation_id,
+    mutation_ordinal_for_command,
+)
+from src.execution.mutation_dispatch_ledger import (
+    MutationDispatchLedger,
+    MutationLedgerDecision,
+)
 
 
 class MutationCommandState(Enum):
-    """State of a mutation command."""
+    """Compatibility enum; ledger status remains the durable authority."""
 
     PENDING = "pending"
     AUTHORIZED = "authorized"
@@ -36,7 +41,7 @@ class MutationCommandState(Enum):
 
 
 class MutationDispatchError(Exception):
-    """Error raised by ControlledMutationDispatch."""
+    """Stable fail-closed error raised by the compatibility surface."""
 
     def __init__(
         self,
@@ -52,7 +57,7 @@ class MutationDispatchError(Exception):
 
 @dataclass
 class MutationDispatchRequest:
-    """Request to dispatch a mutation."""
+    """Legacy request shape accepted only when it embeds an exact command."""
 
     mutation_id: str
     mutation_scope_id: str
@@ -77,7 +82,7 @@ class MutationDispatchRequest:
 
 @dataclass
 class MutationDispatchResult:
-    """Result of a mutation dispatch operation."""
+    """Compatibility result derived exclusively from a ledger decision."""
 
     ok: bool
     mutation_id: str
@@ -89,239 +94,318 @@ class MutationDispatchResult:
 
 
 class ControlledMutationDispatch:
-    """Dispatch controller for mutation dispatch ledger.
+    """Strict facade over the one production ``MutationDispatchLedger``.
 
-    Fail-closed:
-      - If neither snapshot_row_authority_sha256 nor mutation_id is present → reject
-      - If authorization_lease_id missing → reject
-      - If stage_task_facts_fingerprint missing → reject
-      - Ledger entries are immutable after creation (ordinal strictly increasing)
+    Reservation may be idempotent because it cannot emit an external write.
+    ``begin_dispatch`` is deliberately not idempotent: the underlying ledger
+    rejects every second attempt once the row is DISPATCHING, DISPATCHED, or
+    UNKNOWN.  No method in this class inserts or updates ledger rows directly.
     """
 
+    # Retained for import compatibility. Lease expiry is enforced by the
+    # frozen authorization lease in MutationDispatchLedger, not by this value.
     LEDGER_LEASE_TTL_SECONDS = 5 * 60
 
-    def dispatch(
+    def __init__(
         self,
-        request: MutationDispatchRequest,
-    ) -> MutationDispatchResult:
-        """Dispatch a mutation command to the ledger.
-
-        Three write path scenarios:
-        1. snapshot_row_authority_sha256 present → use mutation_dispatch_ledger
-        2. mutation_id present but no ledger → insert
-        3. Neither → reject (fail-closed)
-        """
-        self._validate_request(request)
-
-        if request.snapshot_row_authority_sha256:
-            return self._dispatch_with_snapshot_authority(request)
-
-        if request.mutation_id:
-            return self._dispatch_with_mutation_id(request)
-
-        raise MutationDispatchError(
-            "DISPATCH_REQUIRES_SCOPE",
-            "Either snapshot_row_authority_sha256 or mutation_id must be present",
-            status_code=400,
+        ledger: MutationDispatchLedger | None = None,
+        *,
+        recover_inflight: bool = True,
+        live_facts_provider: Callable[[], Any] | None = None,
+    ) -> None:
+        self._ledger = ledger or MutationDispatchLedger(
+            recover_inflight=recover_inflight,
+            live_facts_provider=live_facts_provider,
         )
 
-    def _validate_request(self, request: MutationDispatchRequest) -> None:
-        """Validate the dispatch request (fail-closed)."""
-        if not request.authorization_lease_id:
-            raise MutationDispatchError(
-                "AUTHORIZATION_LEASE_REQUIRED",
-                "authorization_lease_id is required for mutation dispatch",
-                status_code=400,
+    @property
+    def ledger(self) -> MutationDispatchLedger:
+        """Return the delegated authority for dependency wiring/inspection."""
+
+        return self._ledger
+
+    # ------------------------------------------------------------------
+    # Production facade: preserve the exact authority method signatures.
+    # ------------------------------------------------------------------
+
+    def reserve_command(self, command: BrowserAgentCommand) -> MutationLedgerDecision:
+        return self._ledger.reserve_command(command)
+
+    def reserve(self, command: BrowserAgentCommand) -> MutationLedgerDecision:
+        return self.reserve_command(command)
+
+    def begin_dispatch(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        identity: dict[str, Any] | None = None,
+    ) -> MutationLedgerDecision:
+        # This CAS is the only operation allowed to cross RESERVED ->
+        # DISPATCHING. It rejects duplicate dispatches instead of replaying.
+        return self._ledger.begin_dispatch(command, mutation_action, identity)
+
+    def begin(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        identity: dict[str, Any] | None = None,
+    ) -> MutationLedgerDecision:
+        return self.begin_dispatch(command, mutation_action, identity)
+
+    def mark_dispatched(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        outcome: Any | None = None,
+    ) -> MutationLedgerDecision:
+        return self._ledger.mark_dispatched(command, mutation_action, outcome)
+
+    def mark(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        outcome: Any | None = None,
+    ) -> MutationLedgerDecision:
+        return self.mark_dispatched(command, mutation_action, outcome)
+
+    def mark_unknown(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        detail: Any | None = None,
+    ) -> MutationLedgerDecision:
+        return self._ledger.mark_unknown(command, mutation_action, detail)
+
+    def unknown(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        detail: Any | None = None,
+    ) -> MutationLedgerDecision:
+        return self.mark_unknown(command, mutation_action, detail)
+
+    def record_success(
+        self,
+        command: BrowserAgentCommand,
+        action_result: Any,
+    ) -> MutationLedgerDecision:
+        return self._ledger.record_success(command, action_result)
+
+    def success(
+        self,
+        command: BrowserAgentCommand,
+        action_result: Any,
+    ) -> MutationLedgerDecision:
+        return self.record_success(command, action_result)
+
+    def cancel_reserved(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        *,
+        reason_code: str = "BATCH_STOPPED_BEFORE_DISPATCH",
+    ) -> MutationLedgerDecision:
+        return self._ledger.cancel_reserved(
+            command,
+            mutation_action,
+            reason_code=reason_code,
+        )
+
+    def get_entry(
+        self,
+        mutation_scope_id: str,
+        mutation_action: str,
+    ) -> dict[str, Any] | None:
+        return self._ledger.get_entry(mutation_scope_id, mutation_action)
+
+    def read(
+        self,
+        mutation_scope_id: str,
+        mutation_action: str,
+    ) -> dict[str, Any] | None:
+        return self.get_entry(mutation_scope_id, mutation_action)
+
+    def job_recovery_classification(
+        self,
+        task_id: int | str,
+        job_id: int | str,
+    ) -> str | None:
+        return self._ledger.job_recovery_classification(task_id, job_id)
+
+    def mark_incomplete_job_unknown(
+        self,
+        task_id: int | str,
+        job_id: int | str,
+    ) -> int:
+        return self._ledger.mark_incomplete_job_unknown(task_id, job_id)
+
+    def recover_inflight(self) -> int:
+        return self._ledger.recover_inflight()
+
+    # ------------------------------------------------------------------
+    # Compatibility surface. It validates the duplicated legacy fields
+    # against one exact BrowserAgentCommand, then delegates reserve + begin.
+    # It never writes a row itself.
+    # ------------------------------------------------------------------
+
+    def dispatch(self, request: MutationDispatchRequest) -> MutationDispatchResult:
+        try:
+            command = self._command_from_request(request)
+        except MutationDispatchError as exc:
+            return MutationDispatchResult(
+                ok=False,
+                mutation_id=str(getattr(request, "mutation_id", "") or ""),
+                reason_code=exc.reason_code,
+                error_detail=exc.detail,
+                status="rejected",
             )
 
-        if not request.stage_task_facts_fingerprint:
-            raise MutationDispatchError(
-                "STAGE_TASK_FACTS_FINGERPRINT_REQUIRED",
-                "stage_task_facts_fingerprint is required for mutation dispatch",
-                status_code=400,
+        reserved = self.reserve_command(command)
+        if not reserved.ok:
+            return self._compat_result(request.mutation_id, reserved, "rejected")
+
+        # The ledger independently derives current snapshot authority during
+        # reservation. A caller-supplied digest may only narrow that authority.
+        entry = self.get_entry(str(command.mutation_scope_id), request.mutation_action)
+        if entry is None:
+            return MutationDispatchResult(
+                ok=False,
+                mutation_id=request.mutation_id,
+                reason_code="MUTATION_NOT_RESERVED",
+                error_detail="delegated ledger reservation did not produce an entry",
+                status="rejected",
+            )
+        supplied_snapshot = str(request.snapshot_row_authority_sha256 or "").strip()
+        if supplied_snapshot and not hmac.compare_digest(
+            supplied_snapshot.casefold(),
+            str(entry.get("snapshot_row_authority_sha256") or "").casefold(),
+        ):
+            self.cancel_reserved(
+                command,
+                request.mutation_action,
+                reason_code="AUTH_SNAPSHOT_ROW_AUTHORITY_MISMATCH",
+            )
+            return MutationDispatchResult(
+                ok=False,
+                mutation_id=request.mutation_id,
+                ledger_entry_id=self._entry_id(entry),
+                reason_code="AUTH_SNAPSHOT_ROW_AUTHORITY_MISMATCH",
+                error_detail="supplied snapshot authority differs from the ledger authority",
+                status="rejected",
             )
 
-        if not request.target_hash:
-            raise MutationDispatchError(
-                "TARGET_HASH_REQUIRED",
-                "target_hash is required for mutation dispatch",
-                status_code=400,
-            )
+        begun = self.begin_dispatch(
+            command,
+            request.mutation_action,
+            {
+                "browser_session_id": request.browser_session_id,
+                "page_url": request.page_url,
+                "page_kind": request.page_kind,
+            },
+        )
+        return self._compat_result(
+            request.mutation_id,
+            begun,
+            "dispatching" if begun.ok else "rejected",
+        )
 
-        if not request.authorization_fingerprint:
-            raise MutationDispatchError(
-                "AUTHORIZATION_FINGERPRINT_REQUIRED",
-                "authorization_fingerprint is required for mutation dispatch",
-                status_code=400,
-            )
-
-    def _dispatch_with_snapshot_authority(
+    def _command_from_request(
         self,
         request: MutationDispatchRequest,
-    ) -> MutationDispatchResult:
-        """Dispatch with snapshot_row_authority_sha256 present."""
-        with connection() as conn:
-            existing = conn.execute(
-                "SELECT id FROM mutation_dispatch_ledger WHERE mutation_id=? LIMIT 1",
-                (request.mutation_id,),
-            ).fetchone()
+    ) -> BrowserAgentCommand:
+        if not isinstance(request, MutationDispatchRequest):
+            raise MutationDispatchError(
+                "MUTATION_DISPATCH_REQUEST_INVALID",
+                "MutationDispatchRequest is required",
+            )
+        if not isinstance(request.command_json, dict):
+            raise MutationDispatchError(
+                "MUTATION_COMMAND_INVALID",
+                "command_json must contain one exact BrowserAgentCommand payload",
+            )
+        try:
+            command = BrowserAgentCommand(**request.command_json)
+            ordinal = mutation_ordinal_for_command(command, request.mutation_action)
+            expected_mutation_id = build_mutation_id(
+                mutation_scope_id=str(command.mutation_scope_id),
+                state=command.state,
+                ordinal=ordinal,
+                mutation_action=request.mutation_action,
+            )
+            actual_command_sha256 = browser_agent_command_sha256(command)
+        except (MutationCommandContractError, TypeError, ValueError) as exc:
+            reason_code = getattr(exc, "reason_code", "MUTATION_COMMAND_INVALID")
+            raise MutationDispatchError(reason_code, str(exc)) from exc
 
-            if existing:
-                return MutationDispatchResult(
-                    ok=True,
-                    mutation_id=request.mutation_id,
-                    ledger_entry_id=existing["id"],
-                    reason_code="DUPLICATE_DISPATCH",
-                    error_detail=None,
-                    status="already_exists",
-                    metadata={"existing_entry_id": existing["id"]},
+        exact_bindings = {
+            "mutation_id": (request.mutation_id, expected_mutation_id),
+            "mutation_scope_id": (request.mutation_scope_id, command.mutation_scope_id),
+            "command_id": (request.command_id, command.command_id),
+            "command_sha256": (request.command_sha256, actual_command_sha256),
+            "authorization_lease_id": (
+                request.authorization_lease_id,
+                command.authorization_lease_id,
+            ),
+            "authorization_lease_fingerprint": (
+                request.authorization_lease_fingerprint,
+                command.authorization_lease_fingerprint,
+            ),
+            "stage_task_facts_fingerprint": (
+                request.stage_task_facts_fingerprint,
+                command.stage_task_facts_fingerprint,
+            ),
+            "target_hash": (request.target_hash, command.target_hash),
+            "authorization_fingerprint": (
+                request.authorization_fingerprint,
+                command.authorization_fingerprint,
+            ),
+            "task_id": (request.task_id, command.task_id),
+            "job_id": (request.job_id, command.job_id),
+            "command_action": (request.command_action, command.action),
+            "command_state": (request.command_state, command.state),
+        }
+        for field_name, (supplied, authoritative) in exact_bindings.items():
+            if str(supplied) != str(authoritative):
+                raise MutationDispatchError(
+                    "MUTATION_SCOPE_BINDING_MISMATCH",
+                    f"{field_name} differs from the embedded command authority",
                 )
-
-            ordinal = self._get_next_ordinal(conn, request.mutation_id)
-
-            now = self._now_iso()
-            expires_at = self._expires_at_iso(self.LEDGER_LEASE_TTL_SECONDS)
-
-            row = conn.execute(
-                """
-                INSERT INTO mutation_dispatch_ledger (
-                    mutation_id, mutation_scope_id, mutation_action,
-                    ordinal, command_state, command_action,
-                    task_id, job_id,
-                    authorization_lease_id, authorization_lease_fingerprint,
-                    snapshot_row_authority_sha256,
-                    stage_task_facts_fingerprint,
-                    target_hash, authorization_fingerprint,
-                    browser_session_id, page_url, page_kind,
-                    status, command_id, command_sha256, command_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    request.mutation_id,
-                    request.mutation_scope_id,
-                    request.mutation_action,
-                    ordinal,
-                    request.command_state,
-                    request.command_action,
-                    request.task_id,
-                    request.job_id,
-                    request.authorization_lease_id,
-                    request.authorization_lease_fingerprint,
-                    request.snapshot_row_authority_sha256,
-                    request.stage_task_facts_fingerprint,
-                    request.target_hash,
-                    request.authorization_fingerprint,
-                    request.browser_session_id,
-                    request.page_url,
-                    request.page_kind,
-                    request.command_id,
-                    request.command_sha256,
-                    json.dumps(request.command_json, ensure_ascii=False),
-                    now,
-                    now,
-                ),
+        if request.command_json != command.to_payload():
+            raise MutationDispatchError(
+                "MUTATION_COMMAND_SERIALIZATION_MISMATCH",
+                "command_json is not the canonical command payload",
             )
-            ledger_entry_id = row.lastrowid
+        return command
 
-            return MutationDispatchResult(
-                ok=True,
-                mutation_id=request.mutation_id,
-                ledger_entry_id=ledger_entry_id,
-                status="dispatched",
-                metadata={
-                    "ordinal": ordinal,
-                    "write_path": "snapshot_row_authority",
-                    "expires_at": expires_at,
-                },
-            )
+    @staticmethod
+    def _entry_id(entry: dict[str, Any] | None) -> int | None:
+        if not entry:
+            return None
+        try:
+            return int(entry["id"])
+        except (KeyError, TypeError, ValueError):
+            return None
 
-    def _dispatch_with_mutation_id(
-        self,
-        request: MutationDispatchRequest,
+    @classmethod
+    def _compat_result(
+        cls,
+        mutation_id: str,
+        decision: MutationLedgerDecision,
+        status: str,
     ) -> MutationDispatchResult:
-        """Dispatch with mutation_id present but no snapshot_row_authority_sha256."""
-        with connection() as conn:
-            existing = conn.execute(
-                "SELECT id FROM mutation_dispatch_ledger WHERE mutation_id=? LIMIT 1",
-                (request.mutation_id,),
-            ).fetchone()
-
-            if existing:
-                return MutationDispatchResult(
-                    ok=True,
-                    mutation_id=request.mutation_id,
-                    ledger_entry_id=existing["id"],
-                    reason_code="DUPLICATE_DISPATCH",
-                    error_detail=None,
-                    status="already_exists",
-                    metadata={"existing_entry_id": existing["id"]},
-                )
-
-            ordinal = self._get_next_ordinal(conn, request.mutation_id)
-
-            now = self._now_iso()
-
-            row = conn.execute(
-                """
-                INSERT INTO mutation_dispatch_ledger (
-                    mutation_id, mutation_scope_id, mutation_action,
-                    ordinal, command_state, command_action,
-                    task_id, job_id,
-                    authorization_lease_id, authorization_lease_fingerprint,
-                    stage_task_facts_fingerprint,
-                    target_hash, authorization_fingerprint,
-                    browser_session_id, page_url, page_kind,
-                    status, command_id, command_sha256, command_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    request.mutation_id,
-                    request.mutation_scope_id,
-                    request.mutation_action,
-                    ordinal,
-                    request.command_state,
-                    request.command_action,
-                    request.task_id,
-                    request.job_id,
-                    request.authorization_lease_id,
-                    request.authorization_lease_fingerprint,
-                    request.stage_task_facts_fingerprint,
-                    request.target_hash,
-                    request.authorization_fingerprint,
-                    request.browser_session_id,
-                    request.page_url,
-                    request.page_kind,
-                    request.command_id,
-                    request.command_sha256,
-                    json.dumps(request.command_json, ensure_ascii=False),
-                    now,
-                    now,
-                ),
-            )
-            ledger_entry_id = row.lastrowid
-
-            return MutationDispatchResult(
-                ok=True,
-                mutation_id=request.mutation_id,
-                ledger_entry_id=ledger_entry_id,
-                status="dispatched",
-                metadata={
-                    "ordinal": ordinal,
-                    "write_path": "mutation_id_only",
-                },
-            )
-
-    def _get_next_ordinal(self, conn: Any, mutation_id: str) -> int:
-        """Get the next ordinal for a mutation_id (strictly increasing)."""
-        last = conn.execute(
-            "SELECT ordinal FROM mutation_dispatch_ledger WHERE mutation_id=? ORDER BY ordinal DESC LIMIT 1",
-            (mutation_id,),
-        ).fetchone()
-        if last:
-            return int(last["ordinal"]) + 1
-        return 1
+        return MutationDispatchResult(
+            ok=decision.ok,
+            mutation_id=mutation_id,
+            ledger_entry_id=cls._entry_id(decision.entry),
+            reason_code=None if decision.ok else decision.reason_code,
+            error_detail=None if decision.ok else decision.reason_code,
+            status=status,
+            metadata={
+                "ledger_reason_code": decision.reason_code,
+                "idempotent": decision.idempotent,
+                "entry": decision.entry,
+            },
+        )
 
     def get_ledger_entries(
         self,
@@ -329,26 +413,13 @@ class ControlledMutationDispatch:
         task_id: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
-        """Read ledger entries (read-only)."""
-        conditions = []
-        params: list[Any] = []
+        """Reject the old unscoped DB scan instead of bypassing authority."""
 
-        if mutation_id is not None:
-            conditions.append("mutation_id=?")
-            params.append(mutation_id)
-        if task_id is not None:
-            conditions.append("task_id=?")
-            params.append(task_id)
-
-        query = "SELECT * FROM mutation_dispatch_ledger"
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY ordinal ASC LIMIT ?"
-        params.append(limit)
-
-        with connection() as conn:
-            rows = conn.execute(query, params).fetchall()
-            return [dict(row) for row in rows]
+        del mutation_id, task_id, limit
+        raise MutationDispatchError(
+            "LEDGER_SCOPED_READ_REQUIRED",
+            "use get_entry(mutation_scope_id, mutation_action)",
+        )
 
     def update_command_state(
         self,
@@ -357,77 +428,19 @@ class ControlledMutationDispatch:
         new_state: str,
         outcome_json: dict[str, Any] | None = None,
     ) -> MutationDispatchResult:
-        """Update the command state of a ledger entry (immutable after terminal state)."""
-        terminal_states = {
-            MutationCommandState.COMMITTED.value,
-            MutationCommandState.ROLLED_BACK.value,
-            MutationCommandState.FAILED.value,
-        }
+        """Reject arbitrary state updates that would bypass ledger CAS."""
 
-        with connection() as conn:
-            entry = conn.execute(
-                "SELECT * FROM mutation_dispatch_ledger WHERE mutation_id=? AND ordinal=?",
-                (mutation_id, ordinal),
-            ).fetchone()
-
-            if not entry:
-                return MutationDispatchResult(
-                    ok=False,
-                    mutation_id=mutation_id,
-                    reason_code="ENTRY_NOT_FOUND",
-                    error_detail=f"No ledger entry for mutation_id={mutation_id} ordinal={ordinal}",
-                )
-
-            if entry["command_state"] in terminal_states:
-                return MutationDispatchResult(
-                    ok=False,
-                    mutation_id=mutation_id,
-                    ledger_entry_id=entry["id"],
-                    reason_code="ENTRY_IMMUTABLE",
-                    error_detail=f"Entry is in terminal state {entry['command_state']}",
-                    status="immutable",
-                )
-
-            now = self._now_iso()
-            update_fields = ["command_state=?", "updated_at=?"]
-            update_params: list[Any] = [new_state, now]
-
-            if outcome_json is not None:
-                update_fields.append("outcome_json=?")
-                update_params.append(json.dumps(outcome_json, ensure_ascii=False))
-
-            if new_state == MutationCommandState.COMMITTED.value:
-                update_fields.append("save_success_recorded_at=?")
-                update_params.append(now)
-
-            update_params.extend([mutation_id, ordinal])
-
-            conn.execute(
-                f"UPDATE mutation_dispatch_ledger SET {', '.join(update_fields)} WHERE mutation_id=? AND ordinal=?",
-                update_params,
-            )
-
-            return MutationDispatchResult(
-                ok=True,
-                mutation_id=mutation_id,
-                ledger_entry_id=entry["id"],
-                status="updated",
-                metadata={"new_state": new_state},
-            )
-
-    def _now_iso(self) -> str:
-        return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
-    def _expires_at_iso(self, ttl_seconds: int) -> str:
-        return (
-            datetime.utcnow()
-            .replace(microsecond=0)
-            + timedelta(seconds=ttl_seconds)
-        ).isoformat() + "Z"
+        del ordinal, new_state, outcome_json
+        return MutationDispatchResult(
+            ok=False,
+            mutation_id=mutation_id,
+            reason_code="LEDGER_TRANSITION_API_REQUIRED",
+            error_detail="arbitrary command-state updates are forbidden",
+            status="rejected",
+        )
 
     @staticmethod
     def compute_target_hash(command_json: dict[str, Any]) -> str:
-        """Compute deterministic target hash from command JSON."""
         serialized = json.dumps(
             command_json,
             ensure_ascii=False,
@@ -439,7 +452,6 @@ class ControlledMutationDispatch:
 
     @staticmethod
     def compute_command_sha256(command_json: dict[str, Any]) -> str:
-        """Compute SHA-256 from command JSON."""
         serialized = json.dumps(
             command_json,
             ensure_ascii=False,

@@ -1,11 +1,20 @@
 import os
 import re
+import hashlib
+import json
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
 from src.execution.browser_agent_protocol import canonical_frozen_target_identity
+from src.execution.canonical_receipt import (
+    ContentFinalizeReceipt,
+    ReceiptPhase,
+    ReceiptValidationError,
+    validated_field_readbacks_from_payload,
+)
 
 
 _FAILURE_CODE_PATTERN = re.compile(r'^[A-Z][A-Z0-9_]{2,63}$')
@@ -20,7 +29,10 @@ _CONTRACT_SOURCE_KEYS = (
     'editor_action_result',
     'fill_result',
     'save_result',
+    'first_save_intent_handshake',
     'unpublished_proof',
+    'mandatory_capability_receipts',
+    'path_b_section_receipts',
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
     {
@@ -34,6 +46,7 @@ _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
         'open_semi_managed_page',
         'fill_semi_managed_defaults',
         'save_only',
+        'first_save_intent',
         'verify_not_published',
     }
 )
@@ -86,11 +99,68 @@ def _exact_save_receipt(value: Mapping[str, Any]) -> bool:
         and 200 <= status < 300
         and value.get('code') in (0, '0')
         and any(term in message for term in ('保存成功', '编辑保存成功', '编辑成功'))
+        and re.fullmatch(
+            r'[0-9A-Fa-f]{64}', str(value.get('request_body_sha256') or '')
+        ) is not None
+        and re.fullmatch(
+            r'[0-9A-Fa-f]{64}', str(value.get('response_body_sha256') or '')
+        ) is not None
+        and _ordered_absolute_interval(
+            value.get('request_observed_at'), value.get('response_observed_at')
+        )
+        and str(value.get('request_evidence_id') or '').strip()
+        and str(value.get('response_evidence_id') or '').strip()
+        and value.get('request_evidence_id') != value.get('response_evidence_id')
+    )
+
+
+def _ordered_absolute_interval(started_at: Any, completed_at: Any) -> bool:
+    if not isinstance(started_at, str) or not isinstance(completed_at, str):
+        return False
+    try:
+        started = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+        completed = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+    except ValueError:
+        return False
+    return bool(
+        started.tzinfo is not None
+        and started.utcoffset() is not None
+        and completed.tzinfo is not None
+        and completed.utcoffset() is not None
+        and completed >= started
     )
 
 
 class DxmWorkflowAdapter:
     requires_persistent_browser_agent = True
+    _MANDATORY_CAPABILITIES = frozenset(
+        {"video", "translation", "wholesale", "semiManaged", "rollbackPreparation"}
+    )
+    _CAPABILITY_PHASES = {
+        "video": ReceiptPhase.CONTENT_FINALIZE_VIDEO,
+        "translation": ReceiptPhase.CONTENT_FINALIZE_TRANSLATION,
+        "wholesale": ReceiptPhase.CONTENT_FINALIZE_WHOLESALE,
+        "semiManaged": ReceiptPhase.SEMI_MANAGED_ENTRY,
+        "rollbackPreparation": ReceiptPhase.ROLLBACK_PREPARATION,
+    }
+    _PATH_B_SECTIONS = frozenset(
+        {
+            "basic_info",
+            "dxm_info",
+            "attribute_info",
+            "product_info",
+            "regional_pricing",
+            "description_info",
+            "packaging_info",
+            "template_main",
+            "template_tax",
+            "compliance_info",
+            "other_info",
+            "semi_countries",
+            "semi_goods",
+            "semi_variants",
+        }
+    )
 
     def __init__(self, login_flow: Any) -> None:
         self.login_flow = login_flow
@@ -169,6 +239,209 @@ class DxmWorkflowAdapter:
             return None
         value = getter()
         return dict(value) if isinstance(value, Mapping) else None
+
+    def mandatory_capability_status(self, capability: str) -> dict[str, Any]:
+        """Return an explicit production-runtime capability proof.
+
+        Presence of an adapter method is not a capability proof.  The visible
+        browser owner must provide a fresh, structured observation for the
+        exact mandatory capability; otherwise plan compilation stays blocked.
+        """
+
+        canonical = str(capability or "").strip()
+        if canonical not in self._MANDATORY_CAPABILITIES:
+            return {
+                "ok": False,
+                "capability": canonical,
+                "reason_code": "MANDATORY_CAPABILITY_UNKNOWN",
+            }
+        probe = getattr(self.login_flow, "mandatory_capability_status", None)
+        if not callable(probe):
+            return {
+                "ok": False,
+                "capability": canonical,
+                "reason_code": f"PRODUCTION_CAPABILITY_NOT_CLOSED_{canonical.upper()}",
+            }
+        try:
+            result = probe(canonical)
+        except Exception:
+            return {
+                "ok": False,
+                "capability": canonical,
+                "reason_code": f"PRODUCTION_CAPABILITY_PROBE_FAILED_{canonical.upper()}",
+            }
+        if not isinstance(result, Mapping):
+            return {
+                "ok": False,
+                "capability": canonical,
+                "reason_code": "MANDATORY_CAPABILITY_PROOF_INVALID",
+            }
+        proof = dict(result)
+        if (
+            proof.get("ok") is not True
+            or proof.get("capability") != canonical
+            or proof.get("source") != "visible_production_runtime"
+            or not isinstance(proof.get("evidence_sha256"), str)
+            or re.fullmatch(r"[0-9A-Fa-f]{64}", proof["evidence_sha256"]) is None
+            or not _ordered_absolute_interval(
+                proof.get("observed_at"), proof.get("observed_at")
+            )
+        ):
+            return {
+                "ok": False,
+                "capability": canonical,
+                "reason_code": str(
+                    proof.get("reason_code")
+                    or "MANDATORY_CAPABILITY_PROOF_INVALID"
+                ),
+            }
+        return {
+            "ok": True,
+            "capability": canonical,
+            "source": "visible_production_runtime",
+            "evidence_sha256": proof["evidence_sha256"].upper(),
+            "observed_at": proof.get("observed_at"),
+        }
+
+    @classmethod
+    def _validate_embedded_path_b_receipts(
+        cls,
+        evidence: Mapping[str, Any],
+    ) -> None:
+        """Reject malformed runtime receipts before they enter ActionResult.
+
+        Absence is allowed at this adapter boundary because not every action is
+        a capability/section producer.  Once a producer supplies either block,
+        every supplied item must be independently reproducible.
+        """
+
+        raw_capabilities = evidence.get('mandatory_capability_receipts')
+        if raw_capabilities is not None:
+            if not isinstance(raw_capabilities, Mapping):
+                raise RuntimeError('MANDATORY_CAPABILITY_RECEIPTS_INVALID')
+            for capability, wrapper in raw_capabilities.items():
+                if capability not in cls._CAPABILITY_PHASES or not isinstance(wrapper, Mapping):
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_INVALID')
+                if set(wrapper) != {'canonical_receipt', 'receipt_sha256'}:
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_INVALID')
+                raw = wrapper.get('canonical_receipt')
+                if not isinstance(raw, Mapping):
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_INVALID')
+                expected_raw_keys = {
+                    'phase',
+                    'action_grant_id',
+                    'result_ok',
+                    'error_code',
+                    'error_detail',
+                    'unresolved',
+                    'media_identity',
+                    'started_at',
+                    'completed_at',
+                    'field_readbacks',
+                    'canonical_sha256',
+                }
+                if capability == 'rollbackPreparation':
+                    expected_raw_keys.add('preimage_sha256')
+                if set(raw) != expected_raw_keys:
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_INVALID')
+                if raw.get('phase') != cls._CAPABILITY_PHASES[capability].value:
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_PHASE_MISMATCH')
+                if not _ordered_absolute_interval(
+                    raw.get('started_at'), raw.get('completed_at')
+                ):
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_TIMESTAMP_INVALID')
+                raw_readbacks = raw.get('field_readbacks')
+                try:
+                    readbacks = validated_field_readbacks_from_payload(
+                        raw_readbacks,
+                        require_nonempty=False,
+                        reason_prefix='CAPABILITY',
+                    )
+                except ReceiptValidationError as exc:
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_INVALID') from exc
+                receipt = ContentFinalizeReceipt(
+                    phase=cls._CAPABILITY_PHASES[capability],
+                    action_grant_id=raw.get('action_grant_id'),
+                    result_ok=raw.get('result_ok'),
+                    error_code=raw.get('error_code'),
+                    error_detail=raw.get('error_detail'),
+                    unresolved=raw.get('unresolved') is True,
+                    field_readbacks=readbacks,
+                    media_identity=raw.get('media_identity'),
+                    canonical_sha256=raw.get('canonical_sha256'),
+                    started_at=raw.get('started_at'),
+                    completed_at=raw.get('completed_at'),
+                )
+                try:
+                    digest = receipt.finalize()
+                except (ReceiptValidationError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f'MANDATORY_CAPABILITY_RECEIPT_INVALID_{str(capability).upper()}'
+                    ) from exc
+                if str(wrapper.get('receipt_sha256') or '').casefold() != digest.casefold():
+                    raise RuntimeError('MANDATORY_CAPABILITY_RECEIPT_HASH_MISMATCH')
+                if capability == 'rollbackPreparation' and re.fullmatch(
+                    r'[0-9A-Fa-f]{64}', str(raw.get('preimage_sha256') or '')
+                ) is None:
+                    raise RuntimeError('ROLLBACK_PREIMAGE_RECEIPT_INVALID')
+
+        raw_sections = evidence.get('path_b_section_receipts')
+        if raw_sections is not None:
+            if not isinstance(raw_sections, Mapping):
+                raise RuntimeError('PATH_B_SECTION_RECEIPTS_INVALID')
+            for section, raw in raw_sections.items():
+                if section not in cls._PATH_B_SECTIONS or not isinstance(raw, Mapping):
+                    raise RuntimeError('PATH_B_SECTION_RECEIPT_INVALID')
+                expected_keys = {
+                    'schema_version',
+                    'section',
+                    'action_grant_id',
+                    'success',
+                    'readback_proven',
+                    'field_readbacks',
+                    'started_at',
+                    'completed_at',
+                    'receipt_sha256',
+                }
+                if set(raw) != expected_keys or raw.get('schema_version') != 'dxm.path-b.section-receipt.v1':
+                    raise RuntimeError('PATH_B_SECTION_RECEIPT_INVALID')
+                if (
+                    raw.get('section') != section
+                    or raw.get('success') is not True
+                    or raw.get('readback_proven') is not True
+                    or not isinstance(raw.get('action_grant_id'), str)
+                    or not raw.get('action_grant_id').strip()
+                    or not _ordered_absolute_interval(
+                        raw.get('started_at'), raw.get('completed_at')
+                    )
+                    or not isinstance(raw.get('field_readbacks'), list)
+                    or not raw.get('field_readbacks')
+                ):
+                    raise RuntimeError('PATH_B_SECTION_RECEIPT_UNPROVEN')
+                try:
+                    validated_field_readbacks_from_payload(
+                        raw.get('field_readbacks'),
+                        require_nonempty=True,
+                        reason_prefix='SECTION',
+                    )
+                except ReceiptValidationError as exc:
+                    raise RuntimeError('PATH_B_SECTION_RECEIPT_UNPROVEN') from exc
+                body = {
+                    key: value for key, value in raw.items() if key != 'receipt_sha256'
+                }
+                try:
+                    encoded = json.dumps(
+                        body,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(',', ':'),
+                        allow_nan=False,
+                    ).encode('utf-8')
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError('PATH_B_SECTION_RECEIPT_INVALID') from exc
+                digest = hashlib.sha256(encoded).hexdigest()
+                if str(raw.get('receipt_sha256') or '').casefold() != digest:
+                    raise RuntimeError('PATH_B_SECTION_RECEIPT_HASH_MISMATCH')
 
     def recent_workflow_events(self, limit: int = 20) -> list[dict[str, Any]]:
         recent = getattr(self.login_flow, 'recent_workflow_events', None)
@@ -299,6 +572,7 @@ class DxmWorkflowAdapter:
         self,
         product_query: str | None = None,
         store_name: str | None = None,
+        note_text: str | None = None,
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -317,6 +591,7 @@ class DxmWorkflowAdapter:
             before_values={
                 'product_query': product_query,
                 'store_name': store_name,
+                'note_text': note_text,
                 'target_source_urls': list(target_source_urls or []),
                 'target_identity': _mapping_copy(target_identity),
             },
@@ -562,6 +837,46 @@ class DxmWorkflowAdapter:
             },
         )
 
+    def first_save_intent(
+        self,
+        defaults: dict[str, Any] | None = None,
+        product_query: str | None = None,
+        store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute the single native SAVE1 -> semi-managed handshake producer.
+
+        This adapter deliberately has no DOM/save fallback.  The visible
+        production runtime must expose one composite producer that invokes the
+        BrowserAgent mutation authorizer exactly once with logical action
+        ``first_save_intent`` and returns the complete hashed pre/post chain.
+        """
+
+        target_identity = self._require_frozen_target_identity(
+            'first_save_intent', target_identity, store_name
+        )
+        producer = getattr(self.login_flow, 'perform_first_save_intent', None)
+        if not callable(producer):
+            raise RuntimeError('FIRST_SAVE_INTENT_PROVIDER_MISSING')
+        evidence = producer(
+            defaults=defaults,
+            product_query=product_query,
+            store_name=store_name,
+            target_identity=target_identity,
+        )
+        if not isinstance(evidence, Mapping):
+            raise RuntimeError('FIRST_SAVE_INTENT_PROOF_INVALID')
+        return self._result(
+            'first_save_intent',
+            evidence,
+            before_values={
+                'defaults': dict(defaults or {}),
+                'product_query': product_query,
+                'store_name': store_name,
+                'target_identity': dict(target_identity),
+            },
+        )
+
     def verify_not_published(
         self,
         product_query: str | None = None,
@@ -605,6 +920,7 @@ class DxmWorkflowAdapter:
         before_values: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         evidence_map = dict(evidence) if isinstance(evidence, Mapping) else {}
+        self._validate_embedded_path_b_receipts(evidence_map)
         evidence_map = self._normalize_published_evidence(action, evidence_map)
         stage = evidence_map.get('stage')
         contract_facts = self._build_contract_facts(
@@ -667,7 +983,7 @@ class DxmWorkflowAdapter:
                 and save.get('publish_action_clicked') is False
                 and save.get('text') == '保存'
                 and _strict_int(save.get('exact_save_count')) == 1
-                and save.get('click_method') in {'native_exact_save', 'dom_exact_save'}
+                and save.get('click_method') == 'playwright_exact_role'
                 and authorization.get('ok') is True
                 and authorization.get('executed') is True
                 and authorization.get('mutation_action') == 'save_only_click'
@@ -717,6 +1033,60 @@ class DxmWorkflowAdapter:
             published = False if complete_no_publish_save else None
             save['published'] = published
             result['save_result'] = save
+        elif action == 'first_save_intent':
+            handshake = _mapping_copy(result.get('first_save_intent_handshake'))
+            audit = _mapping_copy(handshake.get('network_audit'))
+            receipt = _mapping_copy(handshake.get('network_save_result'))
+            signal = _mapping_copy(handshake.get('publish_signal'))
+            authorization = _mapping_copy(handshake.get('mutation_authorization'))
+            transition = _mapping_copy(handshake.get('page_transition'))
+            frozen_hash = str(handshake.get('handshake_sha256') or '').strip().casefold()
+            try:
+                encoded = json.dumps(
+                    {
+                        key: value
+                        for key, value in handshake.items()
+                        if key != 'handshake_sha256'
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                    allow_nan=False,
+                ).encode('utf-8')
+                computed_hash = hashlib.sha256(encoded).hexdigest()
+            except (TypeError, ValueError):
+                computed_hash = ''
+            complete_no_publish_handshake = bool(
+                result.get('ok') is True
+                and handshake.get('schema_version') == 'dxm.first-save-intent-handshake.v1'
+                and handshake.get('save_stage') == 'SAVE1'
+                and handshake.get('same_handshake') is True
+                and handshake.get('physical_mutation_count') == 1
+                and handshake.get('publish_request_count') == 0
+                and len(frozen_hash) == 64
+                and frozen_hash == computed_hash
+                and authorization.get('ok') is True
+                and authorization.get('executed') is True
+                and authorization.get('mutation_action') == 'first_save_intent'
+                and authorization.get('mutation_status') == 'DISPATCHED'
+                and _exact_save_receipt(receipt)
+                and audit.get('complete') is True
+                and audit.get('window_closed') is True
+                and _strict_int(audit.get('mutation_request_count')) == 1
+                and _strict_int(audit.get('save_request_count')) == 1
+                and _strict_int(audit.get('other_mutation_request_count')) == 0
+                and _strict_int(audit.get('publish_request_count')) == 0
+                and signal.get('detected') is False
+                and _strict_int(signal.get('request_count')) == 0
+                and transition == {
+                    'from': 'editor',
+                    'to': 'semi_managed',
+                    'same_browser_session': True,
+                    'source_editor_identity_preserved': True,
+                }
+            )
+            published = False if complete_no_publish_handshake else None
+            result['first_save_intent_handshake'] = handshake
         elif action == 'verify_not_published':
             proof = _mapping_copy(result.get('unpublished_proof'))
             identity = _mapping_copy(proof.get('identity_readback'))
@@ -956,7 +1326,37 @@ class DxmWorkflowAdapter:
                 'network_audit': _mapping_copy(save.get('network_audit')),
                 'publish_signal': _mapping_copy(save.get('publish_signal')),
                 'page_save_result': _mapping_copy(save.get('page_save_result')),
+                'save_field_readbacks': (
+                    list(save.get('save_field_readbacks'))
+                    if isinstance(save.get('save_field_readbacks'), list)
+                    else None
+                ),
                 'published': save.get('published'),
+            }
+        if action == 'first_save_intent':
+            handshake = sources.get('first_save_intent_handshake') or {}
+            opened = _mapping_copy(handshake.get('open_semi_managed_editor'))
+            return {
+                'first_save_intent_handshake': dict(handshake),
+                'mutation_authorization': _mapping_copy(
+                    handshake.get('mutation_authorization')
+                ),
+                'network_save_result': _mapping_copy(
+                    handshake.get('network_save_result')
+                ),
+                'network_audit': _mapping_copy(handshake.get('network_audit')),
+                'publish_signal': _mapping_copy(handshake.get('publish_signal')),
+                'save_field_readbacks': (
+                    list(opened.get('field_readbacks'))
+                    if isinstance(opened.get('field_readbacks'), list)
+                    else None
+                ),
+                'published': (
+                    False
+                    if handshake.get('publish_request_count') == 0
+                    and _mapping_copy(handshake.get('publish_signal')).get('detected') is False
+                    else None
+                ),
             }
         if action == 'verify_not_published':
             proof = sources.get('unpublished_proof') or {}
@@ -1026,6 +1426,7 @@ class DxmWorkflowAdapter:
             'open_semi_managed_page': ('editor_action_result',),
             'fill_semi_managed_defaults': ('fill_result', 'editor_action_result'),
             'save_only': ('save_result',),
+            'first_save_intent': ('first_save_intent_handshake',),
             'verify_not_published': ('unpublished_proof',),
         }.get(action, ())
         return {
@@ -1042,6 +1443,21 @@ class DxmWorkflowAdapter:
     ) -> None:
         if action == 'save_only':
             save = sources.get('save_result') or {}
+            raw_save_readbacks = save.get('save_field_readbacks')
+            if raw_save_readbacks is not None:
+                try:
+                    save_field_readbacks = [
+                        item.to_dict()
+                        for item in validated_field_readbacks_from_payload(
+                            raw_save_readbacks,
+                            require_nonempty=True,
+                            reason_prefix='SAVE',
+                        )
+                    ]
+                except ReceiptValidationError as exc:
+                    raise RuntimeError('SAVE_FIELD_READBACKS_INVALID') from exc
+            else:
+                save_field_readbacks = None
             observations.update({
                 'mutation_authorization': _mapping_copy(save.get('mutation_authorization')),
                 'pre_dispatch_readback': _mapping_copy(save.get('pre_dispatch_readback')),
@@ -1061,6 +1477,60 @@ class DxmWorkflowAdapter:
                 'publish_signal': _mapping_copy(save.get('publish_signal')),
                 'page_save_result': _mapping_copy(save.get('page_save_result')),
             })
+            if save_field_readbacks is not None:
+                # The canonical per-SAVE producer consumes this top-level,
+                # normalized copy immediately after the independent VERIFY.
+                observations['save_field_readbacks'] = save_field_readbacks
+        elif action == 'first_save_intent':
+            handshake = sources.get('first_save_intent_handshake') or {}
+            save_field_readbacks: list[dict[str, Any]] | None = None
+            if handshake:
+                raw_save_readbacks = _mapping_copy(
+                    handshake.get('open_semi_managed_editor')
+                ).get('field_readbacks')
+                try:
+                    save_field_readbacks = [
+                        item.to_dict()
+                        for item in validated_field_readbacks_from_payload(
+                            raw_save_readbacks,
+                            require_nonempty=True,
+                            reason_prefix='FIRST_SAVE_INTENT',
+                        )
+                    ]
+                except ReceiptValidationError as exc:
+                    raise RuntimeError('FIRST_SAVE_INTENT_FIELD_READBACKS_INVALID') from exc
+            modal_handshake = {
+                'gate_outcome': 'admitted' if handshake.get('same_handshake') is True else None,
+                'semi_entry_triggered': _mapping_copy(
+                    handshake.get('open_semi_managed_editor')
+                ).get('observed'),
+                'same_handshake': handshake.get('same_handshake'),
+                'handshake_id': handshake.get('handshake_id'),
+                'save1_verified': _mapping_copy(
+                    handshake.get('network_save_result')
+                ).get('ok'),
+                'exactly_one_save_request': bool(
+                    handshake.get('physical_mutation_count') == 1
+                    and _mapping_copy(handshake.get('network_audit')).get(
+                        'save_request_count'
+                    ) == 1
+                ),
+            }
+            observations.update({
+                'first_save_intent_handshake': dict(handshake),
+                'save_result': dict(handshake),
+                'save_intent_handshake': modal_handshake,
+                'mutation_authorization': _mapping_copy(
+                    handshake.get('mutation_authorization')
+                ),
+                'network_save_result': _mapping_copy(
+                    handshake.get('network_save_result')
+                ),
+                'network_audit': _mapping_copy(handshake.get('network_audit')),
+                'publish_signal': _mapping_copy(handshake.get('publish_signal')),
+            })
+            if save_field_readbacks is not None:
+                observations['save_field_readbacks'] = save_field_readbacks
         elif action == 'verify_not_published':
             proof = sources.get('unpublished_proof') or {}
             observations.update({
@@ -1116,6 +1586,10 @@ class DxmWorkflowAdapter:
             self._derive_semi_defaults_postconditions(sources, postconditions)
         elif action == 'save_only':
             self._derive_save_postconditions(evidence, sources, postconditions)
+        elif action == 'first_save_intent':
+            self._derive_first_save_intent_postconditions(
+                evidence, sources, postconditions
+            )
         elif action == 'verify_not_published':
             self._derive_unpublished_postconditions(evidence, sources, postconditions)
 
@@ -1553,7 +2027,7 @@ class DxmWorkflowAdapter:
             save.get('exact_save_target') is True
             and str(save.get('text') or '') == '保存'
             and save.get('exact_save_count') == 1
-            and save.get('click_method') in {'native_exact_save', 'dom_exact_save'}
+            and save.get('click_method') == 'playwright_exact_role'
         )
         postconditions['save_click_dispatched'] = save.get('save_click_dispatched') is True
         postconditions['network_save_success'] = bool(
@@ -1595,6 +2069,84 @@ class DxmWorkflowAdapter:
             and _strict_int(network_audit.get('publish_request_count')) == 0
             and network_audit.get('complete') is True
         )
+
+    @staticmethod
+    def _derive_first_save_intent_postconditions(
+        evidence: Mapping[str, Any],
+        sources: Mapping[str, dict[str, Any]],
+        postconditions: dict[str, bool],
+    ) -> None:
+        handshake = sources.get('first_save_intent_handshake') or {}
+        authorization = _mapping_copy(handshake.get('mutation_authorization'))
+        intent = _mapping_copy(handshake.get('first_save_intent'))
+        opened = _mapping_copy(handshake.get('open_semi_managed_editor'))
+        pre_page = _mapping_copy(handshake.get('pre_dispatch_page'))
+        post_page = _mapping_copy(handshake.get('post_dispatch_page'))
+        audit = _mapping_copy(handshake.get('network_audit'))
+        receipt = _mapping_copy(handshake.get('network_save_result'))
+        signal = _mapping_copy(handshake.get('publish_signal'))
+        transition = _mapping_copy(handshake.get('page_transition'))
+        exact_transition = transition == {
+            'from': 'editor',
+            'to': 'semi_managed',
+            'same_browser_session': True,
+            'source_editor_identity_preserved': True,
+        }
+        postconditions['mutation_authorized'] = bool(
+            authorization.get('ok') is True
+            and authorization.get('executed') is True
+            and authorization.get('mutation_action') == 'first_save_intent'
+            and authorization.get('mutation_status') == 'DISPATCHED'
+            and str(authorization.get('mutation_id') or '').strip()
+        )
+        postconditions['first_save_intent_observed'] = bool(
+            intent.get('observed') is True
+            and str(intent.get('event_id') or '').strip()
+            and str(intent.get('observed_at') or '').strip()
+        )
+        postconditions['exactly_one_save_request'] = bool(
+            _strict_int(handshake.get('physical_mutation_count')) == 1
+            and audit.get('complete') is True
+            and audit.get('window_closed') is True
+            and _strict_int(audit.get('mutation_request_count')) == 1
+            and _strict_int(audit.get('save_request_count')) == 1
+            and _strict_int(audit.get('other_mutation_request_count')) == 0
+        )
+        postconditions['network_save_success'] = _exact_save_receipt(receipt)
+        postconditions['open_semi_managed_editor_observed'] = bool(
+            opened.get('observed') is True
+            and str(opened.get('event_id') or '').strip()
+            and str(opened.get('observed_at') or '').strip()
+            and pre_page.get('kind') == 'editor'
+            and post_page.get('kind') == 'semi_managed'
+            and exact_transition
+        )
+        postconditions['same_handshake'] = bool(
+            handshake.get('same_handshake') is True
+            and str(handshake.get('handshake_id') or '').strip()
+            and intent.get('handshake_id') == handshake.get('handshake_id')
+            and opened.get('handshake_id') == handshake.get('handshake_id')
+            and str(intent.get('event_id') or '').strip()
+            and str(opened.get('event_id') or '').strip()
+            and intent.get('event_id') != opened.get('event_id')
+        )
+        postconditions['source_editor_identity_preserved'] = bool(
+            exact_transition
+            and pre_page.get('target_identity_sha256')
+            and pre_page.get('target_identity_sha256')
+            == post_page.get('target_identity_sha256')
+        )
+        zero_publish = bool(
+            _strict_int(handshake.get('publish_request_count')) == 0
+            and _strict_int(audit.get('publish_request_count')) == 0
+            and signal.get('detected') is False
+            and signal.get('kind') == 'network_route_classification'
+            and _strict_int(signal.get('request_count')) == 0
+        )
+        postconditions['published_false'] = bool(
+            zero_publish and evidence.get('published') is False
+        )
+        postconditions['publish_action_not_clicked'] = zero_publish
 
     @staticmethod
     def _derive_unpublished_postconditions(

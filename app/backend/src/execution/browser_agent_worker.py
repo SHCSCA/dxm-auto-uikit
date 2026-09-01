@@ -30,6 +30,8 @@ from src.execution.browser_agent_protocol import (
     BrowserAgentCommand,
     canonical_frozen_target_identity,
     canonical_mutation_target_payload,
+    command_post_dispatch_page,
+    command_pre_dispatch_page,
 )
 from src.services.browser_agent_status import build_browser_hud, normalize_operator_copy
 from src.services.evidence_ref import validate_evidence_ref
@@ -48,12 +50,27 @@ _RAW_CONTRACT_FACT_KEYS = frozenset(
 _PROOF_EVIDENCE_KIND_BY_STATE = MappingProxyType(
     {
         "SAVE_ONLY": "save_screenshot",
+        "SAVE2_ONLY": "save_screenshot",
+        "FIRST_SAVE_INTENT": "save_screenshot",
         "VERIFY_NOT_PUBLISHED": "unpublished_screenshot",
+        "VERIFY_SAVE1_NOT_PUBLISHED": "unpublished_screenshot",
+        "VERIFY_SAVE2_NOT_PUBLISHED": "unpublished_screenshot",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED": "unpublished_screenshot",
     }
 )
 _MUTATION_ACTION_SEQUENCE_BY_STATE = MappingProxyType(
     {
         "SAVE_ONLY": MappingProxyType({"save_only_click": 1}),
+        "SAVE2_ONLY": MappingProxyType({"save_only_click": 1}),
+        "FIRST_SAVE_INTENT": MappingProxyType({"first_save_intent": 1}),
+    }
+)
+_BATCH_VERIFY_STATES = frozenset(
+    {
+        "VERIFY_NOT_PUBLISHED",
+        "VERIFY_SAVE1_NOT_PUBLISHED",
+        "VERIFY_SAVE2_NOT_PUBLISHED",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
     }
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
@@ -68,6 +85,7 @@ _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
         "open_semi_managed_page",
         "fill_semi_managed_defaults",
         "save_only",
+        "first_save_intent",
         "verify_not_published",
     }
 )
@@ -1100,21 +1118,43 @@ class BrowserAgentRuntime:
                     "BROWSER_AGENT_COMMAND_CONTRACT_MISMATCH: "
                     f"{command_mode} requires {mode_page}, got {command.expected_page}"
                 )
-        if (
-            action_contract is None
-            or command.expected_page not in action_contract.allowed_pages
-        ):
+        result_page = command_post_dispatch_page(command)
+        pre_dispatch_page = command_pre_dispatch_page(command)
+        if command.action == "first_save_intent":
+            if (
+                command.state != "FIRST_SAVE_INTENT"
+                or command.expected_page != "editor"
+                or pre_dispatch_page != "editor"
+                or result_page != "semi_managed"
+            ):
+                raise RuntimeError(
+                    "FIRST_SAVE_INTENT_PAGE_CONTRACT_INVALID: "
+                    "requires pre=editor and post=semi_managed"
+                )
+        elif pre_dispatch_page != command.expected_page or result_page != command.expected_page:
             raise RuntimeError(
                 "BROWSER_AGENT_COMMAND_CONTRACT_MISMATCH: "
-                f"unsupported {command.state}/{command.action}/{command.expected_page} binding"
+                "only FIRST_SAVE_INTENT may change controlled page identity"
             )
-        if command.expected_page not in {
+        if action_contract is None or result_page not in action_contract.allowed_pages:
+            raise RuntimeError(
+                "BROWSER_AGENT_COMMAND_CONTRACT_MISMATCH: "
+                f"unsupported {command.state}/{command.action}/{result_page} binding"
+            )
+        if pre_dispatch_page not in {
             "authenticated_dxm",
             "draft_box",
             "editor",
             "semi_managed",
         }:
             raise RuntimeError("BROWSER_AGENT_EXPECTED_PAGE_INVALID")
+        if result_page not in {
+            "authenticated_dxm",
+            "draft_box",
+            "editor",
+            "semi_managed",
+        }:
+            raise RuntimeError("BROWSER_AGENT_RESULT_PAGE_INVALID")
         try:
             deadline = datetime.fromisoformat(command.deadline.replace("Z", "+00:00"))
         except ValueError as exc:
@@ -1156,6 +1196,8 @@ class BrowserAgentRuntime:
         record = self._idempotency_records.get(command.idempotency_key)
         if record is None:
             return None
+        if _is_phase_specific_path_b_command(command):
+            raise RuntimeError("BROWSER_AGENT_MUTATION_REPLAY_FORBIDDEN")
         self._idempotency_records.move_to_end(command.idempotency_key)
         if record.fingerprint != fingerprint:
             raise RuntimeError("BROWSER_AGENT_IDEMPOTENCY_CONFLICT")
@@ -1209,6 +1251,8 @@ class BrowserAgentRuntime:
             "command_action": command.action,
             "target_hash": getattr(command, "target_hash", None),
             "mutation_target": dict(command.params),
+            "pre_dispatch_page": command_pre_dispatch_page(command),
+            "post_dispatch_page": command_post_dispatch_page(command),
         }
         mutation_setter = getattr(adapter, "set_mutation_authorizer", None)
         evidence_setter = getattr(adapter, "set_execution_evidence_context", None)
@@ -1242,9 +1286,7 @@ class BrowserAgentRuntime:
                 raw_result,
             )
             if (
-                command.execution_mode == "batch_draft_save"
-                and command.state == "SAVE_ONLY"
-                and command.action == "save_only"
+                _is_batch_save_command(command)
                 and isinstance(result, Mapping)
                 and result.get("ok") is True
             ):
@@ -1332,7 +1374,13 @@ class BrowserAgentRuntime:
         raw_result: Any,
     ) -> dict[str, Any]:
         raw, contract_facts = _require_raw_action_result_contract(raw_result)
-        _validate_reported_action_result_identity(raw, command, context)
+        result_page = command_post_dispatch_page(command)
+        _validate_reported_action_result_identity(
+            raw,
+            command,
+            context,
+            expected_page=result_page,
+        )
         if command.action in _FROZEN_TARGET_REQUIRED_ACTIONS:
             command_store = command.params.get("store_name")
             if not isinstance(command_store, str) or command_store != " ".join(command_store.split()) or not command_store:
@@ -1363,13 +1411,13 @@ class BrowserAgentRuntime:
                 )
         if (
             command.execution_mode == "batch_draft_save"
-            and command.state == "VERIFY_NOT_PUBLISHED"
+            and command.state in _BATCH_VERIFY_STATES
             and command.action == "verify_not_published"
         ):
             verification_context = command.params.get("save_verification_context")
             if not isinstance(verification_context, Mapping):
                 _raise_action_result_contract_failure(
-                    "batch VERIFY_NOT_PUBLISHED requires save_verification_context"
+                    f"batch {command.state} requires save_verification_context"
                 )
             before_values = dict(contract_facts.get("before_values") or {})
             before_values["save_verification_context"] = deepcopy(
@@ -1389,6 +1437,19 @@ class BrowserAgentRuntime:
             after_fresh_probe["save_verification_context"] = deepcopy(
                 dict(verification_context)
             )
+            if command.state == "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED":
+                save_predecessor = command.params.get("save_predecessor")
+                if not isinstance(save_predecessor, Mapping):
+                    _raise_action_result_contract_failure(
+                        "Discovery VERIFY requires its FIRST_SAVE_INTENT predecessor"
+                    )
+                predecessor_copy = deepcopy(dict(save_predecessor))
+                before_values["save_predecessor"] = predecessor_copy
+                fresh_probe["save_predecessor"] = deepcopy(predecessor_copy)
+                observations["fresh_probe"] = fresh_probe
+                observations["save_predecessor"] = deepcopy(predecessor_copy)
+                after_fresh_probe["save_predecessor"] = deepcopy(predecessor_copy)
+                after_values["save_predecessor"] = deepcopy(predecessor_copy)
             after_values["fresh_probe"] = after_fresh_probe
             contract_facts["before_values"] = before_values
             contract_facts["after_values"] = after_values
@@ -1407,12 +1468,12 @@ class BrowserAgentRuntime:
 
         page_url = _reported_action_result_page_url(raw)
         if raw["ok"] is True:
-            if not _page_url_matches_identity(page_url, command.expected_page):
+            if not _page_url_matches_identity(page_url, result_page):
                 _raise_action_result_contract_failure(
-                    f"expected exact {command.expected_page} DXM page URL, "
+                    f"expected exact {result_page} DXM page URL, "
                     f"observed {page_url or 'missing page URL'}"
                 )
-            page_kind: str | None = command.expected_page
+            page_kind: str | None = result_page
         elif page_url:
             page_kind = _controlled_page_identity(page_url)
             if page_kind is None:
@@ -1452,7 +1513,7 @@ class BrowserAgentRuntime:
                 envelope,
                 expected_state=command.state,
                 expected_action=command.action,
-                expected_page=command.expected_page,
+                expected_page=result_page,
                 execution_mode=context.mode,
                 expected_runtime_id=context.runtime_id,
                 expected_browser_session_id=cached_session_id,
@@ -1463,19 +1524,30 @@ class BrowserAgentRuntime:
                     if isinstance(command.params.get("defaults"), Mapping)
                     else None
                 ),
+                expected_target_identity=(
+                    command.params.get("target_identity")
+                    if _is_batch_save_command(command)
+                    else None
+                ),
+                expected_store_name=(
+                    command.params.get("store_name")
+                    if _is_batch_save_command(command)
+                    else None
+                ),
+                expected_target_hash=(
+                    command.target_hash if _is_batch_save_command(command) else None
+                ),
             )
         except ActionResultContractError as exc:
             _raise_action_result_contract_failure(
                 f"{exc.reason_code}: {exc}"
             )
-        if (
-            command.execution_mode == "batch_draft_save"
-            and command.state == "SAVE_ONLY"
-            and command.action == "save_only"
-        ):
+        if _is_batch_save_command(command):
             observations = validated.get("evidence", {}).get("observations", {})
             save_result = (
-                observations.get("save_result")
+                observations.get("first_save_intent_handshake")
+                if command.state == "FIRST_SAVE_INTENT"
+                else observations.get("save_result")
                 if isinstance(observations, Mapping)
                 else None
             )
@@ -1929,9 +2001,10 @@ class BrowserAgentRuntime:
         command_target_hash = str(getattr(command, "target_hash", None) or "").strip().casefold() or None
         if browser_session_id != lease.context.browser_session_id:
             return None, {"reason": "browser_agent_mutation_session_drift"}
-        if not page_url or not _page_url_matches_identity(page_url, command.expected_page):
+        pre_dispatch_page = command_pre_dispatch_page(command)
+        if not page_url or not _page_url_matches_identity(page_url, pre_dispatch_page):
             return None, {"reason": "browser_agent_mutation_page_url_drift"}
-        if page_kind != command.expected_page:
+        if page_kind != pre_dispatch_page:
             return None, {"reason": "browser_agent_mutation_page_kind_drift"}
         if strict_identity and not command_target_hash:
             return None, {"reason": "browser_agent_mutation_target_hash_missing"}
@@ -1955,7 +2028,16 @@ class BrowserAgentRuntime:
     ) -> dict[str, Any] | None:
         if (
             command.execution_mode != "batch_draft_save"
-            or command.state not in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}
+            or command.state
+            not in {
+                "SAVE_ONLY",
+                "SAVE2_ONLY",
+                "FIRST_SAVE_INTENT",
+                "VERIFY_NOT_PUBLISHED",
+                "VERIFY_SAVE1_NOT_PUBLISHED",
+                "VERIFY_SAVE2_NOT_PUBLISHED",
+                "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+            }
         ):
             return None
         adapter = self.adapter
@@ -2017,8 +2099,8 @@ class BrowserAgentRuntime:
         }
         return {
             "browser_session_id": self._adapter_browser_session_id(adapter),
-            "page_url": default_urls.get(command.expected_page),
-            "page_kind": command.expected_page,
+            "page_url": default_urls.get(command_pre_dispatch_page(command)),
+            "page_kind": command_pre_dispatch_page(command),
             "target_hash": getattr(command, "target_hash", None),
         }
 
@@ -2498,6 +2580,7 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
         "open_semi_managed_page",
         "fill_semi_managed_defaults",
         "save_only",
+        "first_save_intent",
     }:
         method = getattr(adapter, action)
         return method(
@@ -2544,6 +2627,8 @@ def _validate_reported_action_result_identity(
     raw: Mapping[str, Any],
     command: BrowserAgentCommand,
     context: BrowserAgentExecutionContext,
+    *,
+    expected_page: str,
 ) -> None:
     reported_action = raw.get("action")
     if reported_action is not None and reported_action != command.action:
@@ -2581,7 +2666,7 @@ def _validate_reported_action_result_identity(
                 "producer browser_session_id does not match the cached session"
             )
     reported_kind = reported_page_identity.get("kind")
-    if reported_kind is not None and reported_kind != command.expected_page:
+    if reported_kind is not None and reported_kind != expected_page:
         _raise_action_result_contract_failure(
             "producer page kind does not match the authoritative command"
         )
@@ -2616,7 +2701,12 @@ def _validated_action_result_evidence_refs(
 ) -> list[dict[str, Any]]:
     state_specific_field = {
         "SAVE_ONLY": "save_evidence_ref",
+        "SAVE2_ONLY": "save_evidence_ref",
+        "FIRST_SAVE_INTENT": "save_evidence_ref",
         "VERIFY_NOT_PUBLISHED": "unpublished_evidence_ref",
+        "VERIFY_SAVE1_NOT_PUBLISHED": "unpublished_evidence_ref",
+        "VERIFY_SAVE2_NOT_PUBLISHED": "unpublished_evidence_ref",
+        "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED": "unpublished_evidence_ref",
     }.get(state)
     candidate_fields = ["evidence_ref"]
     if state_specific_field is not None:
@@ -2658,11 +2748,11 @@ def _validated_action_result_evidence_refs(
         _raise_action_result_contract_failure(
             f"evidence_ref captured_at unavailable: {exc}"
         )
-    if state == "VERIFY_NOT_PUBLISHED" and raw.get("ok") is True:
+    if state in _BATCH_VERIFY_STATES and raw.get("ok") is True:
         save_ref = raw.get("save_evidence_ref")
         if not isinstance(save_ref, Mapping):
             _raise_action_result_contract_failure(
-                "successful VERIFY_NOT_PUBLISHED requires the preceding save_evidence_ref"
+                f"successful {state} requires the preceding save_evidence_ref"
             )
         save_validation = validate_evidence_ref(
             save_ref,
@@ -2676,7 +2766,7 @@ def _validated_action_result_evidence_refs(
         save_path = Path(str(save_validation["path"]))
         if save_path.resolve() == evidence_path.resolve():
             _raise_action_result_contract_failure(
-                "VERIFY_NOT_PUBLISHED must use a different evidence path from SAVE_ONLY"
+                f"{state} must use a different evidence path from its direct SAVE"
             )
         try:
             save_stat = save_path.stat()
@@ -2686,7 +2776,7 @@ def _validated_action_result_evidence_refs(
             )
         if evidence_stat.st_mtime_ns <= save_stat.st_mtime_ns:
             _raise_action_result_contract_failure(
-                "VERIFY_NOT_PUBLISHED evidence must be captured after SAVE_ONLY evidence"
+                f"{state} evidence must be captured after its direct SAVE evidence"
             )
     return [{
         "path": validation["path"],
@@ -2704,8 +2794,41 @@ def _raise_action_result_contract_failure(message: str) -> None:
 def _is_batch_save_command(command: BrowserAgentCommand) -> bool:
     return (
         command.execution_mode == "batch_draft_save"
-        and command.state == "SAVE_ONLY"
-        and command.action == "save_only"
+        and (
+            (command.state in {"SAVE_ONLY", "SAVE2_ONLY"} and command.action == "save_only")
+            or (
+                command.state == "FIRST_SAVE_INTENT"
+                and command.action == "first_save_intent"
+            )
+        )
+    )
+
+
+def _mutation_action_for_batch_save(command: BrowserAgentCommand) -> str:
+    if command.state == "FIRST_SAVE_INTENT" and command.action == "first_save_intent":
+        return "first_save_intent"
+    return "save_only_click"
+
+
+def _is_phase_specific_path_b_command(command: BrowserAgentCommand) -> bool:
+    """Return true for commands that must never replay a cached result."""
+
+    return (
+        command.execution_mode == "batch_draft_save"
+        and (
+            command.state
+            in {
+                "SAVE2_ONLY",
+                "FIRST_SAVE_INTENT",
+                "VERIFY_SAVE1_NOT_PUBLISHED",
+                "VERIFY_SAVE2_NOT_PUBLISHED",
+                "VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED",
+            }
+            or (
+                command.state == "SAVE_ONLY"
+                and len(str(command.authorization_lease_id or "")) == 64
+            )
+        )
     )
 
 
@@ -2736,7 +2859,7 @@ def _mark_batch_save_unknown(
         return False
     decision = marker(
         command,
-        "save_only_click",
+        _mutation_action_for_batch_save(command),
         {
             "phase": phase,
             "reason_code": _stable_post_save_reason_code(failure),
@@ -2867,6 +2990,7 @@ def _defer_page_hud_until_after_action(command: BrowserAgentCommand) -> bool:
         "open_semi_managed_page",
         "fill_semi_managed_defaults",
         "save_only",
+        "first_save_intent",
         "verify_not_published",
     }
 

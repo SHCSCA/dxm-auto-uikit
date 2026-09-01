@@ -58,7 +58,28 @@ DEFAULT_MAX_AGE_HOURS = 24
 DRIFT_POLICY_ABORT = "ABORT"
 DRIFT_POLICY_WARN = "WARN"
 
-_SCHEMA_VERSION = "dxm_plan_snapshot_compiler.v2"
+_SCHEMA_VERSION = "dxm_plan_snapshot_compiler.v3"
+
+# ``ui_section`` is attached at the trusted Reader/schema boundary from exact
+# DXM bindings.  It is the only stage authority used here: labels, field-name
+# heuristics, request annotations, and operator-authored phase declarations are
+# deliberately excluded.
+_SAVE1_UI_SECTIONS = frozenset(
+    {
+        "basic_info",
+        "dxm_info",
+        "attribute_info",
+        "product_info",
+        "regional_pricing",
+        "description_info",
+        "packaging_info",
+        "template_main",
+        "compliance_info",
+        "other_info",
+    }
+)
+_SAVE2_UI_SECTION = "semi_managed"
+_REAL_WRITE_STAGE_FACTS_SCHEMA = "dxm.real_write_stage_facts.v1"
 
 
 def is_plan_execution_path_released(path: Any) -> bool:
@@ -94,7 +115,7 @@ class WorkflowMandatoryCapabilityChecker:
 
 
 class PlanSnapshotCompiler:
-    """Compile one immutable, fail-closed Path A snapshot from trusted inputs.
+    """Compile one immutable, fail-closed plan snapshot from trusted inputs.
 
     R1 deepening:
     - Each item is frozen independently with its own hashes:
@@ -818,7 +839,15 @@ class PlanSnapshotCompiler:
             )
             if plan.get("scope_contract") == "single_target_category.v2":
                 target_category_snapshot["plan_owned"] = True
-        return {
+        real_write_stage_authority = self._freeze_real_write_stage_authority(
+            plan=plan,
+            mapping=mapping,
+            properties=properties,
+            current_values=current_values,
+            resolved_fields=resolved_fields,
+            unresolved_fields=unresolved_fields,
+        )
+        item_snapshot = {
             "product_id": product_id,
             "shop_id": shop_id,
             "source_urls": list(target_identity["source_urls"]),
@@ -836,6 +865,7 @@ class PlanSnapshotCompiler:
                 **resolution_body,
                 "resolution_hash": canonical_sha256(resolution_body),
             },
+            **real_write_stage_authority,
             **(
                 {"target_category": target_category_snapshot}
                 if target_category_snapshot is not None
@@ -853,6 +883,176 @@ class PlanSnapshotCompiler:
         )
         item_snapshot.update(item_result)
         return item_snapshot
+
+    def _freeze_real_write_stage_authority(
+        self,
+        *,
+        plan: Mapping[str, Any],
+        mapping: Mapping[str, Any],
+        properties: Mapping[str, Any],
+        current_values: Mapping[str, Any],
+        resolved_fields: list[dict[str, Any]],
+        unresolved_fields: list[str],
+    ) -> dict[str, Any]:
+        """Freeze the exact Path B SAVE1/SAVE2 field and value authority.
+
+        The normalized Reader schema is authoritative for the physical editor
+        section.  SAVE2 is *only* ``ui_section=semi_managed``; all other known
+        editor sections are SAVE1.  Every field authorized for a physical save
+        must have an explicit Reader preimage and a resolved expected value.
+        In particular, absence is never normalized to ``null`` because the
+        current Reader contract omits unavailable values.
+        """
+
+        if str(plan.get("path") or "").strip().upper() != "B":
+            return {}
+
+        semi_managed = plan.get("semi_managed")
+        if (
+            plan.get("configuration_contract") != "local_plan_template.v3"
+            or plan.get("status") != "ready"
+            or not isinstance(semi_managed, Mapping)
+            or semi_managed.get("enabled") is not True
+        ):
+            self._reject(
+                "SEMI_MANAGED_PLAN_AUTHORITY_MISSING",
+                "Path B snapshot requires a ready v3 plan with semi-managed enabled",
+            )
+
+        raw_entries = mapping.get("entries")
+        if not isinstance(raw_entries, list) or not raw_entries:
+            self._reject(
+                "REAL_WRITE_STAGE_AUTHORITY_MISSING",
+                "Path B field mapping is unavailable for stage derivation",
+            )
+        resolved_by_field: dict[str, Mapping[str, Any]] = {}
+        for resolved in resolved_fields:
+            field_key = resolved.get("field_key")
+            if (
+                not isinstance(field_key, str)
+                or field_key in resolved_by_field
+                or "resolved_value" not in resolved
+            ):
+                self._reject(
+                    "REAL_WRITE_EXPECTED_FACT_INVALID",
+                    "Path B resolved field facts are incomplete or duplicated",
+                )
+            resolved_by_field[field_key] = resolved
+
+        unresolved = set(unresolved_fields)
+        stage_fields: dict[str, list[str]] = {"SAVE1": [], "SAVE2": []}
+        stage_facts: dict[str, list[dict[str, Any]]] = {
+            "SAVE1": [],
+            "SAVE2": [],
+        }
+        seen_fields: set[str] = set()
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, Mapping):
+                self._reject(
+                    "REAL_WRITE_STAGE_AUTHORITY_MISSING",
+                    "Path B field mapping contains an invalid entry",
+                )
+            field_key = raw_entry.get("field_key")
+            if not isinstance(field_key, str) or field_key in seen_fields:
+                self._reject(
+                    "REAL_WRITE_STAGE_AUTHORITY_MISSING",
+                    "Path B field mapping identity is invalid or duplicated",
+                )
+            seen_fields.add(field_key)
+            definition = properties.get(field_key)
+            if not isinstance(definition, Mapping):
+                self._reject(
+                    "REAL_WRITE_STAGE_AUTHORITY_MISSING",
+                    f"field {field_key} is absent from the frozen Reader schema",
+                )
+            ui_section = definition.get("ui_section")
+            if ui_section == _SAVE2_UI_SECTION:
+                stage = "SAVE2"
+            elif (
+                isinstance(ui_section, str)
+                and ui_section in _SAVE1_UI_SECTIONS
+            ):
+                stage = "SAVE1"
+            else:
+                self._reject(
+                    "REAL_WRITE_STAGE_AUTHORITY_MISSING",
+                    f"field {field_key} has no trusted Reader ui_section",
+                )
+
+            if field_key in unresolved:
+                if stage == "SAVE2":
+                    self._reject(
+                        "SEMI_MANAGED_EXPECTED_FACT_MISSING",
+                        f"semi-managed field {field_key} has no resolved expected value",
+                    )
+                continue
+            resolved = resolved_by_field.get(field_key)
+            if resolved is None:
+                self._reject(
+                    "REAL_WRITE_EXPECTED_FACT_MISSING",
+                    f"field {field_key} has no resolved expected value",
+                )
+            if field_key not in current_values:
+                reason_code = (
+                    "SEMI_MANAGED_PREIMAGE_FACT_MISSING"
+                    if stage == "SAVE2"
+                    else "REAL_WRITE_PREIMAGE_FACT_MISSING"
+                )
+                self._reject(
+                    reason_code,
+                    f"field {field_key} has no explicit Reader preimage value",
+                )
+
+            ui_binding = definition.get("ui_binding")
+            if (
+                not isinstance(ui_binding, str)
+                or ui_binding != raw_entry.get("ui_binding")
+            ):
+                self._reject(
+                    "REAL_WRITE_BINDING_AUTHORITY_DRIFT",
+                    f"field {field_key} binding differs from the frozen Reader schema",
+                )
+            stage_fields[stage].append(field_key)
+            stage_facts[stage].append(
+                {
+                    "field_key": field_key,
+                    "ui_section": ui_section,
+                    "ui_binding": ui_binding,
+                    "preimage_sha256": canonical_sha256(current_values[field_key]),
+                    "expected_sha256": canonical_sha256(
+                        resolved["resolved_value"]
+                    ),
+                }
+            )
+
+        if set(resolved_by_field) != {
+            field_key
+            for fields in stage_fields.values()
+            for field_key in fields
+        }:
+            self._reject(
+                "REAL_WRITE_STAGE_COVERAGE_INVALID",
+                "Path B stage authority must exactly cover all resolved fields",
+            )
+        if not stage_fields["SAVE1"] or not stage_fields["SAVE2"]:
+            self._reject(
+                "REAL_WRITE_STAGE_EMPTY",
+                "Path B requires non-empty trusted SAVE1 and SAVE2 field sets",
+            )
+
+        return {
+            "real_write_stage_fields": stage_fields,
+            "real_write_stage_facts": {
+                "schema": _REAL_WRITE_STAGE_FACTS_SCHEMA,
+                "stage_authority": (
+                    "category_schema.normalized_schema.properties.ui_section"
+                ),
+                "preimage_source": "current_value_snapshot",
+                "expected_source": "resolution_result.resolved_fields",
+                "SAVE1": stage_facts["SAVE1"],
+                "SAVE2": stage_facts["SAVE2"],
+            },
+        }
 
     def _build_item_identity_hashes(
         self,

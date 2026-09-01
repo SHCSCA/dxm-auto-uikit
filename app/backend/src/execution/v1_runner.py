@@ -53,9 +53,17 @@ from src.execution.browser_agent_protocol import (
     validate_browser_agent_command,
 )
 from src.execution.batch_command_contract import (
+    PATH_B_FORMAL_LINEAGE_KEY,
+    PATH_B_SAVE1_DISCOVERY_ACTION,
+    PATH_B_SAVE1_DISCOVERY_PROFILE_KEY,
+    PATH_B_SAVE1_DISCOVERY_STATE,
     BatchCommandContractError,
     build_batch_queue_guard,
     build_save_verification_context,
+    canonical_contract_sha256,
+    validate_path_b_save1_discovery_dispatch,
+    validate_path_b_save1_discovery_profile,
+    validate_path_b_formal_lineage,
 )
 from src.execution.dxm_live import DxmLiveClient
 from src.execution.e3_authority_contract import (
@@ -66,7 +74,7 @@ from src.services.browser_agent_status import build_browser_hud
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES, ConfigDefaultsResolver
 from src.services.config_validation import ConfigValidationService
 from src.services.evidence_ref import validate_evidence_ref
-from src.services.ownership_lock import OwnershipLockService
+from src.services.ownership_lock import ConcurrentEditorGuard, OwnershipLockService
 from src.services.publish_guard import PublishGuardService
 from src.state_machine.save_authorization import (
     SaveOnlyContractError,
@@ -124,7 +132,13 @@ FROZEN_TARGET_STATES = frozenset(
         StateName.FILL_SEMI_GOODS,
         StateName.FILL_SEMI_VARIANTS,
         StateName.SAVE_ONLY,
+        StateName.FIRST_SAVE_INTENT,
+        StateName.SAVE_INTENT_MODAL,
+        StateName.SAVE2_ONLY,
         StateName.VERIFY_NOT_PUBLISHED,
+        StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+        StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+        StateName.VERIFY_SAVE2_NOT_PUBLISHED,
     }
 )
 
@@ -180,9 +194,13 @@ SINGLE_SAVE_STEPS_WITHOUT_SEMI = [
     }
 ]
 
+PATH_B_MAIN_SEMI_SELECTION = [
+    (StateName.ENABLE_SEMI_MANAGED, "选择半托管服务", "semi_managed"),
+]
+
 # SAVE1 闭环：主编辑写完后由"原生门"（SAVE_INTENT_MODAL ＝"编辑半托管信息"点击）
 # 裁决。SAVE1 与原生门结果一旦因果绑定同一握手，不要求还原墙钟全序。
-SAVE1_TAIL = [
+PATH_A_SAVE_TAIL = [
     step
     for step in SINGLE_SAVE_STEPS
     if step[0]
@@ -192,6 +210,17 @@ SAVE1_TAIL = [
         StateName.VERIFY_SAVE_RESULT,
         StateName.VERIFY_NOT_PUBLISHED,
     }
+]
+
+SAVE1_TAIL = [
+    (StateName.PRE_SAVE_GUARD_CHECK, "主编辑保存前发布隔离复核", "publish_guard"),
+    (StateName.SAVE_ONLY, "只保存主编辑信息 (SAVE1)", "save"),
+    (StateName.VERIFY_SAVE_RESULT, "读回主编辑保存成功提示", "result"),
+    (
+        StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+        "确认主编辑 SAVE1 后仍未发布",
+        "result",
+    ),
 ]
 
 # 原生门：触发保存意图 Modal，点击"编辑半托管信息"。
@@ -205,7 +234,11 @@ SAVE2_TAIL = [
     (StateName.PRE_SAVE_GUARD_CHECK, "半托管保存前发布隔离复核", "publish_guard"),
     (StateName.SAVE2_ONLY, "二次保存半托管信息 (SAVE2)", "save"),
     (StateName.VERIFY_SAVE_RESULT, "读回半托管保存成功提示", "result"),
-    (StateName.VERIFY_NOT_PUBLISHED, "确认半托管未发布", "result"),
+    (
+        StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+        "确认半托管 SAVE2 后仍未发布",
+        "result",
+    ),
 ]
 
 REPORT_AND_RELEASE = [
@@ -214,17 +247,71 @@ REPORT_AND_RELEASE = [
     if step[0] in {StateName.WRITE_REPORT, StateName.RELEASE_LOCK}
 ]
 
-BATCH_DRAFT_SAVE_STEPS = SINGLE_SAVE_STEPS_WITHOUT_SEMI + SAVE1_TAIL + REPORT_AND_RELEASE
+BATCH_DRAFT_SAVE_STEPS = (
+    SINGLE_SAVE_STEPS_WITHOUT_SEMI + PATH_A_SAVE_TAIL + REPORT_AND_RELEASE
+)
+from src.execution.canonical_receipt import (
+    build_save_receipt_from_verified_pair,
+    CanonicalReceipt,
+    ContentFinalizeReceipt,
+    FieldReadback,
+    ReceiptPhase,
+    ReceiptValidationError,
+    SaveProofKind,
+    SaveReceipt,
+)
+from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
 
 # Path B 合同：
 #   主编辑 → SAVE1 → 原生门 → 半托管页 → 半托管填字段 → SAVE2 → 报告 → 释放锁
 BATCH_PATH_B_STEPS = (
     SINGLE_SAVE_STEPS_WITHOUT_SEMI
+    + PATH_B_MAIN_SEMI_SELECTION
     + SAVE1_TAIL
     + SAVE_INTENT_GATE
-    + SEMI_MANAGED_STEPS
+    + [
+        step
+        for step in SEMI_MANAGED_STEPS
+        if step[0]
+        not in {StateName.ENABLE_SEMI_MANAGED, StateName.OPEN_SEMI_MANAGED_PAGE}
+    ]
     + SAVE2_TAIL
     + REPORT_AND_RELEASE
+)
+
+# Dedicated one-shot Discovery profile.  The composite FIRST_SAVE_INTENT is
+# the only command allowed to cross a mutation boundary; the normal SAVE_ONLY,
+# SAVE_INTENT_MODAL and every SAVE2/next-product step are deliberately absent.
+PATH_B_SAVE1_DISCOVERY_STEPS = (
+    SINGLE_SAVE_STEPS_WITHOUT_SEMI
+    + PATH_B_MAIN_SEMI_SELECTION
+    + [
+        (
+            StateName.PRE_SAVE_GUARD_CHECK,
+            "Discovery SAVE1 前发布隔离复核",
+            "publish_guard",
+        ),
+        (
+            StateName.FIRST_SAVE_INTENT,
+            "单一 SAVE1 与原生意图握手",
+            "save",
+        ),
+        (
+            StateName.VERIFY_SAVE_RESULT,
+            "读回 Discovery SAVE1 成功提示",
+            "result",
+        ),
+        (
+            StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+            "确认 Discovery SAVE1 后仍未发布",
+            "result",
+        ),
+        (
+            StateName.DISCOVERY_SEAL_STOP,
+            "原子封存 Discovery 并停止",
+            "report",
+        ),
+    ]
 )
 
 
@@ -273,8 +360,15 @@ HUD_PROGRESS_INDEX = {
     StateName.FILL_SEMI_VARIANTS: 9,
     StateName.PRE_SAVE_GUARD_CHECK: 9,
     StateName.SAVE_ONLY: 10,
+    StateName.FIRST_SAVE_INTENT: 10,
+    StateName.SAVE_INTENT_MODAL: 10,
+    StateName.SAVE2_ONLY: 10,
     StateName.VERIFY_SAVE_RESULT: 10,
     StateName.VERIFY_NOT_PUBLISHED: 11,
+    StateName.VERIFY_SAVE1_NOT_PUBLISHED: 11,
+    StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED: 11,
+    StateName.VERIFY_SAVE2_NOT_PUBLISHED: 11,
+    StateName.DISCOVERY_SEAL_STOP: 12,
     StateName.WRITE_REPORT: 12,
     StateName.RELEASE_LOCK: 12,
 }
@@ -298,8 +392,43 @@ HUD_STEP_COPY = {
     StateName.FILL_SEMI_VARIANTS: ("设置包装物流", "设置包装物流", "正在填写半托管 SKU、价格和库存"),
     StateName.PRE_SAVE_GUARD_CHECK: ("设置包装物流", "设置包装物流", "正在做保存前检查，确认不会发布"),
     StateName.SAVE_ONLY: ("点击保存", "点击保存", "正在点击保存按钮，不点击发布"),
+    StateName.FIRST_SAVE_INTENT: (
+        "Discovery SAVE1",
+        "单一保存意图握手",
+        "正在执行唯一 SAVE1 与半托管入口因果握手，不会派发 SAVE2",
+    ),
+    StateName.SAVE_INTENT_MODAL: (
+        "进入半托管",
+        "确认原生保存意图",
+        "正在通过店小秘原生入口进入半托管编辑页",
+    ),
+    StateName.SAVE2_ONLY: (
+        "点击保存",
+        "二次只保存",
+        "正在点击半托管保存按钮，不点击发布",
+    ),
     StateName.VERIFY_SAVE_RESULT: ("点击保存", "点击保存", "正在确认店小秘返回保存成功"),
     StateName.VERIFY_NOT_PUBLISHED: ("确认未发布", "确认未发布", "正在确认商品没有发布"),
+    StateName.VERIFY_SAVE1_NOT_PUBLISHED: (
+        "确认未发布",
+        "确认 SAVE1 未发布",
+        "正在独立确认主编辑保存后商品仍未发布",
+    ),
+    StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED: (
+        "确认未发布",
+        "确认 Discovery SAVE1 未发布",
+        "正在从半托管页独立确认首商品仍未发布",
+    ),
+    StateName.VERIFY_SAVE2_NOT_PUBLISHED: (
+        "确认未发布",
+        "确认 SAVE2 未发布",
+        "正在独立确认半托管保存后商品仍未发布",
+    ),
+    StateName.DISCOVERY_SEAL_STOP: (
+        "封存 Discovery",
+        "原子封存并停止",
+        "正在核对零 SAVE2、零其他商品写入并原子停止任务",
+    ),
     StateName.WRITE_REPORT: ("任务完成", "任务完成", "正在记录保存结果和未发布证明"),
     StateName.RELEASE_LOCK: ("任务完成", "任务完成", "保存成功并确认未发布"),
 }
@@ -330,7 +459,13 @@ WORKFLOW_BROWSER_ACTION_STATES = {
     StateName.FILL_SEMI_GOODS,
     StateName.FILL_SEMI_VARIANTS,
     StateName.SAVE_ONLY,
+    StateName.FIRST_SAVE_INTENT,
+    StateName.SAVE_INTENT_MODAL,
+    StateName.SAVE2_ONLY,
     StateName.VERIFY_NOT_PUBLISHED,
+    StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+    StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+    StateName.VERIFY_SAVE2_NOT_PUBLISHED,
 }
 
 WORKFLOW_EXPECTED_PAGE_BY_STATE = {
@@ -347,7 +482,13 @@ WORKFLOW_EXPECTED_PAGE_BY_STATE = {
     StateName.FILL_SEMI_GOODS: "semi_managed",
     StateName.FILL_SEMI_VARIANTS: "semi_managed",
     StateName.SAVE_ONLY: "semi_managed",
+    StateName.FIRST_SAVE_INTENT: "semi_managed",
+    StateName.SAVE_INTENT_MODAL: "semi_managed",
+    StateName.SAVE2_ONLY: "semi_managed",
     StateName.VERIFY_NOT_PUBLISHED: "semi_managed",
+    StateName.VERIFY_SAVE1_NOT_PUBLISHED: "editor",
+    StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED: "semi_managed",
+    StateName.VERIFY_SAVE2_NOT_PUBLISHED: "semi_managed",
 }
 
 class V1TaskRunner:
@@ -381,6 +522,8 @@ class V1TaskRunner:
         self.config_validation = ConfigValidationService()
         self.defaults_resolver = ConfigDefaultsResolver()
         self.ownership_lock = OwnershipLockService()
+        self.concurrent_editor_guard = ConcurrentEditorGuard()
+        self._task_writer_fences: dict[int, dict[str, Any]] = {}
 
     def _workflow_action_timeout_from_env(self) -> float:
         raw = os.getenv("DXM_WORKFLOW_ACTION_TIMEOUT_SECONDS")
@@ -434,6 +577,85 @@ class V1TaskRunner:
     def _requires_persistent_browser_agent(self) -> bool:
         return getattr(self.workflow_adapter, "requires_persistent_browser_agent", False) is True
 
+    def _acquire_task_writer_fence(
+        self,
+        task: Mapping[str, Any],
+        mode: str,
+    ) -> dict[str, Any] | None:
+        if mode not in {"single_save", "batch_save", "batch_draft_save"}:
+            return None
+        task_id = int(task["id"])
+        shop_id = str(task.get("store_id") or "").strip()
+        if not shop_id:
+            raise V1ExecutionError(
+                "WRITER_FENCE_SHOP_REQUIRED",
+                "缺少店铺写围栏身份",
+                "real mutation task has no exact store_id",
+            )
+        result = self.concurrent_editor_guard.acquire_writer_fence(
+            shop_id,
+            str(task_id),
+            generation=0,
+        )
+        if result.get("acquired") is not True:
+            raise V1ExecutionError(
+                "WRITER_FENCE_CONFLICT",
+                "同店铺已有写执行者",
+                str(result.get("reason") or "shop writer fence rejected"),
+            )
+        fence = dict(result)
+        self._task_writer_fences[task_id] = fence
+        return fence
+
+    def _require_task_writer_fence(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        task_id = int(task["id"])
+        expected = self._task_writer_fences.get(task_id)
+        if not isinstance(expected, Mapping):
+            raise V1ExecutionError(
+                "WRITER_FENCE_REQUIRED",
+                "店铺写围栏缺失",
+                "no active writer fence is bound to the task",
+            )
+        shop_id = str(task.get("store_id") or "").strip()
+        current = self.concurrent_editor_guard.validate_writer_fence(
+            shop_id,
+            str(task_id),
+        )
+        if (
+            current.get("acquired") is not True
+            or current.get("writer_fence_id") != expected.get("writer_fence_id")
+            or current.get("generation") != expected.get("generation")
+        ):
+            raise V1ExecutionError(
+                "WRITER_FENCE_DRIFT",
+                "店铺写围栏已变化",
+                str(current.get("reason") or "writer fence identity drift"),
+            )
+        heartbeat = self.concurrent_editor_guard.heartbeat_writer_fence(
+            str(expected["writer_fence_id"])
+        )
+        if heartbeat.get("acquired") is not True:
+            raise V1ExecutionError(
+                "WRITER_FENCE_HEARTBEAT_FAILED",
+                "店铺写围栏续期失败",
+                str(heartbeat.get("reason") or "writer fence heartbeat failed"),
+            )
+        return dict(current)
+
+    def _release_task_writer_fence(self, task_id: int) -> None:
+        fence = self._task_writer_fences.pop(int(task_id), None)
+        if not isinstance(fence, Mapping):
+            return
+        try:
+            self.concurrent_editor_guard.release_writer_fence(
+                str(fence.get("writer_fence_id") or ""),
+                int(fence.get("generation") or 0),
+            )
+        except Exception:
+            # Failure leaves the durable fence active until expiry, which is
+            # fail-closed for a later writer on the same shop.
+            pass
+
     async def run_task(self, task_id: int) -> None:
         task = self.repo.get_task_private(task_id)
         if not task:
@@ -467,6 +689,60 @@ class V1TaskRunner:
         task = self.repo.get_task_private(task_id)
         if not task:
             return
+        try:
+            discovery_profile = self._path_b_discovery_profile(task)
+        except V1ExecutionError as exc:
+            self.repo.try_update_task_status(
+                task_id,
+                "needs_manual_review",
+                expected_statuses=("running",),
+                completed_jobs=0,
+                failed_jobs=int(task.get("failed_jobs") or 0),
+            )
+            self.repo.release_task_runner_dispatch(
+                task_id,
+                reason="discovery_profile_invalid",
+            )
+            await self.manager.broadcast(
+                task_id,
+                {
+                    "type": "task_status",
+                    "status": "needs_manual_review",
+                    "taskId": task_id,
+                    "reasonCode": exc.error_code,
+                },
+            )
+            return
+        try:
+            self._acquire_task_writer_fence(task, mode)
+        except V1ExecutionError as exc:
+            self.repo.update_task_status(
+                task_id,
+                "needs_manual_review",
+                completed_jobs=int(task.get("completed_jobs") or 0),
+                failed_jobs=int(task.get("failed_jobs") or 0),
+            )
+            self.repo.add_log(
+                task_id,
+                None,
+                "error",
+                "真实写任务未取得同店铺单写者围栏",
+                {"reason_code": exc.error_code, "detail": exc.detail},
+            )
+            self.repo.release_task_runner_dispatch(
+                task_id,
+                reason="writer_fence_rejected",
+            )
+            await self.manager.broadcast(
+                task_id,
+                {
+                    "type": "task_status",
+                    "status": "needs_manual_review",
+                    "taskId": task_id,
+                    "reasonCode": exc.error_code,
+                },
+            )
+            return
         await self.manager.broadcast(task_id, {"type": "task_status", "status": "running", "taskId": task_id, "mode": mode})
 
         completed = int(task.get("completed_jobs") or 0)
@@ -482,6 +758,24 @@ class V1TaskRunner:
                 failed += 1
 
         for job in task["jobs"]:
+            if (
+                discovery_profile is not None
+                and int(job.get("id") or 0)
+                != discovery_profile["target_job_id"]
+            ):
+                self.repo.try_update_task_status(
+                    task_id,
+                    "needs_manual_review",
+                    expected_statuses=("running",),
+                    completed_jobs=0,
+                    failed_jobs=failed,
+                )
+                self.repo.release_task_runner_dispatch(
+                    task_id,
+                    reason="discovery_other_product_boundary",
+                )
+                self._release_task_writer_fence(task_id)
+                return
             control = await self._apply_worker_control_at_safe_point(
                 task_id,
                 completed_jobs=completed,
@@ -499,16 +793,60 @@ class V1TaskRunner:
 
             success = await self._run_job(task, job, mode)
             if success is None:
+                if discovery_profile is not None:
+                    current = self.repo.get_task_private(task_id)
+                    if (
+                        not isinstance(current, Mapping)
+                        or str(current.get("status") or "") != "stopped"
+                    ):
+                        self.repo.try_update_task_status(
+                            task_id,
+                            "needs_manual_review",
+                            expected_statuses=("running",),
+                            completed_jobs=0,
+                            failed_jobs=failed,
+                        )
+                        self.repo.release_task_runner_dispatch(
+                            task_id,
+                            reason="discovery_unsealed_terminal",
+                        )
+                        self._release_task_writer_fence(task_id)
                 return
             if success:
                 completed += 1
             else:
                 failed += 1
+                if discovery_profile is not None:
+                    self.repo.try_update_task_status(
+                        task_id,
+                        "needs_manual_review",
+                        expected_statuses=("running",),
+                        completed_jobs=0,
+                        failed_jobs=failed,
+                    )
+                    self.repo.release_task_runner_dispatch(
+                        task_id,
+                        reason="discovery_failed_before_seal",
+                    )
+                    self._release_task_writer_fence(task_id)
+                    await self.manager.broadcast(
+                        task_id,
+                        {
+                            "type": "task_status",
+                            "taskId": task_id,
+                            "status": "needs_manual_review",
+                            "reasonCode": "DISCOVERY_UNSEALED_FAILURE",
+                            "completedJobs": 0,
+                            "failedJobs": failed,
+                        },
+                    )
+                    return
                 failed_task = self.repo.get_task(task_id)
                 if failed_task and failed_task.get("status") in {
                     "failed",
                     "needs_manual_review",
                 }:
+                    self._release_task_writer_fence(task_id)
                     self.repo.release_task_runner_dispatch(task_id, reason="task_failed_terminal")
                     await self.manager.broadcast(task_id, {
                         "type": "task_status",
@@ -584,6 +922,7 @@ class V1TaskRunner:
                 return
             return
         self.repo.release_task_runner_dispatch(task_id, reason=f"task_{final_status}")
+        self._release_task_writer_fence(task_id)
         await self.manager.broadcast(task_id, {
             "type": "task_status",
             "taskId": task_id,
@@ -648,6 +987,7 @@ class V1TaskRunner:
                 failed_jobs=failed_jobs,
             )
             if result.ok and result.status == "stopped":
+                self._release_task_writer_fence(task_id)
                 self.repo.add_log(
                     task_id,
                     None,
@@ -695,15 +1035,43 @@ class V1TaskRunner:
         agent_console_events: list[dict[str, Any]] = []
         agent_action_events: list[dict[str, Any]] = []
         live_browser_hud_events: list[dict[str, Any]] = []
+        discovery_save1_dispatched = False
         last_state = MODE_LAST_STATE[mode]
         current_state_name = StateName.PRECHECK_CONFIG
         current_step_name = "启动前配置校验"
         current_field_domain = "precheck"
+        product_orchestrator: FullProductEditOrchestrator | None = None
+        product_edit_ctx: ProductEditContext | None = None
+        path_b_canonical_receipt: CanonicalReceipt | None = None
 
         self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
         self.repo.add_log(task_id, job_id, "info", "V1 执行开始", {"mode": mode, "product_id": product_id})
 
         try:
+            if snapshot_path == "B":
+                product_orchestrator = FullProductEditOrchestrator()
+                try:
+                    product_edit_ctx = product_orchestrator.create_context(
+                        product_id=str(product_id),
+                        shop_id=str(self._store_name(task) or ""),
+                        snapshot_id=str(
+                            plan.get("snapshot_id")
+                            or payload.get("plan_snapshot_id")
+                            or ""
+                        ),
+                        snapshot_hash=str(plan.get("snapshot_hash") or ""),
+                        session_context=dict(plan.get("session_context") or {}),
+                    )
+                    product_orchestrator.enter_phase(
+                        product_edit_ctx,
+                        EditPhase.PHASE_MAIN_EDIT,
+                    )
+                except Exception as exc:
+                    raise V1ExecutionError(
+                        "PATH_B_CONTEXT_INITIALIZATION_FAILED",
+                        "Path B 商品上下文初始化失败",
+                        str(exc),
+                    ) from exc
             if self.workflow_adapter is None and mode in {
                 "single_save",
                 "batch_save",
@@ -711,33 +1079,22 @@ class V1TaskRunner:
             }:
                 raise V1ExecutionError("E901", "缺少真实工作流适配器", f"{mode} requires workflow_adapter")
 
-            for state_name, step_name, field_domain in self._steps_for_mode(mode, snapshot_path):
+            for state_name, step_name, field_domain in self._steps_for_mode(
+                mode,
+                snapshot_path,
+                task=task,
+            ):
                 current_state_name = state_name
                 current_step_name = step_name
                 current_field_domain = field_domain
 
-                # Path B: wire FullProductEditOrchestrator for per-product phase tracking.
-                # Orchestrator tracks phase boundaries (MAIN_EDIT → SAVE_MODAL → SEMI_EDIT)
-                # and records receipts for audit.  Phase transitions are non-blocking;
-                # failures in orchestrator calls do NOT abort the step loop.
-                product_edit_ctx: ProductEditContext | None = None
-                if snapshot_path == "B" and state_name == StateName.PRECHECK_CONFIG:
-                    try:
-                        product_orchestrator = FullProductEditOrchestrator()
-                        product_edit_ctx = product_orchestrator.create_context(
-                            product_id=str(product_id),
-                            shop_id=str(self._store_name(task) or "unknown"),
-                            snapshot_id=str(plan.get("snapshot_id", "")),
-                            snapshot_hash=str(plan.get("snapshot_hash", "")),
-                            session_context=dict(plan.get("session_context", {})),
-                        )
-                        product_orchestrator.enter_phase(product_edit_ctx, EditPhase.PHASE_MAIN_EDIT)
-                    except Exception as exc:
-                        self.repo.add_log(
-                            task_id, job_id, "warning",
-                            "Orchestrator 初始化失败，继续执行（不影响步骤）",
-                            {"error": str(exc)},
-                        )
+                if product_orchestrator is not None and product_edit_ctx is not None:
+                    self._guard_path_b_phase_before_state(
+                        product_orchestrator,
+                        product_edit_ctx,
+                        state_name,
+                        workflow_results,
+                    )
                 self._guard_step(task, job, state_name, product)
                 self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
                 evidence_path = self._write_evidence(task_id, job_id, state_name)
@@ -796,53 +1153,11 @@ class V1TaskRunner:
                 if (mode, state_name) in {
                     ("single_save", StateName.SAVE_ONLY),
                     ("batch_draft_save", StateName.SAVE_ONLY),
+                    ("batch_draft_save", StateName.FIRST_SAVE_INTENT),
+                    ("batch_draft_save", StateName.SAVE2_ONLY),
                 }:
+                    self._require_task_writer_fence(task)
                     self._assert_real_mutation_authorized(task_id, mode, state_name)
-                # Path B phase transitions: advance through
-                #   MAIN_EDIT → SAVE_MODAL → SEMI_EDIT
-                # using FullProductEditOrchestrator for per-product phase tracking.
-                if (
-                    snapshot_path == "B"
-                    and product_edit_ctx is not None
-                    and state_name
-                    in {
-                        StateName.SAVE_ONLY,      # SAVE1 completed → enter SAVE_MODAL
-                        StateName.SAVE_INTENT_MODAL,  # modal shown → enter SEMI_EDIT
-                    }
-                ):
-                    try:
-                        # Record previous phase result, then advance
-                        prev_phase = product_edit_ctx.current_phase
-                        if state_name == StateName.SAVE_ONLY:
-                            product_edit_ctx.execution_state = "save1_completed"
-                        elif state_name == StateName.SAVE_INTENT_MODAL:
-                            product_edit_ctx.execution_state = "semi_entered"
-
-                        # advance_phase: enter next phase and execute it
-                        next_receipt = product_orchestrator.advance_phase(
-                            product_edit_ctx,
-                            section_results={
-                                prev_phase.value: {
-                                    "status": "completed",
-                                    "state": state_name.value,
-                                }
-                            },
-                        )
-                        self.repo.add_log(
-                            task_id, job_id, "info",
-                            f"Path B Phase 转换: {prev_phase.value} → {product_edit_ctx.current_phase.value}",
-                            {
-                                "receipt": next_receipt.phase.value if next_receipt else None,
-                                "status": next_receipt.status.value if next_receipt else None,
-                            },
-                        )
-                    except Exception as exc:
-                        self.repo.add_log(
-                            task_id, job_id, "warning",
-                            "Orchestrator phase 转换失败，继续执行",
-                            {"error": str(exc), "state": state_name.value},
-                        )
-
                 workflow_result = await self._run_workflow_action_async(
                     task,
                     job,
@@ -851,11 +1166,42 @@ class V1TaskRunner:
                     prior_results=workflow_results,
                 )
                 if workflow_result:
-                    if state_name == StateName.VERIFY_NOT_PUBLISHED:
+                    # From this boundary onward the composite Discovery action
+                    # has already returned a validated physical SAVE1 result.
+                    # Any later orchestration/evidence/persistence failure must
+                    # remain UNKNOWN so no caller can treat it as retryable.
+                    if state_name == StateName.FIRST_SAVE_INTENT:
+                        discovery_save1_dispatched = True
+                    if product_orchestrator is not None and product_edit_ctx is not None:
+                        self._record_path_b_phase_result(
+                            product_orchestrator,
+                            product_edit_ctx,
+                            state_name,
+                            workflow_result,
+                            workflow_results,
+                        )
+                    if state_name in {
+                        StateName.VERIFY_NOT_PUBLISHED,
+                        StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                        StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+                        StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+                    }:
                         self._assert_save_and_unpublished_proofs_independent(
                             workflow_results,
                             workflow_result,
                             mode=mode,
+                            verification_state=state_name,
+                        )
+                    if snapshot_path == "B" and state_name in {
+                        StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                        StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+                    }:
+                        self._persist_formal_path_b_save_stage_receipt(
+                            task,
+                            job,
+                            workflow_results,
+                            workflow_result,
+                            verification_state=state_name,
                         )
                     agent_action_event = self._sync_agent_action(
                         task,
@@ -883,7 +1229,12 @@ class V1TaskRunner:
                     }
                     required_action_evidence = state_name in {
                         StateName.SAVE_ONLY,
+                        StateName.FIRST_SAVE_INTENT,
+                        StateName.SAVE2_ONLY,
                         StateName.VERIFY_NOT_PUBLISHED,
+                        StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                        StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+                        StateName.VERIFY_SAVE2_NOT_PUBLISHED,
                     }
                     evidence_ref = workflow_result.get("evidence_ref")
                     if not required_action_evidence and not isinstance(evidence_ref, Mapping):
@@ -973,6 +1324,33 @@ class V1TaskRunner:
                     if not result["allowed"]:
                         raise V1ExecutionError("E999", "发布风险被拦截", "; ".join(result["reasons"]))
 
+                if state_name == StateName.DISCOVERY_SEAL_STOP:
+                    self._seal_path_b_save1_discovery_and_stop(
+                        task,
+                        job,
+                        workflow_results,
+                    )
+                    if lock_token:
+                        self.ownership_lock.release_lock(lock_token)
+                        lock_token = None
+                    self._release_task_writer_fence(task_id)
+                    self.repo.release_task_runner_dispatch(
+                        task_id,
+                        reason="path_b_save1_discovery_sealed",
+                    )
+                    await self.manager.broadcast(
+                        task_id,
+                        {
+                            "type": "task_status",
+                            "taskId": task_id,
+                            "status": "stopped",
+                            "reasonCode": "PATH_B_SAVE1_DISCOVERY_SEALED",
+                            "completedJobs": 0,
+                            "failedJobs": 0,
+                        },
+                    )
+                    return None
+
                 if state_name == StateName.RELEASE_LOCK and lock_token:
                     self.ownership_lock.release_lock(lock_token)
                     lock_token = None
@@ -1013,6 +1391,19 @@ class V1TaskRunner:
             )
             if mode in {"single_save", "batch_save", "batch_draft_save"}:
                 self._revalidate_terminal_action_evidence(workflow_results, mode=mode)
+            if snapshot_path == "B":
+                if product_edit_ctx is None:
+                    raise V1ExecutionError(
+                        "E901",
+                        "Path B 上下文缺失",
+                        "PATH_B_PRODUCT_CONTEXT_MISSING",
+                    )
+                path_b_canonical_receipt = self._build_path_b_canonical_receipt(
+                    task,
+                    job,
+                    workflow_results,
+                    product_edit_ctx,
+                )
             save_result = self._save_result_for_mode(mode, workflow_results)
             summary["published"] = save_result["published"]
             finalized = self.repo.finalize_job_success(
@@ -1022,6 +1413,11 @@ class V1TaskRunner:
                 published=save_result["published"],
                 save_result=save_result,
                 summary=summary,
+                canonical_receipt=(
+                    path_b_canonical_receipt.to_persisted_dict()
+                    if path_b_canonical_receipt is not None
+                    else None
+                ),
             )
             if not finalized.applied:
                 if finalized.conflict_code == TerminalReportConflictError.conflict_code:
@@ -1040,12 +1436,50 @@ class V1TaskRunner:
         except Exception as exc:
             if lock_token:
                 self.ownership_lock.release_lock(lock_token)
-            if isinstance(exc, V1ExecutionError):
+            if isinstance(exc, V1ExecutionError) and exc.error_code == "UNKNOWN":
+                error = exc
+            elif discovery_save1_dispatched:
+                original_detail = (
+                    exc.detail if isinstance(exc, V1ExecutionError) else str(exc)
+                )
+                error = V1ExecutionError(
+                    "UNKNOWN",
+                    "Discovery SAVE1 后状态不确定",
+                    (
+                        "POST_DISCOVERY_SAVE1_FAILURE: "
+                        f"{original_detail or type(exc).__name__}; "
+                        "automatic retry and every later mutation are forbidden."
+                    ),
+                )
+            elif isinstance(exc, V1ExecutionError):
                 error = exc
             elif isinstance(exc, TerminalReportConflictError):
                 error = V1ExecutionError(exc.conflict_code, "报告终态冲突", str(exc))
             else:
                 error = V1ExecutionError("E999", "V1 执行失败", str(exc))
+            if isinstance(
+                payload.get(PATH_B_SAVE1_DISCOVERY_PROFILE_KEY), Mapping
+            ):
+                mark_discovery_unknown = getattr(
+                    self.repo,
+                    "mark_real_dxm_path_b_discovery_unknown",
+                    None,
+                )
+                if callable(mark_discovery_unknown):
+                    try:
+                        mark_discovery_unknown(
+                            task_id,
+                            reason_code=(
+                                "DISCOVERY_OUTCOME_UNKNOWN"
+                                if error.error_code == "UNKNOWN"
+                                else "DISCOVERY_RUNNER_FAILURE"
+                            ),
+                        )
+                    except Exception:
+                        # The consumed scope and durable mutation ledger remain
+                        # fail-closed even if the recovery annotation itself
+                        # cannot be committed.  Never turn this into a retry.
+                        pass
             failure_override = self._failure_hud_override(error)
             failure_evidence_path = evidence_paths[-1] if evidence_paths else ""
             agent_console_event = self._sync_agent_console(
@@ -1112,16 +1546,205 @@ class V1TaskRunner:
             self.repo.add_log(task_id, job_id, "error", error.title, {"error_code": error.error_code, "detail": error.detail})
             return False
 
-    def _steps_for_mode(self, mode: str, snapshot_path: str = "A"):
+    def _steps_for_mode(
+        self,
+        mode: str,
+        snapshot_path: str = "A",
+        *,
+        task: Mapping[str, Any] | None = None,
+    ):
         if mode == "dry_run":
             return [V1_STEPS[0]]
         if mode == "batch_draft_save":
             if snapshot_path == "B":
+                if task is not None and self._path_b_discovery_profile(task) is not None:
+                    return PATH_B_SAVE1_DISCOVERY_STEPS
                 return BATCH_PATH_B_STEPS
             return BATCH_DRAFT_SAVE_STEPS
         if mode == "single_save":
             return SINGLE_SAVE_STEPS
         return V1_STEPS
+
+    @staticmethod
+    def _path_b_discovery_profile(
+        task: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        raw_profile = payload.get(PATH_B_SAVE1_DISCOVERY_PROFILE_KEY)
+        if raw_profile is None:
+            return None
+        try:
+            return validate_path_b_save1_discovery_profile(raw_profile)
+        except BatchCommandContractError as exc:
+            raise V1ExecutionError(
+                exc.reason_code,
+                "Discovery 执行边界无效",
+                f"{exc.reason_code}: no browser action was dispatched",
+            ) from exc
+
+    def _seal_path_b_save1_discovery_and_stop(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+        workflow_results: list[dict[str, Any]],
+    ) -> None:
+        """Hand exact, already-validated evidence to one atomic repository seal.
+
+        The repository is the final authority: inside one BEGIN IMMEDIATE it
+        must re-read the task, queue, scope and mutation ledger, prove exactly
+        one target-product ``first_save_intent`` row and zero SAVE2/other rows,
+        insert the immutable receipt, and transition the task to ``stopped``.
+        """
+
+        task_id = int(task["id"])
+        job_id = int(job["id"])
+        current_task = self.repo.get_task_private(task_id)
+        if not isinstance(current_task, Mapping):
+            raise V1ExecutionError(
+                "DISCOVERY_CURRENT_TASK_MISSING",
+                "Discovery 当前任务缺失",
+                "atomic seal was not attempted",
+            )
+        profile = self._path_b_discovery_profile(current_task)
+        if profile is None:
+            raise V1ExecutionError(
+                "DISCOVERY_PROFILE_REQUIRED",
+                "Discovery 执行边界缺失",
+                "atomic seal was not attempted",
+            )
+        first_save_matches = [
+            result
+            for result in workflow_results
+            if isinstance(result.get("action_result"), Mapping)
+            and result["action_result"].get("attempted_state")
+            == StateName.FIRST_SAVE_INTENT.value
+        ]
+        verify_matches = [
+            result
+            for result in workflow_results
+            if isinstance(result.get("action_result"), Mapping)
+            and result["action_result"].get("attempted_state")
+            == StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED.value
+        ]
+        if len(first_save_matches) != 1 or len(verify_matches) != 1:
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Discovery 证据不完整",
+                "exactly one composite SAVE1 result and one unpublished proof are required",
+            )
+        first_save = first_save_matches[0]
+        verification = verify_matches[0]
+        command = first_save.get("browser_agent_command")
+        save_envelope = first_save.get("action_result")
+        verify_command = verification.get("browser_agent_command")
+        verify_envelope = verification.get("action_result")
+        if not all(
+            isinstance(value, Mapping)
+            for value in (command, save_envelope, verify_command, verify_envelope)
+        ):
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Discovery 证据不完整",
+                "browser command and canonical action-result evidence are required",
+            )
+        try:
+            validate_path_b_save1_discovery_dispatch(
+                current_task,
+                job_id=job_id,
+                command_state=command.get("state"),
+                command_action=command.get("action"),
+            )
+        except BatchCommandContractError as exc:
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Discovery 执行边界漂移",
+                exc.reason_code,
+            ) from exc
+        save_observations = save_envelope.get("evidence", {}).get("observations", {})
+        save_result = (
+            save_observations.get("save_result")
+            if isinstance(save_observations, Mapping)
+            and isinstance(save_observations.get("save_result"), Mapping)
+            else {}
+        )
+        audit = (
+            save_result.get("network_audit")
+            if isinstance(save_result.get("network_audit"), Mapping)
+            else {}
+        )
+        authorization = (
+            save_result.get("mutation_authorization")
+            if isinstance(save_result.get("mutation_authorization"), Mapping)
+            else {}
+        )
+        handshake = (
+            save_observations.get("save_intent_handshake")
+            if isinstance(save_observations, Mapping)
+            and isinstance(save_observations.get("save_intent_handshake"), Mapping)
+            else {}
+        )
+        if (
+            save_envelope.get("ok") is not True
+            or save_envelope.get("action") != PATH_B_SAVE1_DISCOVERY_ACTION
+            or save_envelope.get("page_identity", {}).get("kind") != "semi_managed"
+            or authorization.get("mutation_action") != "first_save_intent"
+            or authorization.get("mutation_status") != "DISPATCHED"
+            or audit.get("mutation_request_count") != 1
+            or audit.get("save_request_count") != 1
+            or audit.get("other_mutation_request_count") != 0
+            or audit.get("publish_request_count") != 0
+            or handshake.get("gate_outcome") != "admitted"
+            or handshake.get("semi_entry_triggered") is not True
+            or handshake.get("same_handshake") is not True
+            or not str(handshake.get("handshake_id") or "").strip()
+            or verify_envelope.get("ok") is not True
+            or verify_envelope.get("attempted_state")
+            != StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED.value
+            or verify_envelope.get("page_identity", {}).get("kind") != "semi_managed"
+            or verify_envelope.get("after_values", {}).get("published") is not False
+        ):
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Discovery 因果证据冲突",
+                "composite SAVE1, handshake, unpublished, or zero-write proof is incomplete",
+            )
+        seal = getattr(self.repo, "seal_path_b_save1_discovery_and_stop", None)
+        if not callable(seal):
+            raise V1ExecutionError(
+                "DISCOVERY_ATOMIC_SEAL_UNAVAILABLE",
+                "Discovery 原子封存能力缺失",
+                "no receipt was sealed and no further browser action is allowed",
+            )
+        result = seal(
+            task_id=task_id,
+            job_id=job_id,
+            expected_profile=profile,
+            expected_profile_sha256=canonical_contract_sha256(profile),
+            first_save_command=dict(command),
+            first_save_action_result=dict(save_envelope),
+            unpublished_command=dict(verify_command),
+            unpublished_action_result=dict(verify_envelope),
+        )
+        applied = (
+            result.get("ok") is True and result.get("status") == "stopped"
+            if isinstance(result, Mapping)
+            else getattr(result, "ok", False) is True
+            and getattr(result, "status", None) == "stopped"
+        )
+        if not applied:
+            reason_code = (
+                str(result.get("reason_code") or "DISCOVERY_ATOMIC_SEAL_REJECTED")
+                if isinstance(result, Mapping)
+                else str(
+                    getattr(result, "reason_code", None)
+                    or "DISCOVERY_ATOMIC_SEAL_REJECTED"
+                )
+            )
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Discovery 原子封存失败",
+                reason_code,
+            )
 
     def _sync_agent_console(
         self,
@@ -1507,6 +2130,719 @@ class V1TaskRunner:
             return "等待下一步"
         return "等待下一步"
 
+    @staticmethod
+    def _path_b_receipt_store(ctx: ProductEditContext) -> dict[str, Any]:
+        store = ctx.metadata.setdefault(
+            "path_b_receipts",
+            {"sections": {}, "capabilities": {}},
+        )
+        if not isinstance(store, dict):
+            raise V1ExecutionError(
+                "E901",
+                "Path B 上下文损坏",
+                "PATH_B_RECEIPT_CONTEXT_INVALID",
+            )
+        store.setdefault("sections", {})
+        store.setdefault("capabilities", {})
+        return store
+
+    def _guard_path_b_phase_before_state(
+        self,
+        orchestrator: FullProductEditOrchestrator,
+        ctx: ProductEditContext,
+        state_name: StateName,
+        prior_results: list[dict[str, Any]],
+    ) -> None:
+        store = self._path_b_receipt_store(ctx)
+        sections = store.get("sections") if isinstance(store.get("sections"), Mapping) else {}
+        capabilities = (
+            store.get("capabilities")
+            if isinstance(store.get("capabilities"), Mapping)
+            else {}
+        )
+        if state_name in {StateName.SAVE_ONLY, StateName.FIRST_SAVE_INTENT}:
+            phase_inputs = {
+                key: dict(value)
+                for key, value in {**dict(sections), **dict(capabilities)}.items()
+                if isinstance(value, Mapping)
+            }
+            receipt = orchestrator.execute_phase(
+                ctx,
+                EditPhase.PHASE_MAIN_EDIT,
+                phase_inputs,
+            )
+            if not receipt.is_success():
+                raise V1ExecutionError(
+                    "E901",
+                    "Path B 主编辑收据不完整",
+                    str(
+                        (receipt.execute_receipt or {}).get("error")
+                        or "PATH_B_MAIN_PHASE_NOT_PROVEN"
+                    ),
+                )
+            orchestrator.exit_phase(ctx, EditPhase.PHASE_MAIN_EDIT)
+            orchestrator.enter_phase(ctx, EditPhase.PHASE_SAVE_MODAL)
+        elif state_name == StateName.SAVE_INTENT_MODAL:
+            if (
+                ctx.current_phase != EditPhase.PHASE_SAVE_MODAL
+                or not any(
+                    isinstance(item.get("action_result"), Mapping)
+                    and item["action_result"].get("attempted_state")
+                    == StateName.VERIFY_SAVE1_NOT_PUBLISHED.value
+                    and item["action_result"].get("ok") is True
+                    for item in prior_results
+                )
+            ):
+                raise V1ExecutionError(
+                    "E901",
+                    "SAVE1 验收未闭环",
+                    "PATH_B_SAVE1_AND_UNPUBLISHED_PROOF_REQUIRED",
+                )
+        elif state_name == StateName.DISCOVERY_SEAL_STOP:
+            if (
+                ctx.current_phase != EditPhase.PHASE_SEMI_EDIT
+                or not any(
+                    isinstance(item.get("action_result"), Mapping)
+                    and item["action_result"].get("attempted_state")
+                    == StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED.value
+                    and item["action_result"].get("ok") is True
+                    for item in prior_results
+                )
+            ):
+                raise V1ExecutionError(
+                    "UNKNOWN",
+                    "Discovery 验收未闭环",
+                    "DISCOVERY_SAVE1_AND_UNPUBLISHED_PROOF_REQUIRED",
+                )
+        elif state_name == StateName.SAVE2_ONLY:
+            if ctx.current_phase != EditPhase.PHASE_SEMI_EDIT:
+                raise V1ExecutionError(
+                    "E901",
+                    "Path B 半托管上下文未进入",
+                    "PATH_B_SEMI_PHASE_NOT_ENTERED",
+                )
+            semi_inputs = {
+                key: dict(value)
+                for key, value in dict(sections).items()
+                if key in orchestrator.SEMI_SECTIONS and isinstance(value, Mapping)
+            }
+            receipt = orchestrator.execute_phase(
+                ctx,
+                EditPhase.PHASE_SEMI_EDIT,
+                semi_inputs,
+            )
+            if not receipt.is_success():
+                raise V1ExecutionError(
+                    "E901",
+                    "Path B 半托管收据不完整",
+                    str(
+                        (receipt.execute_receipt or {}).get("error")
+                        or "PATH_B_SEMI_PHASE_NOT_PROVEN"
+                    ),
+                )
+            orchestrator.exit_phase(ctx, EditPhase.PHASE_SEMI_EDIT)
+
+    def _record_path_b_phase_result(
+        self,
+        orchestrator: FullProductEditOrchestrator,
+        ctx: ProductEditContext,
+        state_name: StateName,
+        workflow_result: Mapping[str, Any],
+        prior_results: list[dict[str, Any]],
+    ) -> None:
+        envelope = workflow_result.get("action_result")
+        observations = (
+            envelope.get("evidence", {}).get("observations", {})
+            if isinstance(envelope, Mapping)
+            and isinstance(envelope.get("evidence"), Mapping)
+            else {}
+        )
+        store = self._path_b_receipt_store(ctx)
+        for source_key, target_key, allowed in (
+            (
+                "path_b_section_receipts",
+                "sections",
+                frozenset((*orchestrator.MAIN_SECTIONS, *orchestrator.SEMI_SECTIONS)),
+            ),
+            (
+                "mandatory_capability_receipts",
+                "capabilities",
+                frozenset(
+                    (*orchestrator.CONTENT_FINALIZE_CAPABILITIES, "semiManaged")
+                ),
+            ),
+        ):
+            supplied = observations.get(source_key)
+            if not isinstance(supplied, Mapping):
+                continue
+            target = store[target_key]
+            for key, value in supplied.items():
+                if key in allowed and isinstance(value, Mapping):
+                    target[key] = dict(value)
+
+        if state_name not in {
+            StateName.SAVE_INTENT_MODAL,
+            StateName.FIRST_SAVE_INTENT,
+        }:
+            return
+        handshake = observations.get("save_intent_handshake")
+        handshake = dict(handshake) if isinstance(handshake, Mapping) else {}
+        save1_verified = (
+            bool(
+                state_name == StateName.FIRST_SAVE_INTENT
+                and handshake.get("save1_verified") is True
+                and handshake.get("exactly_one_save_request") is True
+            )
+            or any(
+                isinstance(item.get("action_result"), Mapping)
+                and item["action_result"].get("attempted_state")
+                == StateName.VERIFY_SAVE1_NOT_PUBLISHED.value
+                and item["action_result"].get("ok") is True
+                for item in prior_results
+            )
+        )
+        modal_input = {
+            "save_modal": {
+                "save1_verified": save1_verified,
+                "gate_outcome": handshake.get("gate_outcome"),
+                "semi_entry_triggered": handshake.get("semi_entry_triggered"),
+                "handshake_id": handshake.get("handshake_id"),
+                "same_handshake": handshake.get("same_handshake"),
+                "blocked": handshake.get("blocked") is True,
+                "blocked_reason": handshake.get("blocked_reason"),
+            }
+        }
+        receipt = orchestrator.execute_phase(
+            ctx,
+            EditPhase.PHASE_SAVE_MODAL,
+            modal_input,
+        )
+        if not receipt.is_success():
+            raise V1ExecutionError(
+                "E901",
+                "原生保存意图握手未闭环",
+                str(
+                    (receipt.execute_receipt or {}).get("error")
+                    or (receipt.execute_receipt or {}).get("blocked_reason")
+                    or "PATH_B_SAVE_INTENT_HANDSHAKE_NOT_PROVEN"
+                ),
+            )
+        orchestrator.exit_phase(ctx, EditPhase.PHASE_SAVE_MODAL)
+        orchestrator.enter_phase(ctx, EditPhase.PHASE_SEMI_EDIT)
+
+    @staticmethod
+    def _receipt_field_readbacks(value: Any) -> list[FieldReadback]:
+        if not isinstance(value, list):
+            raise ReceiptValidationError(
+                "CAPABILITY_READBACK_INVALID",
+                "field_readbacks must be a list",
+            )
+        return [
+            FieldReadback.from_dict(item)
+            for item in value
+            if isinstance(item, Mapping)
+        ]
+
+    def _persist_formal_path_b_save_stage_receipt(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+        prior_results: list[dict[str, Any]],
+        verification_result: dict[str, Any],
+        *,
+        verification_state: StateName,
+    ) -> None:
+        """Freeze and persist one formal SAVE stage at the first valid instant."""
+
+        contract = {
+            StateName.VERIFY_SAVE1_NOT_PUBLISHED: (StateName.SAVE_ONLY, "SAVE1"),
+            StateName.VERIFY_SAVE2_NOT_PUBLISHED: (StateName.SAVE2_ONLY, "SAVE2"),
+        }.get(verification_state)
+        if contract is None:
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Path B 阶段回执状态无效",
+                "SAVE_STAGE_VERIFICATION_STATE_INVALID: no further real write is allowed.",
+            )
+        save_state, save_stage = contract
+        save_matches = [
+            result
+            for result in prior_results
+            if isinstance(result.get("action_result"), Mapping)
+            and result["action_result"].get("attempted_state") == save_state.value
+        ]
+        if len(save_matches) != 1:
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Path B 阶段回执缺失",
+                f"{save_stage}_SAVE_RESULT_CARDINALITY_INVALID: no further real write is allowed.",
+            )
+        save_result = save_matches[0]
+        save_command = save_result.get("browser_agent_command")
+        verification_command = verification_result.get("browser_agent_command")
+        save_action_result = save_result.get("action_result")
+        verification_action_result = verification_result.get("action_result")
+        save_params = (
+            save_command.get("params")
+            if isinstance(save_command, Mapping)
+            and isinstance(save_command.get("params"), Mapping)
+            else None
+        )
+        save_defaults = (
+            save_params.get("defaults")
+            if isinstance(save_params, Mapping)
+            and isinstance(save_params.get("defaults"), Mapping)
+            else None
+        )
+        expected_execution_payload = (
+            save_defaults.get("_frozen_execution_payload")
+            if isinstance(save_defaults, Mapping)
+            and isinstance(save_defaults.get("_frozen_execution_payload"), Mapping)
+            else None
+        )
+        verification_params = (
+            verification_command.get("params")
+            if isinstance(verification_command, Mapping)
+            and isinstance(verification_command.get("params"), Mapping)
+            else None
+        )
+        expected_verification_context = (
+            verification_params.get("save_verification_context")
+            if isinstance(verification_params, Mapping)
+            and isinstance(
+                verification_params.get("save_verification_context"), Mapping
+            )
+            else None
+        )
+        mutation_scope_id = (
+            str(save_command.get("mutation_scope_id") or "")
+            if isinstance(save_command, Mapping)
+            else ""
+        )
+        ledger_entry = MutationDispatchLedger(
+            recover_inflight=False
+        ).get_entry(mutation_scope_id, "save_only_click")
+        try:
+            if not all(
+                isinstance(value, Mapping)
+                for value in (
+                    save_command,
+                    save_action_result,
+                    verification_command,
+                    verification_action_result,
+                    expected_execution_payload,
+                    expected_verification_context,
+                    ledger_entry,
+                )
+            ):
+                raise ReceiptValidationError(
+                    "SAVE_STAGE_SOURCE_INCOMPLETE",
+                    save_stage,
+                )
+            save_receipt = build_save_receipt_from_verified_pair(
+                save_command=save_command,
+                ledger_entry=ledger_entry,
+                save_action_result=save_action_result,
+                verification_action_result=verification_action_result,
+                expected_execution_payload=expected_execution_payload,
+                expected_verification_context=expected_verification_context,
+            )
+            raw_save_receipt = save_receipt.to_persisted_dict()
+            persisted = self.repo.persist_canonical_save_stage_receipt(
+                int(task["id"]),
+                int(job["id"]),
+                int(job["product_id"]) if job.get("product_id") is not None else None,
+                save_stage=save_stage,
+                save_receipt=raw_save_receipt,
+                verification_command=verification_command,
+                verification_action_result=verification_action_result,
+            )
+            if (
+                not isinstance(persisted, Mapping)
+                or persisted.get("receipt_kind") != "save_stage"
+                or persisted.get("save_stage") != save_stage
+                or persisted.get("save_receipt") != raw_save_receipt
+                or not isinstance(persisted.get("canonical_receipt_sha256"), str)
+                or len(str(persisted.get("canonical_receipt_sha256") or "")) != 64
+            ):
+                raise ReceiptValidationError(
+                    "SAVE_STAGE_PERSISTENCE_MISMATCH",
+                    save_stage,
+                )
+            verification_result["canonical_save_stage_receipt"] = dict(persisted)
+        except (ReceiptValidationError, KeyError, TypeError, ValueError) as exc:
+            reason_code = getattr(exc, "reason_code", "SAVE_STAGE_PERSISTENCE_FAILED")
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Path B 阶段回执未持久封存",
+                f"{reason_code}:{save_stage}: no further real write is allowed.",
+            ) from exc
+
+    def _build_path_b_canonical_receipt(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+        workflow_results: list[dict[str, Any]],
+        ctx: ProductEditContext,
+    ) -> CanonicalReceipt:
+        """Freeze one product receipt only from validated runtime/ledger facts."""
+
+        try:
+            task_id = int(task["id"])
+            job_id = int(job["id"])
+            product_id = int(job["product_id"])
+            payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+            real_authorization = (
+                payload.get("real_dxm_write_authorization")
+                if isinstance(payload.get("real_dxm_write_authorization"), Mapping)
+                else None
+            )
+            if not isinstance(real_authorization, Mapping):
+                raise ReceiptValidationError(
+                    "REAL_PATH_B_SCOPE_REQUIRED",
+                    "task has no consumed real-write authorization",
+                )
+            scope_record = self.repo.get_real_dxm_write_scope(
+                str(real_authorization.get("scope_sha256") or "")
+            )
+            scope = (
+                scope_record.get("scope")
+                if isinstance(scope_record, Mapping)
+                and isinstance(scope_record.get("scope"), Mapping)
+                else None
+            )
+            if not isinstance(scope, Mapping) or scope_record.get("status") != "consumed":
+                raise ReceiptValidationError(
+                    "REAL_PATH_B_SCOPE_NOT_CONSUMED",
+                    "persisted scope authority is unavailable",
+                )
+            product_scopes = [
+                item
+                for item in scope.get("orderedProducts", [])
+                if isinstance(item, Mapping) and item.get("productId") == product_id
+            ]
+            if len(product_scopes) != 1:
+                raise ReceiptValidationError(
+                    "REAL_PATH_B_PRODUCT_SCOPE_MISMATCH",
+                    "product is not uniquely bound by scope",
+                )
+
+            receipt = CanonicalReceipt(
+                task_id=task_id,
+                job_id=job_id,
+                product_id=product_id,
+                mode="batch_draft_save",
+                claim_mark=str(real_authorization.get("scope_sha256") or ""),
+            )
+            store = self._path_b_receipt_store(ctx)
+            capabilities = (
+                store.get("capabilities")
+                if isinstance(store.get("capabilities"), Mapping)
+                else {}
+            )
+            capability_phases = {
+                "wholesale": ReceiptPhase.CONTENT_FINALIZE_WHOLESALE,
+                "video": ReceiptPhase.CONTENT_FINALIZE_VIDEO,
+                "translation": ReceiptPhase.CONTENT_FINALIZE_TRANSLATION,
+                "semiManaged": ReceiptPhase.SEMI_MANAGED_ENTRY,
+                "rollbackPreparation": ReceiptPhase.ROLLBACK_PREPARATION,
+            }
+            for capability, phase in capability_phases.items():
+                wrapper = capabilities.get(capability)
+                raw = (
+                    wrapper.get("canonical_receipt")
+                    if isinstance(wrapper, Mapping)
+                    and isinstance(wrapper.get("canonical_receipt"), Mapping)
+                    else None
+                )
+                if not isinstance(raw, Mapping):
+                    raise ReceiptValidationError(
+                        "MANDATORY_CAPABILITY_RECEIPT_MISSING",
+                        capability,
+                    )
+                capability_receipt = ContentFinalizeReceipt(
+                    phase=phase,
+                    action_grant_id=raw.get("action_grant_id"),
+                    result_ok=raw.get("result_ok"),
+                    error_code=raw.get("error_code"),
+                    error_detail=raw.get("error_detail"),
+                    unresolved=raw.get("unresolved") is True,
+                    field_readbacks=self._receipt_field_readbacks(
+                        raw.get("field_readbacks")
+                    ),
+                    media_identity=raw.get("media_identity"),
+                    canonical_sha256=raw.get("canonical_sha256"),
+                    started_at=raw.get("started_at"),
+                    completed_at=raw.get("completed_at"),
+                )
+                capability_sha = capability_receipt.finalize()
+                if (
+                    str(wrapper.get("receipt_sha256") or "").casefold()
+                    != capability_sha.casefold()
+                ):
+                    raise ReceiptValidationError(
+                        "CAPABILITY_RECEIPT_BINDING_MISMATCH",
+                        capability,
+                    )
+                receipt.add_content_finalize_receipt(capability_receipt)
+                if capability == "rollbackPreparation":
+                    receipt.mark_rollback_prepared(
+                        str(raw.get("preimage_sha256") or "")
+                    )
+
+            ledger = MutationDispatchLedger(recover_inflight=False)
+            stage_pairs = (
+                (
+                    StateName.SAVE_ONLY,
+                    StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                    ReceiptPhase.PHASE_1_FIRST_SAVE,
+                    "SAVE1",
+                ),
+                (
+                    StateName.SAVE2_ONLY,
+                    StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+                    ReceiptPhase.PHASE_2_SECOND_SAVE,
+                    "SAVE2",
+                ),
+            )
+            for save_state, verify_state, phase, scope_stage in stage_pairs:
+                save_matches = [
+                    item
+                    for item in workflow_results
+                    if isinstance(item.get("action_result"), Mapping)
+                    and item["action_result"].get("attempted_state")
+                    == save_state.value
+                ]
+                verify_matches = [
+                    item
+                    for item in workflow_results
+                    if isinstance(item.get("action_result"), Mapping)
+                    and item["action_result"].get("attempted_state")
+                    == verify_state.value
+                ]
+                if len(save_matches) != 1 or len(verify_matches) != 1:
+                    raise ReceiptValidationError(
+                        "SAVE_RECEIPT_PHASE_RESULT_MISSING",
+                        scope_stage,
+                    )
+                save_result = save_matches[0]
+                verify_result = verify_matches[0]
+                command = save_result.get("browser_agent_command")
+                save_envelope = save_result["action_result"]
+                verify_envelope = verify_result["action_result"]
+                observations = save_envelope["evidence"]["observations"]
+                stage_wrapper = verify_result.get("canonical_save_stage_receipt")
+                raw_save_receipt = (
+                    stage_wrapper.get("save_receipt")
+                    if isinstance(stage_wrapper, Mapping)
+                    else None
+                )
+                stage_unsigned = (
+                    {
+                        key: value
+                        for key, value in stage_wrapper.items()
+                        if key
+                        not in {"schema_version", "canonical_receipt_sha256"}
+                    }
+                    if isinstance(stage_wrapper, Mapping)
+                    else None
+                )
+                stage_digest = (
+                    hashlib.sha256(
+                        json.dumps(
+                            stage_unsigned,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode("utf-8")
+                    ).hexdigest().upper()
+                    if isinstance(stage_unsigned, Mapping)
+                    else ""
+                )
+                if (
+                    not isinstance(command, Mapping)
+                    or not isinstance(raw_save_receipt, Mapping)
+                    or stage_wrapper.get("schema_version")
+                    != "dxm.path-b.canonical-save-stage-receipt.v1"
+                    or stage_wrapper.get("receipt_kind") != "save_stage"
+                    or stage_wrapper.get("task_id") != task_id
+                    or stage_wrapper.get("job_id") != job_id
+                    or stage_wrapper.get("product_id") != product_id
+                    or stage_wrapper.get("save_stage") != scope_stage
+                    or str(stage_wrapper.get("scope_sha256") or "").casefold()
+                    != str(real_authorization.get("scope_sha256") or "").casefold()
+                    or stage_digest.casefold()
+                    != str(
+                        stage_wrapper.get("canonical_receipt_sha256") or ""
+                    ).casefold()
+                ):
+                    raise ReceiptValidationError(
+                        "CANONICAL_SAVE_STAGE_RECEIPT_MISSING",
+                        scope_stage,
+                    )
+                save_receipt = SaveReceipt.from_dict(raw_save_receipt)
+                if save_receipt.save_phase != phase:
+                    raise ReceiptValidationError(
+                        "SAVE_RECEIPT_PHASE_MISMATCH",
+                        scope_stage,
+                    )
+                if (
+                    save_receipt.save_lease_id
+                    != command.get("authorization_lease_id")
+                    or save_receipt.action_grant_id != command.get("command_id")
+                    or str(save_receipt.target_hash).casefold()
+                    != str(command.get("target_hash") or "").casefold()
+                ):
+                    raise ReceiptValidationError(
+                        "SAVE_RECEIPT_COMMAND_BINDING_MISMATCH",
+                        scope_stage,
+                    )
+                mutation_authorization = observations.get("mutation_authorization")
+                if not isinstance(mutation_authorization, Mapping):
+                    raise ReceiptValidationError(
+                        "SAVE_MUTATION_AUTHORITY_MISSING",
+                        scope_stage,
+                    )
+                if save_receipt.mutation_id != mutation_authorization.get("mutation_id"):
+                    raise ReceiptValidationError(
+                        "SAVE_RECEIPT_MUTATION_BINDING_MISMATCH",
+                        scope_stage,
+                    )
+                ledger_row = ledger.get_entry(
+                    str(command.get("mutation_scope_id") or ""),
+                    "save_only_click",
+                )
+                if (
+                    not isinstance(ledger_row, Mapping)
+                    or ledger_row.get("status") != "DISPATCHED"
+                    or save_receipt.ledger_entry_id != ledger_row.get("id")
+                    or ledger_row.get("command_id") != command.get("command_id")
+                    or ledger_row.get("authorization_lease_id")
+                    != command.get("authorization_lease_id")
+                ):
+                    raise ReceiptValidationError(
+                        "SAVE_RECEIPT_LEDGER_BINDING_MISMATCH",
+                        scope_stage,
+                    )
+
+                network = observations.get("network_save_result")
+                if not isinstance(network, Mapping):
+                    raise ReceiptValidationError(
+                        "SAVE_NETWORK_RECEIPT_MISSING",
+                        scope_stage,
+                    )
+                request_proof = save_receipt.proofs.get(SaveProofKind.NETWORK_REQUEST)
+                response_proof = save_receipt.proofs.get(SaveProofKind.NETWORK_RESPONSE)
+                if (
+                    request_proof is None
+                    or response_proof is None
+                    or request_proof.network_url != network.get("url")
+                    or response_proof.network_url != network.get("url")
+                    or response_proof.network_status != network.get("status")
+                    or str(response_proof.business_code) != str(network.get("code"))
+                    or response_proof.business_success is not True
+                    or str(request_proof.body_sha256 or "").casefold()
+                    != str(network.get("request_body_sha256") or "").casefold()
+                    or str(response_proof.body_sha256 or "").casefold()
+                    != str(network.get("response_body_sha256") or "").casefold()
+                ):
+                    raise ReceiptValidationError(
+                        "SAVE_NETWORK_PROOF_BINDING_MISMATCH",
+                        scope_stage,
+                    )
+                save_refs = save_envelope["evidence"]["refs"]
+                verify_refs = verify_envelope["evidence"]["refs"]
+                page_proofs = [
+                    proof
+                    for kind, proof in save_receipt.proofs.items()
+                    if kind
+                    in {
+                        SaveProofKind.SCREENSHOT,
+                        SaveProofKind.PAGE_SUCCESS_SCREENSHOT,
+                    }
+                ]
+                unpublished_proof = save_receipt.proofs.get(
+                    SaveProofKind.UNPUBLISHED_STATUS
+                )
+                if (
+                    len(page_proofs) != 1
+                    or unpublished_proof is None
+                    or not any(
+                        ref.get("path") == page_proofs[0].file_path
+                        and str(ref.get("sha256") or "").casefold()
+                        == str(page_proofs[0].body_sha256 or "").casefold()
+                        for ref in save_refs
+                    )
+                    or not any(
+                        ref.get("path") == unpublished_proof.file_path
+                        and str(ref.get("sha256") or "").casefold()
+                        == str(unpublished_proof.body_sha256 or "").casefold()
+                        for ref in verify_refs
+                    )
+                ):
+                    raise ReceiptValidationError(
+                        "SAVE_SCREENSHOT_PROOF_BINDING_MISMATCH",
+                        scope_stage,
+                    )
+
+                governed_fields = [
+                    item
+                    for item in product_scopes[0].get("allowedFields", [])
+                    if isinstance(item, Mapping)
+                    and item.get("saveStage") == scope_stage
+                ]
+                readbacks = {item.field_key: item for item in save_receipt.field_readbacks}
+                if set(readbacks) != {item.get("field") for item in governed_fields}:
+                    raise ReceiptValidationError(
+                        "SAVE_SCOPE_READBACK_SET_MISMATCH",
+                        scope_stage,
+                    )
+                for governed in governed_fields:
+                    field_key = governed["field"]
+                    readback = readbacks[field_key]
+                    before_sha = hashlib.sha256(
+                        json.dumps(
+                            readback.before_value,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode("utf-8")
+                    ).hexdigest().upper()
+                    after_sha = hashlib.sha256(
+                        json.dumps(
+                            readback.after_value,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode("utf-8")
+                    ).hexdigest().upper()
+                    if (
+                        before_sha != governed.get("preimageSha256")
+                        or after_sha != governed.get("expectedSha256")
+                    ):
+                        raise ReceiptValidationError(
+                            "SAVE_SCOPE_READBACK_HASH_MISMATCH",
+                            f"{scope_stage}:{field_key}",
+                        )
+                receipt.add_save_receipt(save_receipt)
+
+            receipt.mark_succeeded()
+            receipt.completed_at = max(
+                str(item.completed_at) for item in receipt.save_receipts
+            )
+            receipt.finalize()
+            return receipt
+        except (ReceiptValidationError, KeyError, TypeError, ValueError) as exc:
+            reason_code = getattr(exc, "reason_code", "CANONICAL_RECEIPT_INVALID")
+            raise V1ExecutionError(
+                "UNKNOWN",
+                "Path B CanonicalReceipt 不完整",
+                f"{reason_code}: no further real write is allowed.",
+            ) from exc
+
     def _guard_step(
         self,
         task: dict[str, Any],
@@ -1526,7 +2862,11 @@ class V1TaskRunner:
                 self._guard_single_save_product_box_item(task, job, product)
             if mode == "batch_draft_save":
                 self._guard_batch_draft_save_plan(task, job)
-        if state_name == StateName.SAVE_ONLY:
+        if state_name in {
+            StateName.SAVE_ONLY,
+            StateName.FIRST_SAVE_INTENT,
+            StateName.SAVE2_ONLY,
+        }:
             result = self.publish_guard.check(intended_action="save", target_text="保存")
             if not result["allowed"]:
                 raise V1ExecutionError("E999", "保存动作被发布隔离器阻断", "; ".join(result["reasons"]))
@@ -1658,7 +2998,31 @@ class V1TaskRunner:
                 "任务路径与冻结方案不一致",
                 "batch_draft_save payload path must match the frozen snapshot path",
             )
-        if not is_plan_execution_path_released(snapshot_path):
+        discovery_profile = self._path_b_discovery_profile(task)
+        raw_formal_lineage = payload.get(PATH_B_FORMAL_LINEAGE_KEY)
+        try:
+            formal_lineage = (
+                validate_path_b_formal_lineage(raw_formal_lineage)
+                if raw_formal_lineage is not None
+                else None
+            )
+        except BatchCommandContractError as exc:
+            raise V1ExecutionError(
+                exc.reason_code,
+                "Formal Path B 谱系无效",
+                f"{exc.reason_code}: no browser action was dispatched",
+            ) from exc
+        if discovery_profile is not None and formal_lineage is not None:
+            raise V1ExecutionError(
+                "PATH_B_EXECUTION_PROFILE_CONFLICT",
+                "Path B 执行边界冲突",
+                "Discovery and Formal profiles cannot coexist",
+            )
+        if (
+            not is_plan_execution_path_released(snapshot_path)
+            and discovery_profile is None
+            and formal_lineage is None
+        ):
             raise V1ExecutionError(
                 PLAN_PATH_EXECUTION_NOT_RELEASED,
                 "Path B 真实执行尚未释放",
@@ -1676,6 +3040,80 @@ class V1TaskRunner:
                 "批量任务不存在",
                 "batch_draft_save task could not be reloaded before execution",
             )
+        if discovery_profile is not None:
+            try:
+                validate_path_b_save1_discovery_dispatch(
+                    current_task,
+                    job_id=job.get("id"),
+                    command_state=PATH_B_SAVE1_DISCOVERY_STATE,
+                    command_action=PATH_B_SAVE1_DISCOVERY_ACTION,
+                )
+            except BatchCommandContractError as exc:
+                raise V1ExecutionError(
+                    exc.reason_code,
+                    "Discovery 当前队列边界无效",
+                    f"{exc.reason_code}: no browser action was dispatched",
+                ) from exc
+        if formal_lineage is not None:
+            current_payload = (
+                current_task.get("payload")
+                if isinstance(current_task.get("payload"), Mapping)
+                else {}
+            )
+            current_plan = (
+                current_payload.get("plan_snapshot")
+                if isinstance(current_payload.get("plan_snapshot"), Mapping)
+                else {}
+            )
+            real_authorization = (
+                current_payload.get("real_dxm_write_authorization")
+                if isinstance(
+                    current_payload.get("real_dxm_write_authorization"), Mapping
+                )
+                else {}
+            )
+            scope_record = self.repo.get_real_dxm_write_scope(
+                formal_lineage["formal_scope_sha256"]
+            )
+            discovery_record = getattr(
+                self.repo,
+                "get_real_dxm_path_b_discovery_by_receipt_sha256",
+                lambda _value: None,
+            )(formal_lineage["discovery_receipt_sha256"])
+            if (
+                current_payload.get(PATH_B_FORMAL_LINEAGE_KEY) != formal_lineage
+                or int(current_task.get("id") or 0)
+                != formal_lineage["formal_task_id"]
+                or int(current_payload.get("plan_snapshot_id") or 0)
+                != formal_lineage["formal_snapshot_id"]
+                or str(current_payload.get("plan_snapshot_hash") or "").upper()
+                != formal_lineage["formal_snapshot_sha256"]
+                or str(current_plan.get("snapshot_hash") or "").upper()
+                != formal_lineage["formal_snapshot_sha256"]
+                or str(real_authorization.get("scope_sha256") or "").upper()
+                != formal_lineage["formal_scope_sha256"]
+                or not isinstance(scope_record, Mapping)
+                or scope_record.get("status") != "consumed"
+                or scope_record.get("purpose") != "formal"
+                or str(scope_record.get("lineage_sha256") or "").upper()
+                != formal_lineage["lineage_sha256"]
+                or str(
+                    scope_record.get("lineage_discovery_receipt_sha256") or ""
+                ).upper()
+                != formal_lineage["discovery_receipt_sha256"]
+                or str(
+                    scope_record.get("lineage_predecessor_scope_sha256") or ""
+                ).upper()
+                != formal_lineage["predecessor_scope_sha256"]
+                or not isinstance(discovery_record, Mapping)
+                or discovery_record.get("ok") is not True
+                or discovery_record.get("status") != "DISCOVERY_SEALED"
+            ):
+                raise V1ExecutionError(
+                    "FORMAL_LINEAGE_CURRENT_AUTHORITY_MISMATCH",
+                    "Formal Path B 当前谱系漂移",
+                    "sealed Discovery, consumed formal scope, task, or snapshot differs",
+                )
         try:
             plan = E2PlanService().assert_task_snapshot_binding(current_task)
         except PlanContractError as exc:
@@ -2003,10 +3441,70 @@ class V1TaskRunner:
                     "target_source_urls": target_source_urls,
                 },
             ),
+            StateName.SAVE_INTENT_MODAL: (
+                "open_semi_managed_page",
+                "E901",
+                "原生保存意图门未能进入半托管编辑页",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
+            StateName.FIRST_SAVE_INTENT: (
+                PATH_B_SAVE1_DISCOVERY_ACTION,
+                "UNKNOWN",
+                "Discovery SAVE1 与原生意图握手失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
+            StateName.SAVE2_ONLY: (
+                "save_only",
+                "E999",
+                "半托管二次只保存失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
             StateName.VERIFY_NOT_PUBLISHED: (
                 "verify_not_published",
                 "E999",
                 "未发布状态校验失败",
+                {
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.VERIFY_SAVE1_NOT_PUBLISHED: (
+                "verify_not_published",
+                "E999",
+                "SAVE1 未发布状态校验失败",
+                {
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED: (
+                "verify_not_published",
+                "UNKNOWN",
+                "Discovery SAVE1 未发布状态校验失败",
+                {
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.VERIFY_SAVE2_NOT_PUBLISHED: (
+                "verify_not_published",
+                "E999",
+                "SAVE2 未发布状态校验失败",
                 {
                     "product_query": product_query,
                     "store_name": store_name,
@@ -2050,7 +3548,11 @@ class V1TaskRunner:
         if spec is None:
             return None
         action_name, error_code, error_title, params = spec
-        if state_name == StateName.SAVE_ONLY:
+        if state_name in {
+            StateName.SAVE_ONLY,
+            StateName.FIRST_SAVE_INTENT,
+            StateName.SAVE2_ONLY,
+        }:
             self._assert_manual_approval_before_save(task)
 
         runtime_id = self._browser_agent_runtime_id()
@@ -2117,7 +3619,11 @@ class V1TaskRunner:
         if spec is None:
             return None
         action_name, error_code, error_title, params = spec
-        if state_name == StateName.SAVE_ONLY:
+        if state_name in {
+            StateName.SAVE_ONLY,
+            StateName.FIRST_SAVE_INTENT,
+            StateName.SAVE2_ONLY,
+        }:
             self._assert_manual_approval_before_save(task)
 
         command = command or self._build_browser_agent_command(
@@ -2141,7 +3647,12 @@ class V1TaskRunner:
             self.workflow_runtime_unhealthy_reason = detail
             uncertain_save = (
                 str(task.get("mode") or "") == "batch_draft_save"
-                and state_name == StateName.SAVE_ONLY
+                and state_name
+                in {
+                    StateName.SAVE_ONLY,
+                    StateName.FIRST_SAVE_INTENT,
+                    StateName.SAVE2_ONLY,
+                }
             )
             raise V1ExecutionError(
                 "UNKNOWN" if uncertain_save else "E901",
@@ -2154,7 +3665,12 @@ class V1TaskRunner:
             self.workflow_runtime_unhealthy_reason = detail
             uncertain_save = (
                 str(task.get("mode") or "") == "batch_draft_save"
-                and state_name == StateName.SAVE_ONLY
+                and state_name
+                in {
+                    StateName.SAVE_ONLY,
+                    StateName.FIRST_SAVE_INTENT,
+                    StateName.SAVE2_ONLY,
+                }
             )
             raise V1ExecutionError(
                 "UNKNOWN" if uncertain_save else error_code,
@@ -2199,7 +3715,13 @@ class V1TaskRunner:
         execution_payload_hash: str | None = None
         batch_verify = (
             str(task.get("mode") or "").strip() == "batch_draft_save"
-            and state_name == StateName.VERIFY_NOT_PUBLISHED
+            and state_name
+            in {
+                StateName.VERIFY_NOT_PUBLISHED,
+                StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+                StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+            }
             and action_name == "verify_not_published"
         )
         if batch_verify:
@@ -2215,6 +3737,23 @@ class V1TaskRunner:
                 and isinstance(preceding_save_result.get("action_result"), Mapping)
                 else None
             )
+            if state_name == StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED:
+                if (
+                    not isinstance(save_command, Mapping)
+                    or save_command.get("state")
+                    != StateName.FIRST_SAVE_INTENT.value
+                    or save_command.get("action")
+                    != PATH_B_SAVE1_DISCOVERY_ACTION
+                ):
+                    raise V1ExecutionError(
+                        "UNKNOWN",
+                        "Discovery 未发布复核缺少唯一前驱",
+                        "DISCOVERY_SAVE_PREDECESSOR_MISMATCH: VERIFY was not dispatched.",
+                    )
+                command_params["save_predecessor"] = {
+                    "state": StateName.FIRST_SAVE_INTENT.value,
+                    "action": PATH_B_SAVE1_DISCOVERY_ACTION,
+                }
             try:
                 command_params["save_verification_context"] = (
                     build_save_verification_context(
@@ -2232,8 +3771,18 @@ class V1TaskRunner:
                 ) from exc
         if (
             str(task.get("mode") or "").strip() == "batch_draft_save"
-            and state_name == StateName.SAVE_ONLY
-            and action_name == "save_only"
+            and state_name
+            in {
+                StateName.SAVE_ONLY,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+            }
+            and action_name
+            == (
+                PATH_B_SAVE1_DISCOVERY_ACTION
+                if state_name == StateName.FIRST_SAVE_INTENT
+                else "save_only"
+            )
         ):
             current_task = self.repo.get_task_private(int(task.get("id")))
             if not isinstance(current_task, Mapping):
@@ -2288,7 +3837,7 @@ class V1TaskRunner:
             "deadline": (
                 datetime.now(timezone.utc) + timedelta(seconds=self.workflow_action_timeout_seconds)
             ).isoformat(),
-            "expected_page": self._expected_page_for_state(
+            "expected_page": self._command_expected_page_for_state(
                 state_name,
                 mode=str(task.get("mode") or ""),
             ),
@@ -2302,6 +3851,13 @@ class V1TaskRunner:
             "params": command_params,
             **mutation_scope,
         }
+        if state_name == StateName.FIRST_SAVE_INTENT:
+            request.update(
+                {
+                    "pre_dispatch_page": "editor",
+                    "post_dispatch_page": "semi_managed",
+                }
+            )
         command = browser_agent_command_from_worker_request(
             request,
             step_label=self._workflow_step_label(state_name),
@@ -2328,10 +3884,29 @@ class V1TaskRunner:
         mode = str(task.get("mode") or "").strip()
         batch_draft_mutation = (
             mode == "batch_draft_save"
-            and state_name == StateName.SAVE_ONLY
-            and action_name == "save_only"
+            and state_name
+            in {
+                StateName.SAVE_ONLY,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+            }
+            and action_name
+            == (
+                PATH_B_SAVE1_DISCOVERY_ACTION
+                if state_name == StateName.FIRST_SAVE_INTENT
+                else "save_only"
+            )
         )
-        if (state_name, action_name) != (StateName.SAVE_ONLY, "save_only"):
+        expected_mutation_action = (
+            PATH_B_SAVE1_DISCOVERY_ACTION
+            if state_name == StateName.FIRST_SAVE_INTENT
+            else "save_only"
+        )
+        if action_name != expected_mutation_action or state_name not in {
+            StateName.SAVE_ONLY,
+            StateName.FIRST_SAVE_INTENT,
+            StateName.SAVE2_ONLY,
+        }:
             return {}
         if not batch_draft_mutation and not self._requires_persistent_browser_agent():
             # Synthetic adapters used for contract and timeout tests do not
@@ -2368,13 +3943,13 @@ class V1TaskRunner:
                 "真实浏览器变更范围无效",
                 "mutation authorization lease is missing; no mutation was dispatched.",
             )
-        lease_id = str(approval.get("lease_id") or "").strip()
+        parent_lease_id = str(approval.get("lease_id") or "").strip()
         if (
             approval.get("approved") is not True
             or approval.get("source") != "server"
             or approval.get("consumed") is not True
             or not str(approval.get("consumed_at") or "").strip()
-            or not lease_id
+            or not parent_lease_id
         ):
             raise V1ExecutionError(
                 "E999",
@@ -2415,6 +3990,8 @@ class V1TaskRunner:
                 f"{reason_code}: mutation authorization contract is invalid; no mutation was dispatched.",
             )
         batch_job_product_id = None
+        lease_id = parent_lease_id
+        lease_authority: Mapping[str, Any] = approval
         if batch_draft_mutation:
             try:
                 batch_job_product_id = int(job.get("product_id"))
@@ -2437,6 +4014,58 @@ class V1TaskRunner:
                     "真实浏览器变更范围无效",
                     "batch authorization facts do not bind this task, store, and product; no mutation was dispatched.",
                 )
+            if stage_task_facts.get("path") == "B":
+                real_authorization = (
+                    payload.get("real_dxm_write_authorization")
+                    if isinstance(payload.get("real_dxm_write_authorization"), Mapping)
+                    else None
+                )
+                save_stage = (
+                    "SAVE1"
+                    if state_name
+                    in {StateName.SAVE_ONLY, StateName.FIRST_SAVE_INTENT}
+                    else "SAVE2"
+                )
+                leases = (
+                    real_authorization.get("save_leases")
+                    if isinstance(real_authorization, Mapping)
+                    and isinstance(real_authorization.get("save_leases"), list)
+                    else []
+                )
+                matching_leases = [
+                    item
+                    for item in leases
+                    if isinstance(item, Mapping)
+                    and item.get("product_id") == batch_job_product_id
+                    and item.get("save_stage") == save_stage
+                ]
+                if len(matching_leases) != 1:
+                    raise V1ExecutionError(
+                        "E999",
+                        "真实浏览器变更范围无效",
+                        "REAL_PATH_B_SAVE_LEASE_MISSING: no mutation was dispatched.",
+                    )
+                child_lease = dict(matching_leases[0])
+                if (
+                    child_lease.get("single_use") is not True
+                    or child_lease.get("scope_sha256")
+                    != real_authorization.get("scope_sha256")
+                    or child_lease.get("expires_at")
+                    != real_authorization.get("approval_expires_at")
+                ):
+                    raise V1ExecutionError(
+                        "E999",
+                        "真实浏览器变更范围无效",
+                        "REAL_PATH_B_SAVE_LEASE_BINDING_MISMATCH: no mutation was dispatched.",
+                    )
+                lease_id = str(child_lease.get("lease_id") or "").strip()
+                if len(lease_id) != 64:
+                    raise V1ExecutionError(
+                        "E999",
+                        "真实浏览器变更范围无效",
+                        "REAL_PATH_B_SAVE_LEASE_INVALID: no mutation was dispatched.",
+                    )
+                lease_authority = child_lease
         elif (
             isinstance(stage_task_facts.get("task_id"), bool)
             or isinstance(stage_task_facts.get("job_id"), bool)
@@ -2456,11 +4085,22 @@ class V1TaskRunner:
                 if batch_draft_mutation
                 else save_authorization_context_fingerprint(authorization_context)
             )
-            lease_authority_digest = (
-                authorization_lease_authority_fingerprint(approval)
-                if batch_draft_mutation
-                else None
-            )
+            lease_authority_digest = None
+            if batch_draft_mutation:
+                if stage_task_facts.get("path") == "B":
+                    lease_authority_digest = hashlib.sha256(
+                        json.dumps(
+                            dict(lease_authority),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode("utf-8")
+                    ).hexdigest().upper()
+                else:
+                    lease_authority_digest = (
+                        authorization_lease_authority_fingerprint(approval)
+                    )
             stage_digest = str(stage_task_facts.get("fingerprint") or "")
             scope_id = build_mutation_scope_id(
                 authorization_lease_id=lease_id,
@@ -2505,11 +4145,21 @@ class V1TaskRunner:
         return dict(result) if isinstance(result, Mapping) else None
 
     def _expected_page_for_state(self, state_name: StateName, *, mode: str = "") -> str:
-        if mode == "batch_draft_save" and state_name in {
-            StateName.SAVE_ONLY,
-            StateName.VERIFY_NOT_PUBLISHED,
-        }:
-            return "editor"
+        if mode == "batch_draft_save":
+            if state_name in {
+                StateName.SAVE_ONLY,
+                StateName.VERIFY_NOT_PUBLISHED,
+                StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+            }:
+                return "editor"
+            if state_name in {
+                StateName.SAVE_INTENT_MODAL,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+                StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+                StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+            }:
+                return "semi_managed"
         expected_page = WORKFLOW_EXPECTED_PAGE_BY_STATE.get(state_name)
         if not expected_page:
             raise V1ExecutionError(
@@ -2518,6 +4168,22 @@ class V1TaskRunner:
                 f"步骤 {state_name.value} 没有受控 expected_page 映射；系统已停止任务，不会保存或发布。",
             )
         return expected_page
+
+    def _command_expected_page_for_state(
+        self,
+        state_name: StateName,
+        *,
+        mode: str = "",
+    ) -> str:
+        # FIRST_SAVE_INTENT is the single explicit pre/post identity crossing:
+        # authority samples the editor before dispatch, while its canonical
+        # action result must attest the semi-managed page after the handshake.
+        if (
+            mode == "batch_draft_save"
+            and state_name == StateName.FIRST_SAVE_INTENT
+        ):
+            return "editor"
+        return self._expected_page_for_state(state_name, mode=mode)
 
     def _browser_agent_runtime_id(self) -> str:
         runtime = self.browser_agent_runtime
@@ -2547,7 +4213,12 @@ class V1TaskRunner:
     ) -> dict[str, Any]:
         uncertain_save = (
             str(request.get("mode") or "") == "batch_draft_save"
-            and state_name == StateName.SAVE_ONLY
+            and state_name
+            in {
+                StateName.SAVE_ONLY,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+            }
         )
         boundary_error_code = "UNKNOWN" if uncertain_save else error_code
         boundary_error_title = "保存结果不确定" if uncertain_save else error_title
@@ -2689,16 +4360,27 @@ class V1TaskRunner:
                 f"{action_name} result must be a mapping with ok=true",
             )
         result_dict = dict(result)
-        path_a_result = (
+        batch_save_result = (
             mode == "batch_draft_save"
-            and state_name in {StateName.SAVE_ONLY, StateName.VERIFY_NOT_PUBLISHED}
+            and state_name
+            in {
+                StateName.SAVE_ONLY,
+                StateName.SAVE2_ONLY,
+                StateName.VERIFY_NOT_PUBLISHED,
+                StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+                StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+            }
         )
         success_evidence_error_code = (
-            "UNKNOWN" if path_a_result and result_dict.get("ok") is True else error_code
+            "UNKNOWN"
+            if batch_save_result and result_dict.get("ok") is True
+            else error_code
         )
         success_evidence_error_title = (
             "保存结果证据冲突"
-            if path_a_result and result_dict.get("ok") is True
+            if batch_save_result and result_dict.get("ok") is True
             else error_title
         )
         if result_dict.get("schema_version") != ACTION_RESULT_SCHEMA_VERSION:
@@ -2731,7 +4413,11 @@ class V1TaskRunner:
                 f"{exc.reason_code}: {exc}",
             ) from exc
 
-        if mode == "batch_draft_save" and state_name == StateName.SAVE_ONLY:
+        if mode == "batch_draft_save" and state_name in {
+            StateName.SAVE_ONLY,
+            StateName.FIRST_SAVE_INTENT,
+            StateName.SAVE2_ONLY,
+        }:
             observations = envelope.get("evidence", {}).get("observations", {})
             save_result = (
                 observations.get("save_result")
@@ -2846,7 +4532,12 @@ class V1TaskRunner:
     ) -> Mapping[str, Any] | None:
         if (
             str(task.get("mode") or "").strip() != "batch_draft_save"
-            or state_name != StateName.SAVE_ONLY
+            or state_name
+            not in {
+                StateName.SAVE_ONLY,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+            }
             or not isinstance(defaults, Mapping)
         ):
             return None
@@ -2861,7 +4552,12 @@ class V1TaskRunner:
     ) -> str | None:
         if (
             str(task.get("mode") or "").strip() != "batch_draft_save"
-            or state_name != StateName.SAVE_ONLY
+            or state_name
+            not in {
+                StateName.SAVE_ONLY,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+            }
             or not isinstance(defaults, Mapping)
         ):
             return None
@@ -2964,14 +4660,24 @@ class V1TaskRunner:
         verification_result: Mapping[str, Any],
         *,
         mode: str = "",
+        verification_state: StateName = StateName.VERIFY_NOT_PUBLISHED,
     ) -> None:
         evidence_error_code = "UNKNOWN" if mode == "batch_draft_save" else "E999"
+        expected_save_state = (
+            StateName.SAVE2_ONLY
+            if verification_state == StateName.VERIFY_SAVE2_NOT_PUBLISHED
+            else StateName.FIRST_SAVE_INTENT
+            if verification_state
+            == StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED
+            else StateName.SAVE_ONLY
+        )
         save_result = next(
             (
                 result
                 for result in reversed(prior_results)
                 if isinstance(result.get("action_result"), Mapping)
-                and result["action_result"].get("attempted_state") == StateName.SAVE_ONLY.value
+                and result["action_result"].get("attempted_state")
+                == expected_save_state.value
             ),
             None,
         )
@@ -2987,7 +4693,7 @@ class V1TaskRunner:
             raise V1ExecutionError(
                 evidence_error_code,
                 "保存与未发布证据链不完整",
-                "SAVE_ONLY and VERIFY_NOT_PUBLISHED require canonical action results",
+                f"{expected_save_state.value} and {verification_state.value} require canonical action results",
             )
         save_command = (
             save_result.get("browser_agent_command")
@@ -3030,9 +4736,10 @@ class V1TaskRunner:
                 save_envelope,
                 verification_envelope,
                 expected_page=(
-                    "editor"
-                    if mode == "batch_draft_save"
-                    else "semi_managed"
+                    self._expected_page_for_state(
+                        expected_save_state,
+                        mode=mode,
+                    )
                 ),
                 execution_mode=pair_execution_mode,
                 expected_execution_payload=(
@@ -3048,6 +4755,8 @@ class V1TaskRunner:
                 expected_save_command=(
                     save_command if isinstance(save_command, Mapping) else None
                 ),
+                expected_save_state=expected_save_state.value,
+                expected_verification_state=verification_state.value,
             )
         except ActionResultContractError as exc:
             raise V1ExecutionError(
@@ -3063,15 +4772,41 @@ class V1TaskRunner:
         mode: str = "",
     ) -> None:
         evidence_error_code = "UNKNOWN" if mode == "batch_draft_save" else "E999"
-        required_actions = {
-            "save_only": "只保存证据终态复核失败",
-            "verify_not_published": "未发布证据终态复核失败",
-        }
-        for action_name, error_title in required_actions.items():
+        if mode == "batch_draft_save" and any(
+            result.get("stage") == StateName.SAVE2_ONLY.value
+            for result in workflow_results
+        ):
+            required_actions = (
+                ("save_only", StateName.SAVE_ONLY.value, "SAVE1 证据终态复核失败"),
+                (
+                    "verify_not_published",
+                    StateName.VERIFY_SAVE1_NOT_PUBLISHED.value,
+                    "SAVE1 未发布证据终态复核失败",
+                ),
+                ("save_only", StateName.SAVE2_ONLY.value, "SAVE2 证据终态复核失败"),
+                (
+                    "verify_not_published",
+                    StateName.VERIFY_SAVE2_NOT_PUBLISHED.value,
+                    "SAVE2 未发布证据终态复核失败",
+                ),
+            )
+        else:
+            required_actions = (
+                ("save_only", StateName.SAVE_ONLY.value, "只保存证据终态复核失败"),
+                (
+                    "verify_not_published",
+                    StateName.VERIFY_NOT_PUBLISHED.value,
+                    "未发布证据终态复核失败",
+                ),
+            )
+        for action_name, attempted_state, error_title in required_actions:
             matches = [
                 result
                 for result in workflow_results
                 if result.get("action") == action_name
+                and isinstance(result.get("action_result"), Mapping)
+                and result["action_result"].get("attempted_state")
+                == attempted_state
             ]
             if len(matches) != 1:
                 raise V1ExecutionError(
@@ -3234,10 +4969,73 @@ class V1TaskRunner:
                     target_identity=target_identity,
                 ),
             ),
+            StateName.FIRST_SAVE_INTENT: (
+                PATH_B_SAVE1_DISCOVERY_ACTION,
+                "UNKNOWN",
+                "Discovery SAVE1 与原生意图握手失败",
+                lambda: self.workflow_adapter.first_save_intent(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                    target_identity=target_identity,
+                ),
+            ),
+            StateName.SAVE_INTENT_MODAL: (
+                "open_semi_managed_page",
+                "E901",
+                "原生保存意图门未能进入半托管编辑页",
+                lambda: self.workflow_adapter.open_semi_managed_page(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                    target_identity=target_identity,
+                ),
+            ),
+            StateName.SAVE2_ONLY: (
+                "save_only",
+                "E999",
+                "半托管二次只保存失败",
+                lambda: self.workflow_adapter.save_only(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                    target_identity=target_identity,
+                ),
+            ),
             StateName.VERIFY_NOT_PUBLISHED: (
                 "verify_not_published",
                 "E999",
                 "未发布状态校验失败",
+                lambda: self.workflow_adapter.verify_not_published(
+                    product_query=product_query,
+                    store_name=store_name,
+                    target_identity=target_identity,
+                ),
+            ),
+            StateName.VERIFY_SAVE1_NOT_PUBLISHED: (
+                "verify_not_published",
+                "E999",
+                "SAVE1 未发布状态校验失败",
+                lambda: self.workflow_adapter.verify_not_published(
+                    product_query=product_query,
+                    store_name=store_name,
+                    target_identity=target_identity,
+                ),
+            ),
+            StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED: (
+                "verify_not_published",
+                "UNKNOWN",
+                "Discovery SAVE1 未发布状态校验失败",
+                lambda: self.workflow_adapter.verify_not_published(
+                    product_query=product_query,
+                    store_name=store_name,
+                    target_identity=target_identity,
+                ),
+            ),
+            StateName.VERIFY_SAVE2_NOT_PUBLISHED: (
+                "verify_not_published",
+                "E999",
+                "SAVE2 未发布状态校验失败",
                 lambda: self.workflow_adapter.verify_not_published(
                     product_query=product_query,
                     store_name=store_name,
@@ -3257,7 +5055,11 @@ class V1TaskRunner:
                 error_title,
                 f"{action_name} adapter method unavailable",
             )
-        if state_name == StateName.SAVE_ONLY:
+        if state_name in {
+            StateName.SAVE_ONLY,
+            StateName.FIRST_SAVE_INTENT,
+            StateName.SAVE2_ONLY,
+        }:
             self._assert_manual_approval_before_save(task)
         command_context = {
             "task_id": task.get("id"),
@@ -3284,7 +5086,11 @@ class V1TaskRunner:
         try:
             result = call()
         except Exception as exc:
-            uncertain_save = mode == "batch_draft_save" and state_name == StateName.SAVE_ONLY
+            uncertain_save = mode == "batch_draft_save" and state_name in {
+                StateName.SAVE_ONLY,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+            }
             raise V1ExecutionError(
                 "UNKNOWN" if uncertain_save else error_code,
                 "保存结果不确定" if uncertain_save else error_title,
@@ -3328,7 +5134,11 @@ class V1TaskRunner:
                 "reason_code": "MUTATION_OPERATION_INVALID",
             }
         mode = str(task.get("mode") or "")
-        if state_name != StateName.SAVE_ONLY:
+        if state_name not in {
+            StateName.SAVE_ONLY,
+            StateName.FIRST_SAVE_INTENT,
+            StateName.SAVE2_ONLY,
+        }:
             operation_result = operation()
             return {
                 "ok": True,
@@ -3492,20 +5302,38 @@ class V1TaskRunner:
             if command_spec is None:
                 return None
             action_name, _error_code, _error_title, params = command_spec
-            if state_name == StateName.SAVE_ONLY:
+            if state_name in {
+                StateName.SAVE_ONLY,
+                StateName.FIRST_SAVE_INTENT,
+                StateName.SAVE2_ONLY,
+            }:
                 self._assert_manual_approval_before_save(task)
             preceding_save_result = None
             if (
                 str(task.get("mode") or "") == "batch_draft_save"
-                and state_name == StateName.VERIFY_NOT_PUBLISHED
+                and state_name
+                in {
+                    StateName.VERIFY_NOT_PUBLISHED,
+                    StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                    StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+                    StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+                }
             ):
+                expected_save_state = (
+                    StateName.SAVE2_ONLY
+                    if state_name == StateName.VERIFY_SAVE2_NOT_PUBLISHED
+                    else StateName.FIRST_SAVE_INTENT
+                    if state_name
+                    == StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED
+                    else StateName.SAVE_ONLY
+                )
                 preceding_save_result = next(
                     (
                         result
                         for result in reversed(prior_results or [])
                         if isinstance(result.get("action_result"), Mapping)
                         and result["action_result"].get("attempted_state")
-                        == StateName.SAVE_ONLY.value
+                        == expected_save_state.value
                         and isinstance(result.get("browser_agent_command"), Mapping)
                     ),
                     None,
@@ -3597,13 +5425,23 @@ class V1TaskRunner:
                 (
                     "UNKNOWN"
                     if str(task.get("mode") or "") == "batch_draft_save"
-                    and state_name == StateName.SAVE_ONLY
+                    and state_name
+                    in {
+                        StateName.SAVE_ONLY,
+                        StateName.FIRST_SAVE_INTENT,
+                        StateName.SAVE2_ONLY,
+                    }
                     else "E901"
                 ),
                 (
                     "保存结果不确定"
                     if str(task.get("mode") or "") == "batch_draft_save"
-                    and state_name == StateName.SAVE_ONLY
+                    and state_name
+                    in {
+                        StateName.SAVE_ONLY,
+                        StateName.FIRST_SAVE_INTENT,
+                        StateName.SAVE2_ONLY,
+                    }
                     else "真实浏览器操作超时"
                 ),
                 detail,

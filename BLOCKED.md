@@ -4,6 +4,26 @@
 
 用户已裁决产品范围和类目迁移权限，当前没有待问的产品选择；以下均是实现、证据或交付门禁。任何一项存在时均不得宣称 `MVP_READY / PROD_READY`。
 
+## 2026-08-31 real Path B system-flow 当前裁定
+
+**结论：`INTERNAL NON_READY / BLOCKED`。公开系统流、Discovery 原子边界、Discovery→Formal fresh lineage、逐 SAVE 权威账本与验收重建已在源码层收紧；但生产 Path B 的五项 capability 与 14 个 section producer/executor 尚未全部有可复核的真实 UI 事实。当前也没有可用的当次真实 scope/持久会话，且实现工作树不 clean，因此没有运行 Shadow、Discovery、Formal，没有打开真实商品编辑页；真实 mutation / publish / auto retry 均为 0。**
+
+当前阻断证据：
+
+- `DXM_REAL_SAVE_SCOPE_FILE` 未配置且没有可用的当次真实 scope；当前实现工作树也不 clean。scope 必须绑定 clean HEAD/worktree、Git 外 `DXM_DATA_DIR`、有效持久 browser session、fresh Reader/account/L2 与当次批准，不能用旧 clean HEAD、旧 scope 或历史会话冒充。
+- 公开 FastAPI 已具备 hash-only Prepare、同 task 单 active scope、原子 consume-and-start、Shadow、一次性 Discovery、按 key 恢复、fresh Formal 与 acceptance export。冻结 snapshot 现按同源 `real_write_stage_fields.SAVE1/SAVE2` 精确分区全部字段，并冻结两阶段 preimage/expected；调用方自报、漏字段、多字段或漂移仍会在任何 CAS/写入前拒绝。
+- Discovery 现只为首商品创建一个复合 `FIRST_SAVE_INTENT` command/lease/ledger/native-handshake，执行一次 SAVE1，独立 VERIFY 未发布后在同一事务封存 receipt、停止 task 并令 scope 进入 `discovery_sealed`；任何派发后不确定性进入 `UNKNOWN`，不得重试、不得进入 SAVE2 或下一商品。
+- Formal 必须在 sealed Discovery 之后重新完成 fresh Reader → preview/freeze → 新 snapshot/task → 新 formal scope → 新 Approval，并绑定 predecessor scope 与 `discoveryReceiptSha256`。仓储层在任何 CAS 前复验新 ID/hash、同 account/shop/三商品顺序、时间顺序，以及 Discovery after 值与 Formal 首商品 SAVE1 preimage 精确一致。
+- 生产 adapter/Runner 已具备 capability/section receipt 的严格校验与增量消费链，FIRST_SAVE_INTENT/SAVE 的 network、页面成功态、逐字段读回、截图和独立未发布证据也有 fail-closed 合同；每次 Formal SAVE 只有在独立 VERIFY 后才允许持久化 stage CanonicalReceipt。Formal 精确要求 3 个商品 × SAVE1/SAVE2 = 6 份独立 command/lease/receipt、6 次物理 mutation、30 个唯一 leaf proof；Discovery 固定为 5 个 leaf proof，且必须与 Formal 完全分账、不得复用。
+- 仍未闭合的生产事实不能由合同或文案存在替代：`video`、`translation`、`wholesale` 没有真实动作与 post-readback；`semiManaged` 没有首写前只读 capability probe；`rollbackPreparation` 的真实 preimage 读取时序晚于首写前 capability guard。`dxm_info`、`regional_pricing`、`other_info`、`semi_countries` 等 section 也缺精确 field-to-section 或复杂控件 post-readback；正式 frozen payload 仍会绕开部分 action-specific proof envelope。当前 capability provider 因此对五项逐项返回稳定的 `PRODUCTION_*_NOT_BOUND`，在任何真实写前停止。
+- 现有 UI 流程还有多处历史矩形中心/原生坐标点击。真实 SAVE 已收紧为派发前/授权内/实际点击前三次核对唯一精确语义 Playwright 控件并只走 `locator.click()`，网络监听也不再依赖矩形；弹窗 Escape、矩形中心和 DOM remove/hide fallback 已从可达路径禁用。但其余 Path B 所经动作没有足够现场 DOM 事实可安全批量替换；禁止用猜测 selector 或坐标 fallback 补齐，这些事实未完成 discovery 前正式 Path B 必须保持不可达。
+- acceptance export 与报告生成器按完整 campaign 复验 1 次 Discovery + 6 次 Formal、fresh authority、跨阶段 command/lease/proof 不复用、时间顺序、零发布/UNKNOWN/自动重试。任何缺证仍 fail-closed，不能靠旧 aggregate receipt、mock、HTML、手工截图或 hash 投影补齐。
+- 全局 `RELEASED_PLAN_EXECUTION_PATHS = frozenset({"A"})` 保持不变；本轮实现只是受一次性真实 scope 驱动的窄系统验收通道，不把 Path B 解锁为普通生产运行能力。
+
+唯一聚焦测试仍只有已封存的 `22 passed in 3.81s`，exit 0、skipped 0；继续阶段没有重跑 pytest。它只证明被测合同，不证明当前真实店铺、真实页面、持久会话或 1+6 次业务验收已经发生。
+
+**唯一下一步：先在不写入的 headed Playwright Reader/discovery 中，逐项取得并审阅上述五项 capability、缺失 section、复杂控件及非坐标语义控件的真实 DOM/readback 事实；据此补齐 producer/executor 并完成代码审阅。之后才可把白名单变更固定为 clean HEAD，在 Git 工作树外准备 data dir、有效持久会话和 fresh Reader/account/L2，由操作员签发当次 scope/ApprovalFile，严格按 Prepare → Shadow → Discovery → fresh Prepare → Formal 各自的一次性额度运行。任一证据缺失或 UNKNOWN 立即停止，不得自动重试。**
+
 ## P1 · 完整商品主链尚未接入生产
 
 ### B-01 · 五项 ALWAYS_ON 未贯穿同一执行链

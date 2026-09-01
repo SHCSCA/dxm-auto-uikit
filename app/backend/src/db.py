@@ -164,6 +164,10 @@ def init_db() -> None:
                 task_id INTEGER NOT NULL,
                 job_id INTEGER NOT NULL,
                 product_id INTEGER,
+                receipt_kind TEXT NOT NULL DEFAULT 'product_aggregate',
+                save_stage TEXT,
+                parent_canonical_receipt_sha256 TEXT,
+                scope_sha256 TEXT,
                 mode TEXT NOT NULL,
                 claim_mark TEXT NOT NULL,
                 canonical_receipt_sha256 TEXT NOT NULL UNIQUE,
@@ -173,7 +177,100 @@ def init_db() -> None:
                 error_code TEXT,
                 error_detail TEXT,
                 needs_manual_review INTEGER NOT NULL DEFAULT 0,
+                verification_command_sha256 TEXT,
+                verification_action_result_sha256 TEXT,
+                verification_command_json TEXT,
+                verification_action_result_json TEXT,
                 receipt_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS real_dxm_write_scopes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_sha256 TEXT NOT NULL UNIQUE,
+                task_id INTEGER NOT NULL,
+                snapshot_id INTEGER NOT NULL,
+                snapshot_sha256 TEXT NOT NULL,
+                account_ref_hash TEXT NOT NULL,
+                shop_id TEXT NOT NULL,
+                product_order_sha256 TEXT NOT NULL,
+                scope_nonce_sha256 TEXT NOT NULL UNIQUE,
+                scope_json TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'prepared',
+                approval_sha256 TEXT,
+                approval_nonce_sha256 TEXT UNIQUE,
+                approval_stage TEXT,
+                approval_consumed_at TEXT,
+                purpose TEXT NOT NULL DEFAULT 'general',
+                lineage_sha256 TEXT,
+                lineage_discovery_receipt_sha256 TEXT,
+                lineage_predecessor_scope_sha256 TEXT,
+                prepared_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_real_dxm_write_scopes_task
+                ON real_dxm_write_scopes (task_id, status);
+
+            CREATE TABLE IF NOT EXISTS real_dxm_path_b_discovery_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL UNIQUE,
+                scope_sha256 TEXT NOT NULL UNIQUE,
+                discovery_key_sha256 TEXT NOT NULL UNIQUE,
+                attempt_identity_sha256 TEXT NOT NULL UNIQUE,
+                profile_sha256 TEXT NOT NULL,
+                request_sha256 TEXT,
+                approval_sha256 TEXT,
+                snapshot_id INTEGER,
+                snapshot_sha256 TEXT,
+                job_id INTEGER,
+                product_id INTEGER,
+                authorization_lease_id TEXT,
+                command_id TEXT,
+                mutation_id TEXT,
+                status TEXT NOT NULL DEFAULT 'armed',
+                reason_code TEXT,
+                discovery_receipt_sha256 TEXT UNIQUE,
+                armed_at TEXT NOT NULL,
+                terminal_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS real_dxm_path_b_discovery_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                attempt_id INTEGER NOT NULL UNIQUE,
+                attempt_identity_sha256 TEXT NOT NULL UNIQUE,
+                task_id INTEGER NOT NULL UNIQUE,
+                job_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                scope_sha256 TEXT NOT NULL UNIQUE,
+                approval_sha256 TEXT NOT NULL,
+                discovery_key_sha256 TEXT NOT NULL UNIQUE,
+                profile_sha256 TEXT NOT NULL,
+                command_id TEXT NOT NULL UNIQUE,
+                authorization_lease_id TEXT NOT NULL UNIQUE,
+                mutation_id TEXT NOT NULL UNIQUE,
+                ledger_entry_id INTEGER NOT NULL UNIQUE,
+                first_save_command_sha256 TEXT NOT NULL UNIQUE,
+                first_save_action_result_sha256 TEXT NOT NULL UNIQUE,
+                save_authority_sha256 TEXT NOT NULL UNIQUE,
+                verification_command_sha256 TEXT NOT NULL UNIQUE,
+                save_verification_context_sha256 TEXT NOT NULL UNIQUE,
+                field_readbacks_sha256 TEXT NOT NULL,
+                unpublished_readback_sha256 TEXT NOT NULL,
+                first_save_intent_handshake_sha256 TEXT NOT NULL UNIQUE,
+                unpublished_action_result_sha256 TEXT NOT NULL UNIQUE,
+                verification_command_json TEXT NOT NULL,
+                unpublished_action_result_json TEXT NOT NULL,
+                leaf_proof_manifest_sha256 TEXT NOT NULL UNIQUE,
+                leaf_proof_manifest_json TEXT NOT NULL,
+                discovery_receipt_sha256 TEXT NOT NULL UNIQUE,
+                receipt_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'sealed',
+                sealed_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -705,6 +802,8 @@ def init_db() -> None:
         )
         migrate_reports_published_to_tristate(conn)
         migrate_canonical_receipts(conn)
+        migrate_real_dxm_write_scopes(conn)
+        migrate_real_dxm_path_b_discovery_receipts(conn)
         migrate_legacy_product_box_rows(conn)
         migrate_legacy_claim_tasks(conn)
         disable_legacy_generated_starter_templates(conn)
@@ -736,6 +835,10 @@ def migrate_canonical_receipts(conn: sqlite3.Connection) -> bool:
                 task_id INTEGER NOT NULL,
                 job_id INTEGER NOT NULL,
                 product_id INTEGER,
+                receipt_kind TEXT NOT NULL DEFAULT 'product_aggregate',
+                save_stage TEXT,
+                parent_canonical_receipt_sha256 TEXT,
+                scope_sha256 TEXT,
                 mode TEXT NOT NULL,
                 claim_mark TEXT NOT NULL,
                 canonical_receipt_sha256 TEXT NOT NULL UNIQUE,
@@ -745,14 +848,244 @@ def migrate_canonical_receipts(conn: sqlite3.Connection) -> bool:
                 error_code TEXT,
                 error_detail TEXT,
                 needs_manual_review INTEGER NOT NULL DEFAULT 0,
+                verification_command_sha256 TEXT,
+                verification_action_result_sha256 TEXT,
+                verification_command_json TEXT,
+                verification_action_result_json TEXT,
                 receipt_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
-        return True
-    return False
+        created = True
+    else:
+        created = False
+    _ensure_columns(
+        conn,
+        "canonical_receipts",
+        {
+            "receipt_kind": "TEXT NOT NULL DEFAULT 'product_aggregate'",
+            "save_stage": "TEXT",
+            "parent_canonical_receipt_sha256": "TEXT",
+            "scope_sha256": "TEXT",
+            "verification_command_sha256": "TEXT",
+            "verification_action_result_sha256": "TEXT",
+            "verification_command_json": "TEXT",
+            "verification_action_result_json": "TEXT",
+        },
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_canonical_receipts_save_stage
+            ON canonical_receipts (task_id, job_id, save_stage)
+            WHERE receipt_kind='save_stage'
+        """
+    )
+    return created
+
+
+def migrate_real_dxm_write_scopes(conn: sqlite3.Connection) -> bool:
+    """Create the one-time real Path B scope registry for existing data roots."""
+
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(real_dxm_write_scopes)").fetchall()
+    }
+    if "scope_sha256" not in existing:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS real_dxm_write_scopes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_sha256 TEXT NOT NULL UNIQUE,
+                task_id INTEGER NOT NULL,
+                snapshot_id INTEGER NOT NULL,
+                snapshot_sha256 TEXT NOT NULL,
+                account_ref_hash TEXT NOT NULL,
+                shop_id TEXT NOT NULL,
+                product_order_sha256 TEXT NOT NULL,
+                scope_nonce_sha256 TEXT NOT NULL UNIQUE,
+                scope_json TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'prepared',
+                approval_sha256 TEXT,
+                approval_nonce_sha256 TEXT UNIQUE,
+                approval_stage TEXT,
+                approval_consumed_at TEXT,
+                purpose TEXT NOT NULL DEFAULT 'general',
+                lineage_sha256 TEXT,
+                lineage_discovery_receipt_sha256 TEXT,
+                lineage_predecessor_scope_sha256 TEXT,
+                prepared_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_real_dxm_write_scopes_task
+                ON real_dxm_write_scopes (task_id, status);
+            """
+        )
+        created = True
+    else:
+        created = False
+    _ensure_columns(
+        conn,
+        "real_dxm_write_scopes",
+        {
+            "purpose": "TEXT NOT NULL DEFAULT 'general'",
+            "lineage_sha256": "TEXT",
+            "lineage_discovery_receipt_sha256": "TEXT",
+            "lineage_predecessor_scope_sha256": "TEXT",
+        },
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_real_dxm_formal_discovery_lineage
+            ON real_dxm_write_scopes (lineage_discovery_receipt_sha256)
+            WHERE purpose='formal'
+              AND lineage_discovery_receipt_sha256 IS NOT NULL
+        """
+    )
+    return created
+
+
+def migrate_real_dxm_path_b_discovery_receipts(conn: sqlite3.Connection) -> bool:
+    """Create the durable attempt claim and immutable SAVE1 receipt registry."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS real_dxm_path_b_discovery_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL UNIQUE,
+            scope_sha256 TEXT NOT NULL UNIQUE,
+            discovery_key_sha256 TEXT NOT NULL UNIQUE,
+            attempt_identity_sha256 TEXT NOT NULL UNIQUE,
+            profile_sha256 TEXT NOT NULL,
+            request_sha256 TEXT,
+            approval_sha256 TEXT,
+            snapshot_id INTEGER,
+            snapshot_sha256 TEXT,
+            job_id INTEGER,
+            product_id INTEGER,
+            authorization_lease_id TEXT,
+            command_id TEXT,
+            mutation_id TEXT,
+            status TEXT NOT NULL DEFAULT 'armed',
+            reason_code TEXT,
+            discovery_receipt_sha256 TEXT UNIQUE,
+            armed_at TEXT NOT NULL,
+            terminal_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    _ensure_columns(
+        conn,
+        "real_dxm_path_b_discovery_attempts",
+        {
+            "request_sha256": "TEXT",
+            "approval_sha256": "TEXT",
+            "snapshot_id": "INTEGER",
+            "snapshot_sha256": "TEXT",
+            "job_id": "INTEGER",
+            "product_id": "INTEGER",
+            "authorization_lease_id": "TEXT",
+            "command_id": "TEXT",
+            "mutation_id": "TEXT",
+        },
+    )
+
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "PRAGMA table_info(real_dxm_path_b_discovery_receipts)"
+        ).fetchall()
+    }
+    if "discovery_receipt_sha256" not in existing:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS real_dxm_path_b_discovery_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                attempt_id INTEGER NOT NULL UNIQUE,
+                attempt_identity_sha256 TEXT NOT NULL UNIQUE,
+                task_id INTEGER NOT NULL UNIQUE,
+                job_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                scope_sha256 TEXT NOT NULL UNIQUE,
+                approval_sha256 TEXT NOT NULL,
+                discovery_key_sha256 TEXT NOT NULL UNIQUE,
+                profile_sha256 TEXT NOT NULL,
+                command_id TEXT NOT NULL UNIQUE,
+                authorization_lease_id TEXT NOT NULL UNIQUE,
+                mutation_id TEXT NOT NULL UNIQUE,
+                ledger_entry_id INTEGER NOT NULL UNIQUE,
+                first_save_command_sha256 TEXT NOT NULL UNIQUE,
+                first_save_action_result_sha256 TEXT NOT NULL UNIQUE,
+                save_authority_sha256 TEXT NOT NULL UNIQUE,
+                verification_command_sha256 TEXT NOT NULL UNIQUE,
+                save_verification_context_sha256 TEXT NOT NULL UNIQUE,
+                field_readbacks_sha256 TEXT NOT NULL,
+                unpublished_readback_sha256 TEXT NOT NULL,
+                first_save_intent_handshake_sha256 TEXT NOT NULL UNIQUE,
+                unpublished_action_result_sha256 TEXT NOT NULL UNIQUE,
+                verification_command_json TEXT NOT NULL,
+                unpublished_action_result_json TEXT NOT NULL,
+                leaf_proof_manifest_sha256 TEXT NOT NULL UNIQUE,
+                leaf_proof_manifest_json TEXT NOT NULL,
+                discovery_receipt_sha256 TEXT NOT NULL UNIQUE,
+                receipt_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'sealed',
+                sealed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        created = True
+    else:
+        created = False
+    _ensure_columns(
+        conn,
+        "real_dxm_path_b_discovery_receipts",
+        {
+            "attempt_id": "INTEGER",
+            "attempt_identity_sha256": "TEXT",
+            "first_save_command_sha256": "TEXT",
+            "first_save_action_result_sha256": "TEXT",
+            "save_authority_sha256": "TEXT",
+            "verification_command_sha256": "TEXT",
+            "save_verification_context_sha256": "TEXT",
+            "field_readbacks_sha256": "TEXT",
+            "unpublished_readback_sha256": "TEXT",
+            "first_save_intent_handshake_sha256": "TEXT",
+            "unpublished_action_result_sha256": "TEXT",
+            "verification_command_json": "TEXT",
+            "unpublished_action_result_json": "TEXT",
+            "leaf_proof_manifest_sha256": "TEXT",
+            "leaf_proof_manifest_json": "TEXT",
+        },
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_real_dxm_discovery_receipt_attempt
+            ON real_dxm_path_b_discovery_receipts (attempt_id)
+            WHERE attempt_id IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_real_dxm_discovery_receipt_identity
+            ON real_dxm_path_b_discovery_receipts (attempt_identity_sha256)
+            WHERE attempt_identity_sha256 IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_real_dxm_discovery_leaf_manifest
+            ON real_dxm_path_b_discovery_receipts (leaf_proof_manifest_sha256)
+            WHERE leaf_proof_manifest_sha256 IS NOT NULL
+        """
+    )
+    return created
 
 
 def migrate_legacy_ownership_tags(conn: sqlite3.Connection) -> bool:

@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -32,6 +33,11 @@ from src.batch_edit.path_a_section_templates import PATH_A_FILL_CONTEXT_KEY
 from src.batch_edit.scope_contract import canonical_sha256
 from src.core.config import DATA_DIR, SCREENSHOT_DIR, SESSION_DIR
 from src.execution.browser_agent_protocol import mutation_target_hash
+from src.execution.canonical_receipt import (
+    ContentFinalizeReceipt,
+    FieldReadback,
+    ReceiptPhase,
+)
 from src.execution.account_identity import account_context_hash
 from src.execution.product_identity import is_stable_product_id
 from src.execution.browser_runtime import chrome_launch_options
@@ -89,7 +95,6 @@ DXM_E2_PLAN_READ_ALLOWLIST = frozenset({
     ('POST', 'https://www.dianxiaomi.com/api/smtCommManufacture/list.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtCategory/syncQualification.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtProduct/getSmtCommission.json'),
-    ('POST', 'https://www.dianxiaomi.com/api/smtProduct/verifyPopChoiceShop.json'),
 })
 DXM_ACCOUNT_IDENTITY_FIELDS = (
     'id',
@@ -175,6 +180,7 @@ EDITOR_ACTION_SCREENSHOT_MAP = {
     'open_semi_managed_page': SCREENSHOT_DIR / 'dianxiaomi_open_semi_managed_page.png',
     'fill_semi_managed_defaults': SCREENSHOT_DIR / 'dianxiaomi_fill_semi_managed_defaults.png',
     'save_only': SCREENSHOT_DIR / 'dianxiaomi_save_only.png',
+    'first_save_intent': SCREENSHOT_DIR / 'dianxiaomi_first_save_intent.png',
     'verify_not_published': SCREENSHOT_DIR / 'dianxiaomi_verify_not_published.png',
 }
 WORKFLOW_TARGETS = {
@@ -302,6 +308,143 @@ class DxmLoginFlow:
             'path': str(resolved),
             'sha256': hashlib.sha256(content).hexdigest().upper(),
             'size': len(content),
+        }
+
+    @staticmethod
+    def _evidence_observed_at() -> str:
+        """Return an absolute high-resolution timestamp for ordered evidence."""
+
+        return datetime.now(timezone.utc).isoformat()
+
+    def mandatory_capability_status(self, capability: str) -> dict[str, Any]:
+        """Fail closed until a capability has a real pre-plan runtime probe.
+
+        The plan compiler calls this provider before any product action runs.
+        Merely having a method, seeing a label, or having completed an action on
+        another product is not proof that the requested capability is available
+        for the frozen target.  Each currently missing binding therefore has a
+        stable production reason code instead of an optimistic default.
+        """
+
+        canonical = str(capability or '').strip()
+        reason_codes = {
+            'video': 'PRODUCTION_VIDEO_ACTION_NOT_BOUND',
+            'translation': 'PRODUCTION_TRANSLATION_ACTION_NOT_BOUND',
+            'wholesale': 'PRODUCTION_WHOLESALE_ACTION_NOT_BOUND',
+            'semiManaged': 'PRODUCTION_SEMI_MANAGED_PREFLIGHT_NOT_BOUND',
+            'rollbackPreparation': 'PRODUCTION_ROLLBACK_PREIMAGE_PREFLIGHT_NOT_BOUND',
+        }
+        if canonical not in reason_codes:
+            return {
+                'ok': False,
+                'capability': canonical,
+                'reason_code': 'MANDATORY_CAPABILITY_UNKNOWN',
+            }
+        return {
+            'ok': False,
+            'capability': canonical,
+            'reason_code': reason_codes[canonical],
+        }
+
+    def _path_b_capability_command_context(
+        self,
+        *,
+        expected_action: str,
+    ) -> dict[str, Any] | None:
+        context = self._mutation_command_context
+        if not isinstance(context, Mapping) or context.get('mode') != 'batch_draft_save':
+            return None
+        required_text = {
+            key: str(context.get(key) or '').strip()
+            for key in (
+                'command_id',
+                'command_action',
+                'browser_session_id',
+                'pre_dispatch_page',
+                'post_dispatch_page',
+            )
+        }
+        if (
+            not all(required_text.values())
+            or required_text['command_action'] != expected_action
+            or required_text['pre_dispatch_page'] != 'editor'
+            or required_text['post_dispatch_page'] != 'semi_managed'
+            or required_text['browser_session_id'] != str(self.browser_session_id() or '')
+        ):
+            raise RuntimeError('SEMI_MANAGED_CAPABILITY_COMMAND_CONTEXT_INVALID')
+        return {**dict(context), **required_text}
+
+    def _build_semi_managed_capability_receipts(
+        self,
+        *,
+        expected_action: str,
+        source_editor_url: str,
+        page_url: str,
+        target_identity_sha256: str,
+        evidence_ref: Mapping[str, Any],
+        started_at: str,
+        completed_at: str,
+    ) -> dict[str, Any]:
+        context = self._path_b_capability_command_context(
+            expected_action=expected_action,
+        )
+        if context is None:
+            return {}
+        if (
+            self._page_identity_result(source_editor_url, 'editor').get('ok') is not True
+            or self._page_identity_result(page_url, 'semi_managed').get('ok') is not True
+            or re.fullmatch(r'[0-9A-Fa-f]{64}', target_identity_sha256) is None
+            or not isinstance(evidence_ref, Mapping)
+        ):
+            raise RuntimeError('SEMI_MANAGED_CAPABILITY_PAGE_EVIDENCE_INVALID')
+        evidence_path = str(evidence_ref.get('path') or '').strip()
+        if not evidence_path:
+            raise RuntimeError('SEMI_MANAGED_CAPABILITY_SCREENSHOT_MISSING')
+        observed_evidence = self._evidence_descriptor(Path(evidence_path))
+        if (
+            str(evidence_ref.get('sha256') or '').casefold()
+            != str(observed_evidence.get('sha256') or '').casefold()
+            or evidence_ref.get('size') != observed_evidence.get('size')
+        ):
+            raise RuntimeError('SEMI_MANAGED_CAPABILITY_SCREENSHOT_DRIFTED')
+        readback = FieldReadback(
+            field_key='semiManaged.page_identity',
+            field_label='半托管编辑页身份',
+            source='visible_production_runtime',
+            before_value={
+                'kind': 'editor',
+                'url': source_editor_url,
+                'target_identity_sha256': target_identity_sha256,
+            },
+            after_value={
+                'kind': 'semi_managed',
+                'url': page_url,
+                'target_identity_sha256': target_identity_sha256,
+                'browser_session_id': context['browser_session_id'],
+                'screenshot_sha256': observed_evidence['sha256'],
+                'screenshot_size': observed_evidence['size'],
+            },
+            readback_proven=True,
+            timestamp=completed_at,
+        )
+        receipt = ContentFinalizeReceipt(
+            phase=ReceiptPhase.SEMI_MANAGED_ENTRY,
+            action_grant_id=context['command_id'],
+            result_ok=True,
+            error_code=None,
+            error_detail=None,
+            unresolved=False,
+            field_readbacks=[readback],
+            media_identity=None,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        digest = receipt.finalize()
+        return {
+            'semiManaged': {
+                'canonical_receipt': receipt.to_dict(),
+                'receipt_sha256': digest,
+            }
         }
 
     def _capture_scoped_evidence_screenshot(
@@ -1734,23 +1877,6 @@ class DxmLoginFlow:
                 'DXM_TEMPLATE_RESPONSE_INVALID',
                 '店铺佣金只读回包 data 不是数值。',
             )
-        pop_choice_data = self._e2_post_data(
-            context,
-            browser_session_id=browser_session_id,
-            url='https://www.dianxiaomi.com/api/smtProduct/verifyPopChoiceShop.json',
-            form={'shopIds': normalized_shop_id},
-            label='POP 与半托管店铺校验',
-        )
-        if not isinstance(pop_choice_data, list):
-            raise DxmDraftReaderError(
-                'DXM_TEMPLATE_RESPONSE_INVALID',
-                'POP 与半托管店铺校验回包 data 不是数组。',
-            )
-        pop_choice_record = next((
-            dict(item)
-            for item in pop_choice_data
-            if isinstance(item, Mapping) and str(item.get('shopId') or '') == normalized_shop_id
-        ), None)
         shop_templates = self._e2_post_data(
             context,
             browser_session_id=browser_session_id,
@@ -1940,12 +2066,10 @@ class DxmLoginFlow:
                 'logistics_attribute_options': logistics_options,
                 'support_new_size_attribute': bool(support_new_size),
                 'commission_rate': float(commission_rate),
-                'pop_choice_shop': pop_choice_record,
                 'source_apis': [
                     '/api/smtCommLogisticAttribute/getLogisticAttributeList.json',
                     '/api/smtCommProduct/supportNewSizeAttribute.json',
                     '/api/smtProduct/getSmtCommission.json',
-                    '/api/smtProduct/verifyPopChoiceShop.json',
                 ],
             })
             qualifications = self._e2_post_data(
@@ -3186,12 +3310,6 @@ class DxmLoginFlow:
                 keys == {'shopId'}
                 and str(form.get('shopId') or '').isdecimal()
                 and int(str(form.get('shopId'))) > 0
-            )
-        elif path == '/api/smtProduct/verifyPopChoiceShop.json':
-            valid = (
-                keys == {'shopIds'}
-                and str(form.get('shopIds') or '').isdecimal()
-                and int(str(form.get('shopIds'))) > 0
             )
         elif path == '/api/smtShopInfoSync/list.json':
             valid = keys == {'shopId'}
@@ -5337,8 +5455,24 @@ class DxmLoginFlow:
         }
         self._write_state(state)
         return state
+    def perform_first_save_intent(
+        self,
+        defaults: dict[str, Any] | None = None,
+        product_query: str | None = None,
+        store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Dispatch one SAVE1 and observe the semi-managed page in one call."""
 
-
+        return self.perform_editor_action(
+            'first_save_intent',
+            defaults=defaults,
+            product_query=product_query,
+            store_name=store_name,
+            target_source_urls=target_source_urls,
+            target_identity=target_identity,
+        )
 
     def perform_editor_action(
         self,
@@ -5355,7 +5489,7 @@ class DxmLoginFlow:
                 stage='editor_action_failed',
                 label='无效动作',
                 message=f'不支持的编辑页动作：{action}',
-                next_action='请改为 verify_edit_ownership、fill_editor_required_defaults、fill_editor_variants、fill_media_assets、fill_compliance_defaults、enable_semi_managed、open_semi_managed_page、fill_semi_managed_defaults、save_only 或 verify_not_published。',
+                next_action='请改为 verify_edit_ownership、fill_editor_required_defaults、fill_editor_variants、fill_media_assets、fill_compliance_defaults、enable_semi_managed、open_semi_managed_page、fill_semi_managed_defaults、save_only、first_save_intent 或 verify_not_published。',
             )
             self._write_state(state)
             return state
@@ -5385,7 +5519,7 @@ class DxmLoginFlow:
             self._write_state(state)
             return state
 
-        if action not in {'save_only', 'verify_not_published'}:
+        if action not in {'save_only', 'first_save_intent', 'verify_not_published'}:
             result['published'] = None
 
         state = {
@@ -5412,10 +5546,19 @@ class DxmLoginFlow:
             'source_identity_match': result.get('source_identity_match'),
             'semi_managed_visible': result.get('semi_managed_visible'),
             'semi_managed_enabled': result.get('semi_managed_enabled'),
+            'mandatory_capability_receipts': result.get(
+                'mandatory_capability_receipts'
+            ),
+            'path_b_section_receipts': result.get('path_b_section_receipts'),
             'save_result': (
                 result.get('save_result')
                 if result.get('save_result') is not None
                 else previous_state.get('save_result') if action == 'verify_not_published' else None
+            ),
+            'first_save_intent_handshake': (
+                result.get('first_save_intent_handshake')
+                if action == 'first_save_intent'
+                else None
             ),
             'fill_result': result.get('fill_result'),
             'unpublished_proof': (
@@ -5428,7 +5571,8 @@ class DxmLoginFlow:
             'editor_action_result': dict(result),
             'save_evidence_ref': (
                 result.get('evidence_ref')
-                if action == 'save_only' and isinstance(result.get('evidence_ref'), dict)
+                if action in {'save_only', 'first_save_intent'}
+                and isinstance(result.get('evidence_ref'), dict)
                 else previous_state.get('save_evidence_ref') or previous_state.get('evidence_ref')
                 if action == 'verify_not_published'
                 and previous_state.get('current_action') == 'save_only'
@@ -6518,6 +6662,8 @@ class DxmLoginFlow:
             elif action == 'enable_semi_managed':
                 action_result = self._enable_semi_managed_on_page(page)
             else:
+                semi_entry_started_at = self._evidence_observed_at()
+                source_editor_url = str(getattr(page, 'url', '') or '')
                 action_result = self._open_semi_managed_page_from_editor(
                     page,
                     defaults,
@@ -6525,26 +6671,62 @@ class DxmLoginFlow:
                 )
             if normalized_target is None:
                 return action_result
-            frozen_after = (
-                None
-                if action == 'open_semi_managed_page'
-                else self._require_frozen_editor_identity(
+            if action == 'open_semi_managed_page' and action_result.get('ok') is True:
+                if self._page_identity_result(
+                    getattr(page, 'url', None), 'semi_managed'
+                ).get('ok') is not True:
+                    raise RuntimeError('SEMI_MANAGED_POST_PAGE_IDENTITY_UNPROVEN')
+                frozen_after = self._require_frozen_product_page_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='进入半托管页后',
+                )
+                if self._path_b_capability_command_context(
+                    expected_action='open_semi_managed_page'
+                ) is not None:
+                    evidence_ref = self._capture_scoped_evidence_screenshot(
+                        page,
+                        EDITOR_ACTION_SCREENSHOT_MAP['open_semi_managed_page'],
+                        action='open_semi_managed_page',
+                        full_page=True,
+                    )
+                    completed_at = self._evidence_observed_at()
+                    action_result.update({
+                        'evidence_ref': evidence_ref,
+                        'screenshot_url': self._artifact_url(Path(evidence_ref['path'])),
+                        'mandatory_capability_receipts': (
+                            self._build_semi_managed_capability_receipts(
+                                expected_action='open_semi_managed_page',
+                                source_editor_url=source_editor_url,
+                                page_url=str(getattr(page, 'url', '') or ''),
+                                target_identity_sha256=str(target_identity_sha256),
+                                evidence_ref=evidence_ref,
+                                started_at=semi_entry_started_at,
+                                completed_at=completed_at,
+                            )
+                        ),
+                    })
+            elif action == 'open_semi_managed_page':
+                frozen_after = None
+            else:
+                frozen_after = self._require_frozen_editor_identity(
                     page,
                     target_identity=normalized_target,
                     store_name=store_name,
                     phase='执行编辑动作后',
                 )
-            )
-            return self._attach_frozen_target_evidence(
+            attached = self._attach_frozen_target_evidence(
                 action_result,
                 target_identity=normalized_target,
                 target_identity_sha256=str(target_identity_sha256),
                 before=frozen_before,
                 after=frozen_after,
             )
+            return attached
 
         state_page_url = state.get('page_url')
-        if action in {'save_only', 'verify_not_published'} and self._is_dxm_editor_url(state_page_url):
+        if action in {'save_only', 'first_save_intent', 'verify_not_published'} and self._is_dxm_editor_url(state_page_url):
             editor_url = str(state_page_url or '')
             if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), editor_url):
                 open_editor_page = self._find_open_editor_page_for_url(editor_url)
@@ -6621,7 +6803,7 @@ class DxmLoginFlow:
                 if str(prefill.get('stage')).endswith('_failed'):
                     result = {
                         **prefill,
-                        'stage': 'save_only_failed',
+                        'stage': f'{action}_failed',
                         'label': '保存前编辑页配置未完成',
                         'message': prefill.get('message') or '保存前编辑页必填字段未补齐。',
                         'save_result': {
@@ -6656,6 +6838,20 @@ class DxmLoginFlow:
                         store_name=store_name,
                         phase='保存点击立即前',
                     )
+                handshake_id = uuid.uuid4().hex if action == 'first_save_intent' else None
+                browser_session_generation = self._browser_session_generation
+
+                def observe_first_save_post_page() -> dict[str, Any]:
+                    if action != 'first_save_intent' or handshake_id is None:
+                        return {'ok': False, 'reason': 'first_save_intent_context_missing'}
+                    return self._open_semi_managed_editor_after_first_save(
+                        page,
+                        source_editor_url=editor_url,
+                        target_identity=normalized_target,
+                        store_name=str(store_name or ''),
+                        browser_session_generation=browser_session_generation,
+                    )
+
                 result = self._save_only_on_page(
                     page,
                     target_identity=normalized_target,
@@ -6665,15 +6861,148 @@ class DxmLoginFlow:
                     expected_execution_payload=prefill.get('execution_payload'),
                     baseline_execution_readback=prefill.get('frozen_execution_readback'),
                     baseline_category_schema_readback=prefill.get('category_schema_readback'),
+                    baseline_save_field_values=prefill.get('save_field_baseline'),
+                    mutation_action=(
+                        'first_save_intent'
+                        if action == 'first_save_intent'
+                        else 'save_only_click'
+                    ),
+                    evidence_action=action,
+                    post_save_observer=(
+                        observe_first_save_post_page
+                        if action == 'first_save_intent'
+                        else None
+                    ),
                 )
+                if action == 'first_save_intent' and result.get('ok') is True:
+                    physical_save_result = dict(result.get('save_result') or {})
+                    post_observation = dict(
+                        physical_save_result.get('post_save_observation') or {}
+                    )
+                    save_dispatched_at = str(
+                        physical_save_result.get('save_dispatched_at') or ''
+                    ).strip()
+                    opened_at = str(post_observation.get('observed_at') or '').strip()
+                    intent_event_id = hashlib.sha256(
+                        f'{handshake_id}:FIRST_SAVE_INTENT:{save_dispatched_at}'.encode('utf-8')
+                    ).hexdigest()
+                    opened_event_id = hashlib.sha256(
+                        f'{handshake_id}:OPEN_SEMI_MANAGED_EDITOR:{opened_at}'.encode('utf-8')
+                    ).hexdigest()
+                    handshake_body = {
+                        'schema_version': 'dxm.first-save-intent-handshake.v1',
+                        'save_stage': 'SAVE1',
+                        'handshake_id': handshake_id,
+                        'pre_dispatch_page': {
+                            'kind': 'editor',
+                            'url': editor_url,
+                            'target_identity_sha256': str(target_identity_sha256),
+                        },
+                        'post_dispatch_page': {
+                            'kind': 'semi_managed',
+                            'url': post_observation.get('page_url'),
+                            'target_identity_sha256': str(target_identity_sha256),
+                        },
+                        'first_save_intent': {
+                            'observed': True,
+                            'handshake_id': handshake_id,
+                            'event_id': intent_event_id,
+                            'observed_at': save_dispatched_at,
+                        },
+                        'open_semi_managed_editor': {
+                            'observed': True,
+                            'handshake_id': handshake_id,
+                            'event_id': opened_event_id,
+                            'observed_at': opened_at,
+                            # These values are read from the exact governed
+                            # controls after the native SAVE response and
+                            # before the semi-managed navigation.  Keeping
+                            # them inside the hashed handshake prevents an
+                            # outer envelope from substituting another SAVE1
+                            # readback set.
+                            'field_readbacks': list(
+                                physical_save_result.get('save_field_readbacks') or []
+                            ),
+                        },
+                        'mutation_authorization': dict(
+                            physical_save_result.get('mutation_authorization') or {}
+                        ),
+                        'pre_dispatch_readback': dict(
+                            physical_save_result.get('pre_dispatch_readback') or {}
+                        ),
+                        'network_save_result': dict(
+                            physical_save_result.get('network_save_result') or {}
+                        ),
+                        'network_audit': dict(
+                            physical_save_result.get('network_audit') or {}
+                        ),
+                        'publish_signal': dict(
+                            physical_save_result.get('publish_signal') or {}
+                        ),
+                        'page_transition': {
+                            'from': 'editor',
+                            'to': 'semi_managed',
+                            'same_browser_session': post_observation.get('same_browser_session') is True,
+                            'source_editor_identity_preserved': post_observation.get(
+                                'source_editor_identity_preserved'
+                            ) is True,
+                        },
+                        'physical_mutation_count': int(
+                            dict(physical_save_result.get('network_audit') or {}).get(
+                                'save_request_count'
+                            )
+                            or 0
+                        ),
+                        'publish_request_count': int(
+                            dict(physical_save_result.get('network_audit') or {}).get(
+                                'publish_request_count'
+                            )
+                            or 0
+                        ),
+                        'same_handshake': True,
+                    }
+                    handshake = {
+                        **handshake_body,
+                        'handshake_sha256': hashlib.sha256(
+                            json.dumps(
+                                handshake_body,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(',', ':'),
+                                allow_nan=False,
+                            ).encode('utf-8')
+                        ).hexdigest(),
+                    }
+                    result.update({
+                        'ok': True,
+                        'stage': 'first_save_intent',
+                        'label': 'Discovery SAVE1 与半托管入口已原子确认',
+                        'message': '同一授权窗口内仅派发一次 SAVE1，并确认进入同一商品的半托管编辑页。',
+                        'page_title': post_observation.get('page_title'),
+                        'page_url': post_observation.get('page_url'),
+                        'source_editor_url': editor_url,
+                        'first_save_intent_handshake': handshake,
+                        'physical_save_result': physical_save_result,
+                        'save_result': handshake,
+                        'published': False,
+                    })
             if isinstance(result, dict) and not result.get('source_editor_url'):
                 result['source_editor_url'] = editor_url
             if normalized_target is not None:
-                frozen_after = self._require_frozen_editor_identity(
-                    page,
-                    target_identity=normalized_target,
-                    store_name=store_name,
-                    phase='保存或未发布校验后',
+                frozen_after = (
+                    self._require_frozen_product_page_identity(
+                        page,
+                        target_identity=normalized_target,
+                        store_name=store_name,
+                        phase='FIRST_SAVE_INTENT 后',
+                    )
+                    if action == 'first_save_intent' and result.get('ok') is True
+                    else self._require_frozen_editor_identity(
+                        page,
+                        target_identity=normalized_target,
+                        store_name=store_name,
+                        phase='保存或未发布校验后',
+                    )
                 )
                 result = self._attach_frozen_target_evidence(
                     result,
@@ -6682,6 +7011,25 @@ class DxmLoginFlow:
                     before=frozen_before,
                     after=frozen_after,
                 )
+                if action == 'first_save_intent' and result.get('ok') is True:
+                    capability_receipts = self._build_semi_managed_capability_receipts(
+                        expected_action='first_save_intent',
+                        source_editor_url=editor_url,
+                        page_url=str(result.get('page_url') or ''),
+                        target_identity_sha256=str(target_identity_sha256),
+                        evidence_ref=dict(result.get('evidence_ref') or {}),
+                        started_at=str(
+                            post_observation.get('started_at')
+                            or save_dispatched_at
+                            or ''
+                        ),
+                        completed_at=self._evidence_observed_at(),
+                    )
+                    if capability_receipts:
+                        result['mandatory_capability_receipts'] = {
+                            **dict(result.get('mandatory_capability_receipts') or {}),
+                            **capability_receipts,
+                        }
             return result
 
         semi_url = state.get('page_url')
@@ -6818,6 +7166,7 @@ class DxmLoginFlow:
                 required_readback_complete=prefill.get('ok') is True,
                 expected_execution_payload=None,
                 baseline_execution_readback=None,
+                baseline_save_field_values=prefill.get('save_field_baseline'),
             )
         if source_editor_url and isinstance(result, dict) and not result.get('source_editor_url'):
             result['source_editor_url'] = source_editor_url
@@ -8104,6 +8453,25 @@ class DxmLoginFlow:
         *,
         category_schema_readback: Mapping[str, Any],
     ) -> dict[str, Any]:
+        save_field_baseline = self._capture_frozen_execution_values(
+            page,
+            execution_payload,
+            phase='before_prefill',
+        )
+        if save_field_baseline.get('ok') is not True:
+            return {
+                'ok': False,
+                'stage': 'editor_save_prefill_failed',
+                'label': '冻结字段前值读取失败',
+                'message': '无法在任何字段写入前读取全部冻结字段，未执行保存。',
+                'failure_code': 'FROZEN_EXECUTION_PREIMAGE_READBACK_FAILED',
+                'page_title': '店小秘编辑页',
+                'page_url': str(getattr(page, 'url', '') or ''),
+                'category_schema_readback': dict(category_schema_readback),
+                'save_field_baseline': save_field_baseline,
+                'write_attempted': False,
+                'published': None,
+            }
         fill_result = self._fill_frozen_execution_payload_on_page(
             page,
             execution_payload,
@@ -8164,6 +8532,37 @@ class DxmLoginFlow:
                 'write_attempted': bool(fill_result.get('write_attempted')),
                 'published': None,
             }
+        before_by_field = {
+            str(item.get('field_key') or ''): item
+            for item in save_field_baseline.get('values') or []
+            if isinstance(item, Mapping)
+        }
+        canonical_save_field_baseline = [
+            {
+                'field_key': str(field.get('field_key') or ''),
+                'field_label': str(field.get('ui_label_zh') or ''),
+                'source': 'visible_browser_frozen_execution_readback',
+                'value_before': before_by_field[str(field.get('field_key') or '')].get('value'),
+                'value_after_prefill': field.get('resolved_value'),
+            }
+            for field in execution_payload.get('fields') or []
+            if isinstance(field, Mapping)
+            and str(field.get('field_key') or '') in before_by_field
+        ]
+        if len(canonical_save_field_baseline) != len(execution_payload.get('fields') or []):
+            return {
+                'ok': False,
+                'stage': 'editor_save_prefill_failed',
+                'label': '冻结字段回执基线不完整',
+                'message': '保存回执无法绑定全部冻结字段前值，未执行保存。',
+                'failure_code': 'FROZEN_EXECUTION_PREIMAGE_READBACK_FAILED',
+                'page_title': '店小秘编辑页',
+                'page_url': str(getattr(page, 'url', '') or ''),
+                'category_schema_readback': dict(category_schema_readback),
+                'save_field_baseline': save_field_baseline,
+                'write_attempted': bool(fill_result.get('write_attempted')),
+                'published': None,
+            }
         return {
             'ok': True,
             'stage': 'editor_save_prefill_ready',
@@ -8178,6 +8577,7 @@ class DxmLoginFlow:
             'execution_payload_hash': execution_payload.get('payload_hash'),
             'category_schema_readback': dict(category_schema_readback),
             'frozen_execution_readback': frozen_execution_readback,
+            'save_field_baseline': canonical_save_field_baseline,
             'published': None,
         }
 
@@ -8978,6 +9378,101 @@ class DxmLoginFlow:
             'published': None,
         }
 
+    def _click_unique_exact_semantic_button(
+        self,
+        page: Page,
+        *,
+        accessible_name: str,
+    ) -> dict[str, Any]:
+        """Dispatch one exact Playwright button or fail before the click."""
+
+        def actionable_indexes() -> tuple[int, list[dict[str, Any]], list[int]]:
+            locator = page.get_by_role(
+                'button',
+                name=accessible_name,
+                exact=True,
+            )
+            semantic_match_count = locator.count()
+            candidates: list[dict[str, Any]] = []
+            for index in range(semantic_match_count):
+                candidate = locator.nth(index)
+                visible = candidate.is_visible()
+                enabled = candidate.is_enabled()
+                trial_ok = False
+                trial_error = None
+                if visible and enabled:
+                    try:
+                        candidate.click(trial=True, timeout=3000)
+                        trial_ok = True
+                    except Exception as exc:
+                        trial_error = str(exc)[:160]
+                candidates.append({
+                    'index': index,
+                    'visible': visible,
+                    'enabled': enabled,
+                    'trial_ok': trial_ok,
+                    'trial_error': trial_error,
+                })
+            actionable = [
+                item['index'] for item in candidates if item['trial_ok'] is True
+            ]
+            return semantic_match_count, candidates, actionable
+
+        started_at = self._evidence_observed_at()
+        try:
+            semantic_match_count, candidates, actionable = actionable_indexes()
+            if len(actionable) != 1:
+                return {
+                    'ok': False,
+                    'dispatched': False,
+                    'reason': 'exact_semantic_button_not_unique_or_actionable',
+                    'accessible_name': accessible_name,
+                    'semantic_match_count': semantic_match_count,
+                    'candidates': candidates,
+                    'started_at': started_at,
+                }
+            selected_index = int(actionable[0])
+            # Re-resolve immediately before dispatch so a DOM reorder cannot
+            # silently substitute another element for the observed control.
+            second_count, second_candidates, second_actionable = actionable_indexes()
+            if (
+                second_count != semantic_match_count
+                or second_actionable != [selected_index]
+            ):
+                return {
+                    'ok': False,
+                    'dispatched': False,
+                    'reason': 'exact_semantic_button_drifted_before_dispatch',
+                    'accessible_name': accessible_name,
+                    'semantic_match_count': second_count,
+                    'candidates': second_candidates,
+                    'started_at': started_at,
+                }
+            page.get_by_role(
+                'button',
+                name=accessible_name,
+                exact=True,
+            ).nth(selected_index).click(timeout=5000, no_wait_after=True)
+            return {
+                'ok': True,
+                'dispatched': True,
+                'method': 'playwright_exact_role',
+                'accessible_name': accessible_name,
+                'locator_index': selected_index,
+                'semantic_match_count': second_count,
+                'started_at': started_at,
+                'dispatched_at': self._evidence_observed_at(),
+            }
+        except Exception as exc:
+            return {
+                'ok': False,
+                'dispatched': False,
+                'reason': 'exact_semantic_button_dispatch_failed',
+                'accessible_name': accessible_name,
+                'started_at': started_at,
+                'error': str(exc)[:240],
+            }
+
     def _open_semi_managed_page_from_editor(
         self,
         page: Page,
@@ -9114,22 +9609,20 @@ class DxmLoginFlow:
                     'label': '欧盟外包装图未通过',
                     'message': media_result.get('message') or '欧盟外包装图未回填，不能进入半托管信息。',
                 }
-        clicked = page.evaluate(r'''() => {
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const btn = Array.from(document.querySelectorAll('button,a,span,div')).find(el => norm(el.innerText || el.textContent) === '编辑半托管信息');
-          if (!btn) return false;
-          btn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-          return true;
-        }''')
-        if not clicked:
+        clicked = self._click_unique_exact_semantic_button(
+            page,
+            accessible_name='编辑半托管信息',
+        )
+        if clicked.get('dispatched') is not True:
             return {
                 'ok': False,
                 'stage': 'open_semi_managed_page_failed',
                 'label': '半托管编辑入口缺失',
-                'message': '未找到“编辑半托管信息”入口。',
+                'message': '未唯一绑定可见、启用且可操作的“编辑半托管信息”按钮。',
                 'page_title': page.title(),
                 'page_url': page.url,
                 'screenshot_url': enable_result.get('screenshot_url'),
+                'entry_result': clicked,
                 'published': None,
             }
         page.wait_for_timeout(2500)
@@ -9173,6 +9666,89 @@ class DxmLoginFlow:
             'screenshot_url': self._artifact_url(screenshot_path),
             'source_editor_url': source_editor_url,
             'published': None,
+        }
+
+    def _open_semi_managed_editor_after_first_save(
+        self,
+        page: Page,
+        *,
+        source_editor_url: str,
+        target_identity: dict[str, Any],
+        store_name: str,
+        browser_session_generation: str | None,
+    ) -> dict[str, Any]:
+        """Observe the existing exact semi-managed entry after the one SAVE1."""
+
+        if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), source_editor_url):
+            return {'ok': False, 'reason': 'source_editor_page_drifted_before_semi_entry'}
+        clicked = self._click_unique_exact_semantic_button(
+            page,
+            accessible_name='编辑半托管信息',
+        )
+        if not isinstance(clicked, Mapping) or clicked.get('dispatched') is not True:
+            return {
+                'ok': False,
+                'reason': 'semi_managed_exact_entry_not_unique_or_not_dispatched',
+                'entry_result': dict(clicked or {}) if isinstance(clicked, Mapping) else None,
+            }
+        page.wait_for_timeout(2500)
+        page_state = self._semi_managed_page_state(page)
+        for _ in range(10):
+            if page_state.get('blocked') or page_state.get('is_semi_page'):
+                break
+            page.wait_for_timeout(1500)
+            page_state = self._semi_managed_page_state(page)
+        if page_state.get('blocked') or page_state.get('is_semi_page') is not True:
+            return {
+                'ok': False,
+                'reason': page_state.get('message') or 'semi_managed_page_not_observed',
+                'entry_result': dict(clicked),
+                'page_state': dict(page_state),
+            }
+        try:
+            parsed = urlparse(str(getattr(page, 'url', '') or ''))
+        except ValueError:
+            parsed = urlparse('')
+        if (
+            parsed.scheme.casefold() != 'https'
+            or str(parsed.hostname or '').casefold() != 'www.dianxiaomi.com'
+            or str(parsed.path or '').rstrip('/').casefold() != '/web/smt/editfromsmt'
+        ):
+            return {
+                'ok': False,
+                'reason': 'semi_managed_post_page_identity_unproven',
+                'entry_result': dict(clicked),
+                'page_state': dict(page_state),
+                'page_url': str(getattr(page, 'url', '') or ''),
+            }
+        identity = self._require_frozen_product_page_identity(
+            page,
+            target_identity=target_identity,
+            store_name=store_name,
+            phase='FIRST_SAVE_INTENT 后半托管页身份读回',
+        )
+        same_browser_session = bool(
+            self._page is page
+            and self._browser_session_generation == browser_session_generation
+        )
+        source_identity_preserved = bool(
+            identity.get('ok') is True
+            and identity.get('product_identity_match') is True
+            and identity.get('store_identity_match') is True
+            and identity.get('source_identity_match') is True
+        )
+        return {
+            'ok': bool(same_browser_session and source_identity_preserved),
+            'reason': None if same_browser_session and source_identity_preserved else 'semi_managed_target_or_session_drifted',
+            'entry_result': dict(clicked),
+            'page_state': dict(page_state),
+            'page_url': str(getattr(page, 'url', '') or ''),
+            'page_title': page.title(),
+            'identity_readback': dict(identity),
+            'same_browser_session': same_browser_session,
+            'source_editor_identity_preserved': source_identity_preserved,
+            'started_at': clicked.get('started_at'),
+            'observed_at': self._evidence_observed_at(),
         }
 
     def _repair_product_main_images_on_page(self, page: Page) -> dict[str, Any]:
@@ -16472,6 +17048,35 @@ class DxmLoginFlow:
         if field_integrity.get('ok') is not True:
             missing.append('structured_field_integrity_snapshot')
             missing = sorted(set(missing))
+        semi_readback_labels = {
+            'product_price': '产品价格',
+            'supply_price': '供货价格',
+            'weight': '重量',
+            'length': '长度',
+            'width': '宽度',
+            'height': '高度',
+            'jit_stock': 'JIT库存',
+            'goods_code': '货品编码',
+        }
+        save_field_baseline = [
+            {
+                'field_key': field_key,
+                'field_label': field_label,
+                'source': 'visible_browser_semi_managed_structured_readback',
+                'value_before': detail.get('value_before'),
+                'value_after_prefill': detail.get('value_after'),
+            }
+            for field_key, field_label in semi_readback_labels.items()
+            for detail in [result['field_details'].get(field_key)]
+            if isinstance(detail, Mapping)
+            and detail.get('ok') is True
+            and detail.get('located') is True
+            and 'value_before' in detail
+            and str(detail.get('expected_value') or '') == str(detail.get('value_after') or '')
+        ]
+        if not save_field_baseline:
+            missing.append('canonical_save_field_baseline')
+            missing = sorted(set(missing))
         screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_semi_managed_defaults']
         page.screenshot(path=str(screenshot_path), full_page=True)
         return {
@@ -16494,6 +17099,7 @@ class DxmLoginFlow:
                     if isinstance(detail, Mapping) and detail.get('ok') is not True
                 ],
             },
+            'save_field_baseline': save_field_baseline,
             'published': None,
         }
 
@@ -16721,6 +17327,125 @@ class DxmLoginFlow:
                 else verification.get('reason')
             ),
         }
+
+    @staticmethod
+    def _capture_semi_managed_save_values(
+        page: Page,
+        baseline: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Read the already-proven semi-managed structured controls without writing."""
+
+        aliases = {
+            'product_price': ['productPrice', 'product_price'],
+            'supply_price': ['supplyPrice', 'supply_price'],
+            'weight': ['weight', 'packageWeight', 'package_weight'],
+            'length': ['length', 'packageLength', 'package_length'],
+            'width': ['width', 'packageWidth', 'package_width'],
+            'height': ['height', 'packageHeight', 'package_height'],
+            'jit_stock': ['jitStock', 'jit_stock'],
+            'goods_code': ['skuCode', 'sku_code', 'goodsCode', 'goods_code'],
+        }
+        descriptors = [
+            {
+                'field_key': str(item.get('field_key') or ''),
+                'aliases': aliases.get(str(item.get('field_key') or ''), []),
+            }
+            for item in baseline
+            if isinstance(item, Mapping)
+        ]
+        if not descriptors or any(not item['field_key'] or not item['aliases'] for item in descriptors):
+            return {'ok': False, 'values': [], 'reason': 'semi_save_baseline_invalid'}
+        result = page.evaluate(r'''(fields) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const norm = (value) => String(value || '').replace(/\s+/g, '').trim().toLowerCase();
+          const inputs = Array.from(document.querySelectorAll('input,textarea'))
+            .filter((el) => visible(el) && !el.disabled);
+          const values = fields.map((field) => {
+            const expected = field.aliases.map(norm);
+            const matches = inputs.filter((input) => [
+              input.id,
+              input.getAttribute('name'),
+              input.getAttribute('data-field'),
+              input.closest('[data-field]')?.getAttribute('data-field'),
+            ].map(norm).some((value) => value && expected.includes(value)));
+            return {
+              field_key: field.field_key,
+              found: matches.length === 1,
+              match_count: matches.length,
+              value: matches.length === 1 ? String(matches[0].value || '') : null,
+            };
+          });
+          return {ok: values.length === fields.length && values.every((item) => item.found), values};
+        }''', descriptors)
+        if not isinstance(result, Mapping):
+            return {'ok': False, 'values': [], 'reason': 'semi_save_readback_unavailable'}
+        values = result.get('values')
+        return {
+            'ok': result.get('ok') is True and isinstance(values, list),
+            'values': list(values) if isinstance(values, list) else [],
+            'reason': None if result.get('ok') is True else 'semi_save_structured_binding_unproven',
+        }
+
+    @classmethod
+    def _build_canonical_save_field_readbacks(
+        cls,
+        baseline: list[dict[str, Any]] | None,
+        post_save_values: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        baseline_items = [dict(item) for item in (baseline or []) if isinstance(item, Mapping)]
+        observed_items = (
+            [dict(item) for item in post_save_values.get('values') or [] if isinstance(item, Mapping)]
+            if isinstance(post_save_values, Mapping)
+            else []
+        )
+        if (
+            not baseline_items
+            or not isinstance(post_save_values, Mapping)
+            or post_save_values.get('ok') is not True
+            or len(observed_items) != len(baseline_items)
+        ):
+            return {'ok': False, 'field_readbacks': [], 'reason': 'post_save_field_readback_unavailable'}
+        observed_by_field: dict[str, dict[str, Any]] = {}
+        for item in observed_items:
+            key = str(item.get('field_key') or '')
+            if not key or key in observed_by_field:
+                return {'ok': False, 'field_readbacks': [], 'reason': 'post_save_field_readback_duplicated'}
+            observed_by_field[key] = item
+        captured_at = cls._evidence_observed_at()
+        readbacks: list[dict[str, Any]] = []
+        for item in baseline_items:
+            field_key = str(item.get('field_key') or '').strip()
+            field_label = str(item.get('field_label') or '').strip()
+            source = str(item.get('source') or '').strip()
+            observed = observed_by_field.get(field_key)
+            if (
+                not field_key
+                or not field_label
+                or not source
+                or observed is None
+                or observed.get('found', True) is not True
+                or cls._canonical_frozen_value_hash(observed.get('value'))
+                != cls._canonical_frozen_value_hash(item.get('value_after_prefill'))
+            ):
+                return {
+                    'ok': False,
+                    'field_readbacks': [],
+                    'reason': f'post_save_field_readback_mismatch:{field_key or "unknown"}',
+                }
+            readbacks.append({
+                'field_key': field_key,
+                'field_label': field_label,
+                'source': source,
+                'before_value': item.get('value_before'),
+                'after_value': observed.get('value'),
+                'readback_proven': True,
+                'timestamp': captured_at,
+            })
+        return {'ok': bool(readbacks), 'field_readbacks': readbacks, 'reason': None}
 
     @staticmethod
     def _capture_save_field_integrity_snapshot(page: Page) -> dict[str, Any]:
@@ -16955,6 +17680,103 @@ class DxmLoginFlow:
         }
 
     @classmethod
+    def _capture_frozen_execution_values(
+        cls,
+        page: Page,
+        execution_payload: Mapping[str, Any],
+        *,
+        phase: str,
+    ) -> dict[str, Any]:
+        """Read real field values through the frozen binding runtime without writing."""
+
+        fields = execution_payload.get('fields')
+        payload_hash = str(execution_payload.get('payload_hash') or '').strip().upper()
+        if not isinstance(fields, list) or not fields or re.fullmatch(r'[0-9A-F]{64}', payload_hash) is None:
+            return {
+                'ok': False,
+                'phase': phase,
+                'execution_payload_hash': payload_hash,
+                'values': [],
+                'reason': 'frozen_execution_payload_invalid',
+            }
+        runtime_result = cls._fill_frozen_execution_payload_on_page(
+            page,
+            execution_payload,
+            operation='readback',
+        )
+        observations = runtime_result.get('observations')
+        if runtime_result.get('ok') is not True or not isinstance(observations, list):
+            return {
+                'ok': False,
+                'phase': phase,
+                'execution_payload_hash': payload_hash,
+                'values': [],
+                'reason': str(runtime_result.get('reason') or runtime_result.get('message') or 'frozen_execution_readback_failed')[:240],
+            }
+        observed_by_field: dict[str, Mapping[str, Any]] = {}
+        duplicate = False
+        for item in observations:
+            if not isinstance(item, Mapping):
+                continue
+            field_key = str(item.get('field_key') or '')
+            if not field_key or field_key in observed_by_field:
+                duplicate = True
+                continue
+            observed_by_field[field_key] = item
+        values: list[dict[str, Any]] = []
+        invalid_reason = 'frozen_execution_observation_set_mismatch' if duplicate else None
+        for field in fields:
+            if not isinstance(field, Mapping):
+                invalid_reason = invalid_reason or 'frozen_execution_field_invalid'
+                continue
+            field_key = str(field.get('field_key') or '').strip()
+            field_label = str(field.get('ui_label_zh') or '').strip()
+            observation = observed_by_field.get(field_key)
+            expected = field.get('resolved_value')
+            if observation is None or not field_key or not field_label:
+                invalid_reason = invalid_reason or 'frozen_execution_observation_missing'
+                continue
+            match_count = observation.get('match_count')
+            aggregate_kind = str(observation.get('aggregate_kind') or 'single')
+            binding_unambiguous = bool(
+                type(match_count) is int
+                and match_count > 0
+                and (
+                    (aggregate_kind == 'single' and match_count == 1)
+                    or (aggregate_kind == 'choice_group')
+                    or (
+                        aggregate_kind == 'sku_rows'
+                        and isinstance(expected, list)
+                        and match_count == len(expected)
+                    )
+                )
+            )
+            if observation.get('found') is not True or not binding_unambiguous:
+                invalid_reason = invalid_reason or 'frozen_execution_binding_unproven'
+                continue
+            values.append({
+                'field_key': field_key,
+                'field_label': field_label,
+                'source': 'visible_browser_frozen_execution_readback',
+                'value': cls._normalize_frozen_readback_value(
+                    expected,
+                    observation.get('value'),
+                ),
+            })
+        ok = bool(
+            invalid_reason is None
+            and len(values) == len(fields)
+            and len(observed_by_field) == len(fields)
+        )
+        return {
+            'ok': ok,
+            'phase': phase,
+            'execution_payload_hash': payload_hash,
+            'values': values if ok else [],
+            'reason': None if ok else invalid_reason or 'frozen_execution_observation_set_mismatch',
+        }
+
+    @classmethod
     def _normalize_frozen_readback_value(cls, expected: Any, observed: Any) -> Any:
         if isinstance(observed, list) and not isinstance(expected, list) and len(observed) == 1:
             observed = observed[0]
@@ -17032,6 +17854,10 @@ class DxmLoginFlow:
         expected_execution_payload: Mapping[str, Any] | None = None,
         baseline_execution_readback: Mapping[str, Any] | None = None,
         baseline_category_schema_readback: Mapping[str, Any] | None = None,
+        baseline_save_field_values: list[dict[str, Any]] | None = None,
+        mutation_action: str = 'save_only_click',
+        evidence_action: str = 'save_only',
+        post_save_observer: Callable[[], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         # A SAVE proof must be tied to the authorization that dispatched this
         # exact click, never to an earlier mutation in the same browser session.
@@ -17040,6 +17866,14 @@ class DxmLoginFlow:
             raise FrozenTargetIdentityError(
                 'FROZEN_TARGET_REQUIRED',
                 '保存操作缺少冻结商品与店铺身份，已停止。',
+            )
+        if mutation_action not in {'save_only_click', 'first_save_intent'}:
+            raise MutationAuthorizationError('SAVE_MUTATION_ACTION_INVALID')
+        if evidence_action not in {'save_only', 'first_save_intent'}:
+            raise MutationAuthorizationError('SAVE_EVIDENCE_ACTION_INVALID')
+        if mutation_action == 'first_save_intent' and not self._is_visible_dxm_editor_page(page):
+            raise MutationAuthorizationError(
+                'FIRST_SAVE_INTENT_VISIBLE_EDITOR_REQUIRED: composite discovery requires the live visible editor'
             )
 
         final_pre_dispatch_readback: dict[str, Any] = {}
@@ -17129,6 +17963,13 @@ class DxmLoginFlow:
                 'required_readback_complete': required_readback_complete is True,
                 'write_attempted': False,
                 'phase': 'before_ledger_begin_dispatch',
+                'page_kind': (
+                    'editor'
+                    if self._is_dxm_editor_url(getattr(page, 'url', ''))
+                    else 'semi_managed'
+                    if self._semi_managed_page_state(page).get('is_semi_page') is True
+                    else None
+                ),
                 'reason': None if integrity_match else (
                     'current_category_or_schema_changed_before_dispatch'
                     if not category_schema_readback_ok
@@ -17159,7 +18000,7 @@ class DxmLoginFlow:
         if self._is_visible_dxm_editor_page(page):
             save_state = self._visible_exact_save_button_state(page)
             save_state = save_state if isinstance(save_state, dict) else {'ok': False, 'reason': '保存按钮定位结果不可读'}
-            if not save_state.get('ok') or not save_state.get('rect'):
+            if not save_state.get('ok'):
                 reason = save_state.get('reason') or 'visible_native_save_button_not_ready'
                 self._trace_workflow_event(
                     'save_only:visible_exact_save_not_ready',
@@ -17194,49 +18035,38 @@ class DxmLoginFlow:
                     },
                     'published': None,
                 }
-            rect = save_state['rect']
-            center_x = float(rect.get('x') or 0) + float(rect.get('w') or 0) / 2
-            center_y = float(rect.get('y') or 0) + float(rect.get('h') or 0) / 2
             save_status_baseline = self._structured_save_status_snapshot(page, visible_browser=True)
-            network_session = self._capture_save_network_events(page, rect)
+            network_session = self._capture_save_network_events(page)
             clicked = False
             mutation_authorization: dict[str, Any] = {}
             verify_result: dict[str, Any] | None = None
+            save_dispatched_at: str | None = None
+            post_save_observation: dict[str, Any] | None = None
+            post_save_field_readbacks: dict[str, Any] = {
+                'ok': False,
+                'field_readbacks': [],
+                'reason': 'save_not_dispatched',
+            }
 
-            def final_native_save_target_guard() -> dict[str, Any]:
+            def final_semantic_save_target_guard() -> dict[str, Any]:
                 base = final_save_target_guard()
                 live_save = self._visible_exact_save_button_state(page)
-                live_rect = live_save.get('rect') if isinstance(live_save, Mapping) else None
-                planned_rect = save_state.get('rect') if isinstance(save_state.get('rect'), Mapping) else None
-
-                def same_rect() -> bool:
-                    if not isinstance(live_rect, Mapping) or not isinstance(planned_rect, Mapping):
-                        return False
-                    try:
-                        return all(
-                            abs(float(live_rect.get(key)) - float(planned_rect.get(key))) <= 1.0
-                            for key in ('x', 'y', 'w', 'h')
-                        )
-                    except (TypeError, ValueError):
-                        return False
-
                 target_exact = bool(
                     isinstance(live_save, Mapping)
                     and live_save.get('ok') is True
                     and live_save.get('text') == '保存'
                     and live_save.get('exact_save_count') == 1
-                    and live_save.get('at_point_text') == '保存'
-                    and same_rect()
+                    and live_save.get('click_method') == 'playwright_exact_role'
+                    and live_save.get('locator_index') == save_state.get('locator_index')
                 )
                 final_pre_dispatch_readback.update({
                     'ok': base.get('ok') is True and target_exact,
                     'exact_save_target': {
                         'ok': target_exact,
                         'text': live_save.get('text') if isinstance(live_save, Mapping) else None,
-                        'at_point_text': live_save.get('at_point_text') if isinstance(live_save, Mapping) else None,
                         'exact_save_count': live_save.get('exact_save_count') if isinstance(live_save, Mapping) else None,
-                        'planned_rect': dict(planned_rect or {}),
-                        'live_rect': dict(live_rect or {}),
+                        'click_method': live_save.get('click_method') if isinstance(live_save, Mapping) else None,
+                        'locator_index': live_save.get('locator_index') if isinstance(live_save, Mapping) else None,
                     },
                     'reason': None if base.get('ok') is True and target_exact else (
                         base.get('reason') or 'exact_save_target_changed_before_dispatch'
@@ -17245,19 +18075,17 @@ class DxmLoginFlow:
                 return dict(final_pre_dispatch_readback)
 
             try:
-                clicked = self._click_point_with_native_window(
+                clicked = self._click_exact_save_button(
                     page,
-                    center_x,
-                    center_y,
-                    use_viewport_metrics=False,
-                    viewport_metrics_override=save_state.get('viewport') if isinstance(save_state.get('viewport'), dict) else None,
-                    mutation_action='save_only_click',
-                    pre_dispatch_guard=final_native_save_target_guard,
+                    mutation_action=mutation_action,
+                    pre_dispatch_guard=final_semantic_save_target_guard,
+                    pre_dispatch_facts=final_pre_dispatch_readback,
                 )
                 if clicked:
+                    save_dispatched_at = self._evidence_observed_at()
                     mutation_authorization = dict(self._last_mutation_authorization_facts or {})
                     self._trace_workflow_event(
-                        'save_only:visible_native_save_click_done',
+                        'save_only:visible_semantic_save_click_done',
                         current_url=getattr(page, 'url', None),
                         result={**save_state, 'clicked': True},
                         human_step='点击保存',
@@ -17267,6 +18095,36 @@ class DxmLoginFlow:
                     except Exception:
                         time.sleep(2.5)
                     verify_result = self._visible_save_success_state(page, baseline=save_status_baseline)
+                    if verify_result.get('ok') is True:
+                        post_values = (
+                            self._capture_frozen_execution_values(
+                                page,
+                                expected_execution_payload,
+                                phase='after_save',
+                            )
+                            if expected_execution_payload is not None
+                            else self._capture_semi_managed_save_values(
+                                page,
+                                list(baseline_save_field_values or []),
+                            )
+                        )
+                        post_save_field_readbacks = self._build_canonical_save_field_readbacks(
+                            baseline_save_field_values,
+                            post_values,
+                        )
+                        if post_save_field_readbacks.get('ok') is not True:
+                            raise MutationAuthorizationError(
+                                'POST_SAVE_FIELD_READBACK_UNPROVEN: '
+                                f"{post_save_field_readbacks.get('reason') or 'unknown'}"
+                            )
+                        if post_save_observer is not None:
+                            observed = post_save_observer()
+                            if not isinstance(observed, Mapping) or observed.get('ok') is not True:
+                                raise MutationAuthorizationError(
+                                    'FIRST_SAVE_INTENT_POST_PAGE_UNPROVEN: '
+                                    f"{dict(observed or {}).get('reason') if isinstance(observed, Mapping) else 'invalid_result'}"
+                                )
+                            post_save_observation = dict(observed)
             finally:
                 network_capture = self._finalize_save_network_audit(page, network_session)
             network_events = list(network_capture['events'])
@@ -17290,7 +18148,7 @@ class DxmLoginFlow:
                     'save_result': {
                         **save_state,
                         'ok': False,
-                        'reason': 'native_exact_save_click_failed',
+                        'reason': 'playwright_exact_role_save_click_failed',
                         'failure_code': 'MUTATION_CANCELLED_BEFORE_DISPATCH',
                         'published': None,
                         'clicked': False,
@@ -17331,7 +18189,7 @@ class DxmLoginFlow:
                 'ok': combined_ok,
                 'reason': combined_reason,
                 'clicked': True,
-                'click_method': 'native_exact_save',
+                'click_method': 'playwright_exact_role',
                 'network_events': network_events[:8],
                 'network_save_result': network_result,
                 'network_audit': network_audit,
@@ -17347,6 +18205,9 @@ class DxmLoginFlow:
                 },
                 'mutation_authorization': mutation_authorization,
                 'pre_dispatch_readback': dict(final_pre_dispatch_readback),
+                'save_dispatched_at': save_dispatched_at,
+                'post_save_observation': post_save_observation,
+                'save_field_readbacks': list(post_save_field_readbacks.get('field_readbacks') or []),
                 'exact_save_target': True,
                 'save_click_dispatched': True,
                 'network_save_success': network_ok,
@@ -17359,8 +18220,8 @@ class DxmLoginFlow:
             ok = combined_ok
             evidence_ref = self._capture_scoped_evidence_screenshot(
                 page,
-                EDITOR_ACTION_SCREENSHOT_MAP['save_only'],
-                action='save_only',
+                EDITOR_ACTION_SCREENSHOT_MAP[evidence_action],
+                action=evidence_action,
                 full_page=True,
             )
             screenshot_path = Path(evidence_ref['path'])
@@ -17385,8 +18246,8 @@ class DxmLoginFlow:
         if blocking_modal.get('visible'):
             evidence_ref = self._capture_scoped_evidence_screenshot(
                 page,
-                EDITOR_ACTION_SCREENSHOT_MAP['save_only'],
-                action='save_only',
+                EDITOR_ACTION_SCREENSHOT_MAP[evidence_action],
+                action=evidence_action,
                 full_page=True,
             )
             screenshot_path = Path(evidence_ref['path'])
@@ -17416,34 +18277,7 @@ class DxmLoginFlow:
                 },
                 'published': None,
             }
-        click_result = page.evaluate(r'''() => {
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const labels = ['发布','立即发布','继续发布','保存并发布','确认发布','提交发布','保存并移入待发布','移入待发布'];
-          const isUsableAction = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-          };
-          const candidates = Array.from(document.querySelectorAll('button,a,[role="button"]')).filter(isUsableAction).map(el => ({el, text:norm(el.innerText || el.textContent)}));
-          const exactSaves = candidates.filter(item => item.text === '保存');
-          if (exactSaves.length !== 1) {
-            const forbidden = candidates.find(x => labels.includes(x.text));
-            if (forbidden) return {ok:false, reason:`命中发布按钮：${forbidden.text}`, exact_save_count:exactSaves.length, published:null};
-            const fallback = Array.from(document.querySelectorAll('button,a,[role="button"],span,div')).filter(isUsableAction).map(el => ({text:norm(el.innerText || el.textContent)}));
-            const fallbackForbidden = fallback.find(x => labels.includes(x.text));
-            return {ok:false, reason: fallbackForbidden ? `命中发布按钮：${fallbackForbidden.text}` : `精确保存按钮数量不是 1：${exactSaves.length}`, exact_save_count:exactSaves.length, published:null};
-          }
-          const save = exactSaves[0];
-          const r = save.el.getBoundingClientRect();
-          return {
-            ok:true,
-            text:'保存',
-            exact_save_count:exactSaves.length,
-            rect:{x:r.x,y:r.y,w:r.width,h:r.height},
-            message:'已定位保存按钮',
-            published:null
-          };
-        }''')
+        click_result = self._visible_exact_save_button_state(page)
         click_result = click_result or {}
         if dismissed_modals:
             click_result = {
@@ -17453,17 +18287,23 @@ class DxmLoginFlow:
             }
         save_status_baseline = (
             self._structured_save_status_snapshot(page, visible_browser=False)
-            if click_result.get('ok') and click_result.get('rect')
+            if click_result.get('ok')
             else None
         )
-        network_session = self._capture_save_network_events(page, click_result.get('rect'))
+        network_session = self._capture_save_network_events(page)
         mutation_authorization: dict[str, Any] = {}
         page_result = click_result
+        save_dispatched_at: str | None = None
+        post_save_field_readbacks: dict[str, Any] = {
+            'ok': False,
+            'field_readbacks': [],
+            'reason': 'save_not_dispatched',
+        }
         try:
-            if click_result.get('ok') and click_result.get('rect'):
+            if click_result.get('ok'):
                 clicked = self._click_exact_save_button(
                     page,
-                    mutation_action='save_only_click',
+                    mutation_action=mutation_action,
                     pre_dispatch_guard=final_save_target_guard,
                     pre_dispatch_facts=final_pre_dispatch_readback,
                 )
@@ -17475,10 +18315,11 @@ class DxmLoginFlow:
                         'reason': 'exact_save_click_not_dispatched',
                     }
                 else:
+                    save_dispatched_at = self._evidence_observed_at()
                     click_result = {
                         **click_result,
                         'clicked': True,
-                        'click_method': 'dom_exact_save',
+                        'click_method': 'playwright_exact_role',
                         'message': '已点击保存',
                     }
             mutation_authorization = dict(self._last_mutation_authorization_facts or {})
@@ -17490,6 +18331,32 @@ class DxmLoginFlow:
                     **click_result,
                     **self._save_status_transition_result(save_status_baseline, current_save_status),
                 }
+                if page_result.get('ok') is True:
+                    post_values = (
+                        self._capture_frozen_execution_values(
+                            page,
+                            expected_execution_payload,
+                            phase='after_save',
+                        )
+                        if expected_execution_payload is not None
+                        else self._capture_semi_managed_save_values(
+                            page,
+                            list(baseline_save_field_values or []),
+                        )
+                    )
+                    post_save_field_readbacks = self._build_canonical_save_field_readbacks(
+                        baseline_save_field_values,
+                        post_values,
+                    )
+                    if post_save_field_readbacks.get('ok') is not True:
+                        raise MutationAuthorizationError(
+                            'POST_SAVE_FIELD_READBACK_UNPROVEN: '
+                            f"{post_save_field_readbacks.get('reason') or 'unknown'}"
+                        )
+                    if post_save_observer is not None:
+                        raise MutationAuthorizationError(
+                            'FIRST_SAVE_INTENT_VISIBLE_EDITOR_REQUIRED: DOM fallback is forbidden'
+                        )
         finally:
             network_capture = self._finalize_save_network_audit(page, network_session)
         network_events = list(network_capture['events'])
@@ -17532,6 +18399,9 @@ class DxmLoginFlow:
             },
             'mutation_authorization': mutation_authorization,
             'pre_dispatch_readback': dict(final_pre_dispatch_readback),
+            'save_dispatched_at': save_dispatched_at,
+            'post_save_observation': None,
+            'save_field_readbacks': list(post_save_field_readbacks.get('field_readbacks') or []),
             'exact_save_target': bool(
                 click_result.get('ok') is True
                 and str(click_result.get('text') or '') == '保存'
@@ -17547,8 +18417,8 @@ class DxmLoginFlow:
             verify_result['success_text'] = page_result.get('success_text') or network_result.get('message') or '保存成功'
         evidence_ref = self._capture_scoped_evidence_screenshot(
             page,
-            EDITOR_ACTION_SCREENSHOT_MAP['save_only'],
-            action='save_only',
+            EDITOR_ACTION_SCREENSHOT_MAP[evidence_action],
+            action=evidence_action,
             full_page=True,
         )
         screenshot_path = Path(evidence_ref['path'])
@@ -17571,116 +18441,77 @@ class DxmLoginFlow:
         }
 
     def _visible_exact_save_button_state(self, page: Page) -> dict[str, Any]:
+        """Resolve exactly one actionable SAVE through Playwright semantics."""
+
         self._trace_workflow_event(
             'save_only:visible_exact_save_locator_start',
             current_url=getattr(page, 'url', None),
             human_step='定位保存按钮',
         )
-        script = r'''() => {
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const textOf = (el) => norm(el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
-          const rectOf = (el) => {
-            const r = el.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height, top:r.top, bottom:r.bottom, left:r.left, right:r.right};
-          };
-          const visible = (el) => {
-            if (!el || !el.getBoundingClientRect) return false;
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0
-              && style.visibility !== 'hidden'
-              && style.display !== 'none'
-              && style.pointerEvents !== 'none'
-              && !el.disabled
-              && el.getAttribute('aria-disabled') !== 'true';
-          };
-          const dangerousTerms = ['发布','立即发布','继续发布','保存并发布','确认发布','提交发布','保存并移入待发布','移入待发布','批量发布','一键发布'];
-          const actions = Array.from(document.querySelectorAll('button,a,[role="button"]'))
-            .filter(visible)
-            .map((el, index) => ({el, index, text:textOf(el), rect:rectOf(el), tag:String(el.tagName || '').toLowerCase()}));
-          const forbiddenActions = actions
-            .filter(item => dangerousTerms.includes(item.text))
-            .map(item => ({text:item.text, rect:item.rect, tag:item.tag, index:item.index}));
-          const dialogs = Array.from(document.querySelectorAll('.ant-modal,.ant-modal-wrap,.el-dialog,.el-dialog__wrapper,[role="dialog"],[class*="modal"],[class*="Modal"],[class*="popup"],[class*="Popup"],[class*="dialog"],[class*="Dialog"]'))
-            .filter(visible);
-          const exactSaves = actions.filter(item => item.text === '保存');
-          if (exactSaves.length !== 1) {
-            const forbidden = forbiddenActions[0];
-            return {
-              ok:false,
-              reason: forbidden
-                ? `只看到发布类按钮：${forbidden.text}`
-                : `精确“保存”按钮数量不是 1：${exactSaves.length}`,
-              exact_save_count:exactSaves.length,
-              forbidden_actions: forbiddenActions,
-              published:null,
-              viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
-            };
-          }
-          const targetItem = exactSaves[0];
-          const target = targetItem.el;
-          if (dialogs.some(dialog => dialog.contains(target))) {
-            return {
-              ok:false,
-              reason:'精确“保存”按钮位于弹窗内，不能确认是商品编辑页保存',
-              rect:targetItem.rect,
-              text:targetItem.text,
-              forbidden_actions: forbiddenActions,
-              published:null,
-              viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
-            };
-          }
-          target.scrollIntoView({block:'center', inline:'center'});
-          const rect = rectOf(target);
-          const x = rect.x + rect.w / 2;
-          const y = rect.y + rect.h / 2;
-          if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
-            return {
-              ok:false,
-              reason:'精确“保存”按钮不在当前可点击视口内',
-              rect,
-              text:targetItem.text,
-              forbidden_actions: forbiddenActions,
-              published:null,
-              viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
-            };
-          }
-          const atPoint = document.elementFromPoint(x, y);
-          const actual = atPoint && atPoint.closest ? (atPoint.closest('button,a,[role="button"]') || target) : target;
-          const actualText = textOf(actual);
-          if (actualText !== '保存') {
-            return {
-              ok:false,
-              reason:`保存按钮中心被其他元素遮挡：${actualText || '未知元素'}`,
-              rect,
-              text:targetItem.text,
-              at_point_text:actualText,
-              forbidden_actions: forbiddenActions,
-              published:null,
-              viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
-            };
-          }
-          return {
-            ok:true,
-            text:'保存',
-            rect,
-            center:{x, y},
-            at_point_text:actualText,
-            exact_save_count: exactSaves.length,
-            forbidden_actions: forbiddenActions,
-            published:null,
-            viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
-          };
-        }'''
         try:
-            result = self._evaluate_visible_page_function_via_devtools(page, script, timeout=1800)
+            exact_buttons = page.get_by_role('button', name='保存', exact=True)
+            semantic_match_count = exact_buttons.count()
+            candidates: list[dict[str, Any]] = []
+            for index in range(semantic_match_count):
+                candidate = exact_buttons.nth(index)
+                visible = candidate.is_visible()
+                enabled = candidate.is_enabled()
+                inside_dialog = bool(
+                    candidate.evaluate(
+                        "(element) => Boolean(element.closest('[role=\"dialog\"]'))"
+                    )
+                )
+                trial_ok = False
+                trial_error = None
+                if visible and enabled and not inside_dialog:
+                    try:
+                        candidate.click(trial=True, timeout=3000)
+                        trial_ok = True
+                    except Exception as exc:
+                        trial_error = str(exc)[:160]
+                candidates.append({
+                    'index': index,
+                    'visible': visible,
+                    'enabled': enabled,
+                    'inside_dialog': inside_dialog,
+                    'trial_ok': trial_ok,
+                    'trial_error': trial_error,
+                })
+            actionable = [item for item in candidates if item['trial_ok'] is True]
+            if len(actionable) != 1:
+                result = {
+                    'ok': False,
+                    'reason': (
+                        '精确语义“保存”按钮不是唯一可见、启用且可操作控件：'
+                        f'{len(actionable)}'
+                    ),
+                    'text': '保存',
+                    'exact_save_count': len(actionable),
+                    'semantic_match_count': semantic_match_count,
+                    'candidates': candidates,
+                    'click_method': 'playwright_exact_role',
+                    'published': None,
+                }
+            else:
+                result = {
+                    'ok': True,
+                    'reason': None,
+                    'text': '保存',
+                    'exact_save_count': 1,
+                    'semantic_match_count': semantic_match_count,
+                    'locator_index': actionable[0]['index'],
+                    'click_method': 'playwright_exact_role',
+                    'published': None,
+                }
         except Exception as exc:
-            devtools_reason = str(exc)[:160]
             result = {
                 'ok': False,
-                'reason': f'保存按钮精确文本定位通道不可用或失败：{devtools_reason}',
+                'reason': f'精确语义“保存”按钮定位失败：{str(exc)[:160]}',
+                'text': '保存',
+                'exact_save_count': 0,
+                'semantic_match_count': None,
+                'click_method': 'playwright_exact_role',
                 'published': None,
-                'native_fallback': None,
             }
         self._trace_workflow_event(
             'save_only:visible_exact_save_locator_done',
@@ -17688,8 +18519,7 @@ class DxmLoginFlow:
             result=result,
             human_step='定位保存按钮',
         )
-        return result if isinstance(result, dict) else {'ok': False, 'reason': '保存按钮定位结果不可读', 'published': None}
-
+        return result
     def _visible_exact_save_button_state_from_native_snapshot(
         self,
         page: Page,
@@ -18346,106 +19176,54 @@ class DxmLoginFlow:
         pre_dispatch_guard: Callable[[], Any] | None = None,
         pre_dispatch_facts: dict[str, Any] | None = None,
     ) -> bool:
-        target_handle: Any | None = None
-        target_descriptor: dict[str, Any] = {}
+        """Click one exact semantic SAVE locator without coordinate/DOM fallbacks."""
+
+        selected_index: int | None = None
         operation_entered = False
+        target_descriptor: dict[str, Any] = {}
 
         def capture_exact_target_guard() -> dict[str, Any]:
-            nonlocal target_handle, target_descriptor
+            nonlocal selected_index, target_descriptor
             base = pre_dispatch_guard() if callable(pre_dispatch_guard) else {'ok': True}
             base_ok = base is True or (
                 isinstance(base, Mapping) and base.get('ok') is True
             )
             facts = dict(base) if isinstance(base, Mapping) else {'ok': base_ok}
             if not base_ok:
-                return facts
-            handle = page.evaluate_handle(r'''() => {
-              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-              const visible = (el) => {
-                if (!el || !el.getBoundingClientRect) return false;
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0
-                  && r.bottom > 0 && r.top < window.innerHeight
-                  && style.visibility !== 'hidden' && style.display !== 'none'
-                  && style.pointerEvents !== 'none'
-                  && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-              };
-              const exact = Array.from(document.querySelectorAll('button,a,[role="button"]'))
-                .filter(visible)
-                .filter(el => norm(el.innerText || el.textContent) === '保存');
-              if (exact.length !== 1) return null;
-              exact[0].scrollIntoView({block:'center', inline:'center'});
-              return exact[0];
-            }''')
-            element = handle.as_element()
-            if element is None:
-                try:
-                    handle.dispose()
-                except Exception:
-                    pass
-                facts.update({
-                    'ok': False,
-                    'reason': 'exact_save_target_not_unique',
-                    'exact_save_target': {'ok': False, 'exact_save_count': None},
-                })
                 if pre_dispatch_facts is not None:
                     pre_dispatch_facts.update(facts)
                 return facts
-            target_handle = element
-            descriptor = element.evaluate(r'''(target) => {
-              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-              const visible = (el) => {
-                if (!el || !el.getBoundingClientRect) return false;
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0
-                  && r.bottom > 0 && r.top < window.innerHeight
-                  && style.visibility !== 'hidden' && style.display !== 'none'
-                  && style.pointerEvents !== 'none'
-                  && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-              };
-              const rect = target.getBoundingClientRect();
-              const exact = Array.from(document.querySelectorAll('button,a,[role="button"]'))
-                .filter(visible)
-                .filter(el => norm(el.innerText || el.textContent) === '保存');
-              const x = rect.x + rect.width / 2;
-              const y = rect.y + rect.height / 2;
-              const atPoint = document.elementFromPoint(x, y);
-              const actual = atPoint?.closest?.('button,a,[role="button"]') || null;
-              const text = norm(target.innerText || target.textContent);
-              const atPointText = norm(actual?.innerText || actual?.textContent);
-              const ok = exact.length === 1
-                && exact[0] === target
-                && actual === target
-                && text === '保存'
-                && atPointText === '保存';
-              return {
-                ok,
-                text,
-                at_point_text:atPointText,
-                exact_save_count:exact.length,
-                rect:{x:rect.x,y:rect.y,w:rect.width,h:rect.height},
-                reason:ok ? null : 'exact_save_target_changed_before_dispatch',
-              };
-            }''')
-            target_descriptor = dict(descriptor) if isinstance(descriptor, Mapping) else {}
-            if target_descriptor.get('ok') is not True:
-                try:
-                    target_handle.dispose()
-                except Exception:
-                    pass
-                target_handle = None
-                facts.update({
-                    'ok': False,
-                    'reason': target_descriptor.get('reason') or 'exact_save_target_changed_before_dispatch',
-                    'exact_save_target': dict(target_descriptor),
-                })
-                if pre_dispatch_facts is not None:
-                    pre_dispatch_facts.update(facts)
-                return facts
+            observed = self._visible_exact_save_button_state(page)
+            target_exact = bool(
+                observed.get('ok') is True
+                and observed.get('text') == '保存'
+                and observed.get('exact_save_count') == 1
+                and observed.get('click_method') == 'playwright_exact_role'
+                and isinstance(observed.get('locator_index'), int)
+                and not isinstance(observed.get('locator_index'), bool)
+            )
+            selected_index = (
+                int(observed['locator_index'])
+                if target_exact
+                else None
+            )
+            target_descriptor = {
+                'ok': target_exact,
+                'text': observed.get('text'),
+                'exact_save_count': observed.get('exact_save_count'),
+                'semantic_match_count': observed.get('semantic_match_count'),
+                'locator_index': selected_index,
+                'click_method': observed.get('click_method'),
+                'reason': None if target_exact else (
+                    observed.get('reason')
+                    or 'exact_semantic_save_target_changed_before_dispatch'
+                ),
+            }
             facts.update({
-                'ok': True,
+                'ok': base_ok and target_exact,
+                'reason': None if base_ok and target_exact else (
+                    facts.get('reason') or target_descriptor['reason']
+                ),
                 'exact_save_target': dict(target_descriptor),
             })
             if pre_dispatch_facts is not None:
@@ -18454,20 +19232,34 @@ class DxmLoginFlow:
 
         def dispatch_operation() -> dict[str, Any]:
             nonlocal operation_entered
-            if target_handle is None:
+            observed = self._visible_exact_save_button_state(page)
+            if (
+                selected_index is None
+                or observed.get('ok') is not True
+                or observed.get('exact_save_count') != 1
+                or observed.get('click_method') != 'playwright_exact_role'
+                or observed.get('locator_index') != selected_index
+            ):
                 raise MutationAuthorizationError(
-                    'MUTATION_TARGET_DRIFT: exact save ElementHandle was not captured before dispatch'
+                    'MUTATION_TARGET_DRIFT: exact semantic SAVE changed after authorization'
                 )
+            locator = page.get_by_role('button', name='保存', exact=True).nth(
+                selected_index
+            )
             operation_entered = True
-            dispatched = target_handle.evaluate(r'''(target) => {
-              target.click();
-              return {ok:true, dispatched:true, method:'dom_exact_text'};
-            }''')
-            if not isinstance(dispatched, Mapping) or dispatched.get('dispatched') is not True:
-                raise RuntimeError('MUTATION_DISPATCH_NOT_CONFIRMED: exact save click was not dispatched')
-            return dict(dispatched)
+            locator.click(timeout=5000, no_wait_after=True)
+            return {
+                'ok': True,
+                'dispatched': True,
+                'method': 'playwright_exact_role',
+                'locator_index': selected_index,
+            }
 
         try:
+            # First read rejects ambiguity before asking the mutation ledger to
+            # enter dispatch.  The authorizer invokes the same guard again, and
+            # dispatch_operation performs a final semantic re-read.
+            self._run_mutation_pre_dispatch_guard(capture_exact_target_guard)
             if mutation_action:
                 authorization = self._dispatch_authorized_mutation(
                     mutation_action,
@@ -18476,47 +19268,40 @@ class DxmLoginFlow:
                 )
                 dispatched = authorization.get('operation_result')
             else:
-                self._run_mutation_pre_dispatch_guard(capture_exact_target_guard)
                 authorization = None
                 dispatched = dispatch_operation()
             if isinstance(dispatched, Mapping) and dispatched.get('dispatched') is True:
                 self._trace_workflow_event(
-                    'save_only:exact_save_click_done',
-                    method='dom_exact_text',
+                    'save_only:exact_semantic_save_click_done',
+                    method='playwright_exact_role',
                     result={**target_descriptor, **dict(dispatched)},
                     authorization=(authorization or {}).get('authorization_facts'),
                     human_step='点击保存',
                 )
                 return True
-        except Exception as exc:  # noqa: BLE001 - exact save failures are fail-closed.
+        except Exception as exc:
             if isinstance(exc, MutationAuthorizationError):
                 raise
             if operation_entered:
                 raise MutationAuthorizationError(
-                    f'MUTATION_OUTCOME_UNKNOWN: DOM exact-save click failed after dispatch operation entered: {exc}'
+                    'MUTATION_OUTCOME_UNKNOWN: semantic SAVE locator click failed '
+                    f'after dispatch operation entered: {exc}'
                 ) from exc
             self._trace_workflow_event(
-                'save_only:exact_save_dom_scroll_failed',
+                'save_only:exact_semantic_save_click_failed',
                 error=str(exc)[:240],
                 human_step='点击保存',
             )
             return False
-        finally:
-            if target_handle is not None:
-                try:
-                    target_handle.dispose()
-                except Exception:
-                    pass
         return False
-
-    def _capture_save_network_events(self, page: Page, save_rect: dict[str, Any] | None) -> dict[str, Any]:
+    def _capture_save_network_events(self, page: Page) -> dict[str, Any]:
         session: dict[str, Any] = {
             'events': [],
             'listeners': [],
             'registered': False,
             'page_origin': None,
         }
-        if not save_rect or not hasattr(page, 'on'):
+        if not hasattr(page, 'on'):
             return session
         try:
             current = urlparse(str(getattr(page, 'url', '') or ''))
@@ -18537,6 +19322,46 @@ class DxmLoginFlow:
         def request_resource_type(request: Any) -> str | None:
             return str(getattr(request, 'resource_type', '') or '') or None
 
+        def request_body_bytes(request: Any) -> bytes | None:
+            try:
+                body = getattr(request, 'post_data_buffer', None)
+                body = body() if callable(body) else body
+            except Exception:
+                body = None
+            if isinstance(body, memoryview):
+                body = body.tobytes()
+            if isinstance(body, bytearray):
+                body = bytes(body)
+            if isinstance(body, bytes):
+                return body
+            try:
+                text = getattr(request, 'post_data', None)
+                text = text() if callable(text) else text
+            except Exception:
+                text = None
+            return str(text).encode('utf-8') if isinstance(text, str) else None
+
+        def response_body_bytes(response: Any) -> bytes | None:
+            try:
+                body = response.body()
+            except Exception:
+                return None
+            if isinstance(body, memoryview):
+                body = body.tobytes()
+            if isinstance(body, bytearray):
+                body = bytes(body)
+            return body if isinstance(body, bytes) else None
+
+        def network_evidence_id(kind: str, facts: Mapping[str, Any]) -> str:
+            encoded = json.dumps(
+                {'kind': kind, **dict(facts)},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+                allow_nan=False,
+            ).encode('utf-8')
+            return f'dxm-network-{kind}:{hashlib.sha256(encoded).hexdigest()}'
+
         def on_request(request) -> None:
             url = request_url(request)
             method = request_method(request)
@@ -18555,6 +19380,21 @@ class DxmLoginFlow:
                 'mutation_kind': mutation_kind,
                 'request_observed': True,
             }
+            request_body = request_body_bytes(request)
+            request_observed_at = self._evidence_observed_at()
+            if request_body is not None:
+                item['request_body_sha256'] = hashlib.sha256(request_body).hexdigest()
+            item['request_observed_at'] = request_observed_at
+            if item.get('request_body_sha256'):
+                item['request_evidence_id'] = network_evidence_id(
+                    'request',
+                    {
+                        'url': url,
+                        'method': method,
+                        'body_sha256': item['request_body_sha256'],
+                        'observed_at': request_observed_at,
+                    },
+                )
             requests_by_id[id(request)] = item
             events.append(item)
 
@@ -18581,13 +19421,31 @@ class DxmLoginFlow:
                 }
                 events.append(item)
             item['status'] = getattr(response, 'status', None)
-            try:
-                item['json'] = response.json()
-            except Exception:
+            response_body = response_body_bytes(response)
+            response_observed_at = self._evidence_observed_at()
+            if response_body is not None:
+                item['response_body_sha256'] = hashlib.sha256(response_body).hexdigest()
+                item['response_observed_at'] = response_observed_at
+                item['response_evidence_id'] = network_evidence_id(
+                    'response',
+                    {
+                        'url': url,
+                        'method': method,
+                        'status': item.get('status'),
+                        'body_sha256': item['response_body_sha256'],
+                        'observed_at': response_observed_at,
+                    },
+                )
                 try:
-                    item['text_excerpt'] = str(response.text() or '')[:500]
+                    item['json'] = json.loads(response_body.decode('utf-8-sig'))
                 except Exception:
-                    item['text_excerpt'] = ''
+                    try:
+                        item['json'] = response.json()
+                    except Exception:
+                        item['text_excerpt'] = response_body.decode('utf-8', errors='replace')[:500]
+            else:
+                item['response_observed_at'] = response_observed_at
+                item['response_body_capture_error'] = 'response_body_unavailable'
 
         try:
             page.on('request', on_request)
@@ -18792,7 +19650,31 @@ class DxmLoginFlow:
         code_ok = code in (0, '0')
         success_text = str(msg or '').strip()
         text_ok = any(term in success_text for term in ('保存成功', '编辑保存成功', '编辑成功'))
-        receipt_complete = bool(status_ok and code_ok and text_ok)
+        request_body_sha256 = str(item.get('request_body_sha256') or '').strip()
+        response_body_sha256 = str(item.get('response_body_sha256') or '').strip()
+        request_evidence_id = str(item.get('request_evidence_id') or '').strip()
+        response_evidence_id = str(item.get('response_evidence_id') or '').strip()
+        request_observed_at = str(item.get('request_observed_at') or '').strip()
+        response_observed_at = str(item.get('response_observed_at') or '').strip()
+        try:
+            request_time = datetime.fromisoformat(request_observed_at.replace('Z', '+00:00'))
+            response_time = datetime.fromisoformat(response_observed_at.replace('Z', '+00:00'))
+            ordered_absolute_times = bool(
+                request_time.tzinfo is not None
+                and response_time.tzinfo is not None
+                and request_time <= response_time
+            )
+        except (TypeError, ValueError):
+            ordered_absolute_times = False
+        canonical_evidence_complete = bool(
+            re.fullmatch(r'[0-9A-Fa-f]{64}', request_body_sha256)
+            and re.fullmatch(r'[0-9A-Fa-f]{64}', response_body_sha256)
+            and request_evidence_id
+            and response_evidence_id
+            and request_evidence_id != response_evidence_id
+            and ordered_absolute_times
+        )
+        receipt_complete = bool(status_ok and code_ok and text_ok and canonical_evidence_complete)
         return {
             'ok': receipt_complete,
             'url': item.get('url'),
@@ -18802,9 +19684,25 @@ class DxmLoginFlow:
             'msg': msg,
             'message': msg,
             'raw': payload,
+            'request_body_sha256': request_body_sha256,
+            'response_body_sha256': response_body_sha256,
+            'request_observed_at': request_observed_at,
+            'response_observed_at': response_observed_at,
+            'request_evidence_id': request_evidence_id,
+            'response_evidence_id': response_evidence_id,
             'receipt_count': 1,
             'receipt_complete': receipt_complete,
-            **({} if receipt_complete else {'reason': '唯一保存回执未同时满足状态、代码和成功消息'}),
+            **(
+                {}
+                if receipt_complete
+                else {
+                    'reason': (
+                        '唯一保存回执缺少可重放的请求/响应 body、时间或证据身份'
+                        if not canonical_evidence_complete
+                        else '唯一保存回执未同时满足状态、代码和成功消息'
+                    )
+                }
+            ),
         }
 
     def _ensure_page(self) -> Page:
@@ -19791,7 +20689,6 @@ class DxmLoginFlow:
     def _dismiss_blocking_modals(self, page: Page) -> int:
         dismissed = 0
         trace: list[dict[str, Any]] = []
-        repeated_clicks: dict[str, int] = {}
         self._last_dismiss_blocking_modals_trace = trace
         for _ in range(10):
             try:
@@ -20008,120 +20905,29 @@ class DxmLoginFlow:
             })
             if result.get('dangerous'):
                 raise RuntimeError(result.get('reason') or '检测到危险弹窗，已停止自动点击')
-            if not result.get('clicked'):
-                return dismissed
-            rect = result.get('rect')
-            click_key = json.dumps({'clicked': result.get('clicked'), 'rect': rect}, ensure_ascii=False, sort_keys=True)
-            repeated_clicks[click_key] = repeated_clicks.get(click_key, 0) + 1
-            if repeated_clicks[click_key] >= 3:
-                removed = self._remove_stuck_notice_modal(page)
-                if removed.get('removed'):
-                    trace[-1]['fallback'] = 'remove_stuck_notice_modal'
-                    trace[-1]['removed_modal'] = removed
-                    dismissed += 1
-                    page.wait_for_timeout(800)
-                    continue
-                trace[-1]['fallback'] = 'escape_after_repeated_click'
-                trace[-1]['remove_attempt'] = removed
-                page.keyboard.press('Escape')
-                dismissed += 1
-                page.wait_for_timeout(800)
-                continue
-            if result.get('clicked') == 'escape':
-                page.keyboard.press('Escape')
-                dismissed += 1
-                page.wait_for_timeout(800)
-                continue
-            if rect:
-                self._click_rect_center(page, rect)
-                dismissed += 1
-            page.wait_for_timeout(800)
+            # The legacy detector only returns text plus a rectangle.  That is
+            # not a stable semantic binding and therefore cannot authorize a
+            # click.  Preserve every visible blocker until a unique, real
+            # Playwright control is bound for that exact modal.  In particular,
+            # do not use Escape, rectangle centres, or DOM deletion/hiding.
+            trace[-1]['fallback'] = 'blocking_modal_preserved_fail_closed'
+            trace[-1]['reason'] = 'exact_semantic_close_control_not_bound'
+            self._trace_workflow_event(
+                'dismiss_blocking_modals:modal_preserved',
+                result=trace[-1],
+                human_step='弹窗仍阻断，停止继续操作',
+            )
+            return dismissed
         return dismissed
 
-    def _remove_stuck_notice_modal(self, page: Page) -> dict[str, Any]:
-        try:
-            return page.evaluate(r'''() => {
-              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-              const isVisible = (el) => {
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-              };
-              const modalSelectors = [
-                '.notice-list-modal',
-                '.ant-modal-wrap',
-                '.ant-modal',
-                '.el-dialog',
-                '.el-dialog__wrapper',
-                '[role="dialog"]',
-                '[class*="modal"]',
-                '[class*="Modal"]',
-                '[class*="popup"]',
-                '[class*="Popup"]',
-                '[class*="activity"]',
-                '[class*="Activity"]',
-                '[class*="campaign"]',
-                '[class*="Campaign"]',
-                '[class*="remind"]',
-                '[class*="Remind"]',
-                '[class*="dialog"]',
-                '[class*="Dialog"]'
-              ].join(',');
-              const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布'];
-              const noticeTerms = ['公告', '通知', '活动', '重要提醒', '最新特惠', '忽略提示', '我知道', '知道了'];
-              const classTerms = ['notice-list-modal', 'important-remind', 'comm-vip-tips-modal', 'activity', 'campaign'];
-              const candidates = Array.from(document.querySelectorAll(modalSelectors))
-                .map((el, index) => ({el, index}))
-                .filter(item => {
-                  const el = item.el;
-                  if (!isVisible(el) || el.classList.contains('ant-modal-mask')) return false;
-                  const text = norm(el.innerText || el.textContent);
-                  const cls = String(el.className || '');
-                  if (dangerousTerms.some(term => text.includes(norm(term)))) return false;
-                  if (text.includes('从图片银行选择') || text.includes('图片银行的分组')) return false;
-                  return noticeTerms.some(term => text.includes(norm(term)))
-                    || classTerms.some(term => cls.includes(term));
-                });
-              candidates.sort((a, b) => {
-                const styleA = window.getComputedStyle(a.el);
-                const styleB = window.getComputedStyle(b.el);
-                const zA = Number.parseInt(styleA.zIndex || '0', 10) || 0;
-                const zB = Number.parseInt(styleB.zIndex || '0', 10) || 0;
-                return zB - zA || b.index - a.index;
-              });
-              const removables = [];
-              const seen = new Set();
-              for (const item of candidates) {
-                const removable = item.el.closest('.ant-modal-wrap, .el-dialog__wrapper, [role="dialog"]') || item.el;
-                if (!removable || seen.has(removable)) continue;
-                seen.add(removable);
-                removables.push(removable);
-              }
-              if (!removables.length) return {removed:false, reason:'no_notice_modal'};
-              const removedItems = removables.map(el => ({
-                text: textOf(el).slice(0, 300),
-                cls: String(el.className || ''),
-              }));
-              for (const removable of removables) {
-                removable.remove();
-              }
-              Array.from(document.querySelectorAll('.ant-modal-mask, .modal-backdrop, [class*="modal-mask"]'))
-                .filter(isVisible)
-                .forEach(mask => {
-                  try { mask.remove(); } catch (_) { mask.style.display = 'none'; }
-                });
-              return {
-                removed:true,
-                removed_count: removedItems.length,
-                text: removedItems[0]?.text || '',
-                cls: removedItems[0]?.cls || '',
-                removed_items: removedItems,
-              };
-            }''') or {'removed': False, 'reason': 'empty_result'}
-        except Exception as exc:  # noqa: BLE001 - best-effort modal cleanup fallback.
-            return {'removed': False, 'reason': str(exc)[:240]}
+    @staticmethod
+    def _remove_stuck_notice_modal(_page: Page) -> dict[str, Any]:
+        """DOM deletion/hiding is forbidden; a stuck modal remains a blocker."""
 
+        return {
+            'removed': False,
+            'reason': 'DOM_MODAL_MUTATION_FALLBACK_FORBIDDEN',
+        }
     def _wait_for_body_text(
         self,
         page: Page,
