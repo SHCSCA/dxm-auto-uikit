@@ -244,3 +244,11 @@ discoveryBoundaryImplemented=false
 - 当前仅 `semiManaged` 能从 FIRST_SAVE_INTENT 现有事实产 canonical capability receipt；五项 preflight 仍全部显式 fail-closed，其他 capability 与 `path_b_section_receipts` 没有足够真实 producer。历史 Path B 动作仍有坐标/DOM 路径，故不得执行真实 Path B。
 - 最终只读静态输出：`PYTHON_AST_OK 24`；`POWERSHELL_PARSE_OK 1`；`JSON_SCHEMA_PARSE_OK 1`；`OBJECTIVE_ALLOWLIST_OK 29`；`HARD_CONSTRAINT_STATIC_OK save=semantic network=page_only modal=fail_closed precheck=absent release=A_only`；`git diff --check` exit 0（仅 LF→CRLF 提示）。
 - 环境输出：`scopeEnvironmentConfigured=false`、`scopeFileExists=false`、`worktreeStatusCount=29`、`main@e6069d06c2c4154e8813aa1ef0a6ae038cf235cc`。继续阶段没有重跑 pytest、build、应用 import、服务、Reader、浏览器、Shadow、Discovery 或 Formal；真实 browser action / physical mutation / publish / auto retry 仍为 `0 / 0 / 0 / 0`。
+
+## 11. 2026-09-01 分支归并、文档与远端交付回执
+
+- 权威仓再次确认为 `D:/Desktop/py/dxm-auto-uikit`；`C:/Users/wz/Desktop/py/dxm-auto-uikit` 仍返回 `fatal: not a git repository`，未在镜像目录执行 Git 写操作。
+- `git fetch --prune origin` 后，`origin/main...main = 0/0`。`feature/dxm-production-two-stage@42de6d5` 是 `main` 祖先，`main...feature/dxm-production-two-stage = 78/0`，且既有 `af01446` 已完成主线合并；因此本轮没有制造空 merge commit。
+- 提交前静态门重新通过：`PYTHON_AST_OK 24`、`POWERSHELL_PARSE_OK 1`、`JSON_SCHEMA_PARSE_OK 1`、`OBJECTIVE_ALLOWLIST_OK 29`、`git diff --cached --check` exit 0、staged secret literal pattern hits 0。按此前一次性测试约束没有重跑 pytest，也没有启动 build、应用、服务或浏览器。
+- 29 个实现/测试/schema/driver/report/runbook/status 文件提交为 `90e8233`（`feat: harden real DXM Path B system flow`），并由 `e6069d0..90e8233` 成功推送到 `origin/main`。
+- Git 同步不改变业务验收结论：没有真实 scope、没有当次 persistent-session 证据，Shadow / Discovery / Formal 与真实 browser action / physical mutation / publish / auto retry 仍为 `0 / 0 / 0` 与 `0 / 0 / 0 / 0`；`INTERNAL NON_READY / BLOCKED` 继续由 `BLOCKED.md` 顶部裁定。

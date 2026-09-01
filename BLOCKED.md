@@ -4,13 +4,14 @@
 
 用户已裁决产品范围和类目迁移权限，当前没有待问的产品选择；以下均是实现、证据或交付门禁。任何一项存在时均不得宣称 `MVP_READY / PROD_READY`。
 
-## 2026-08-31 real Path B system-flow 当前裁定
+## 2026-09-01 real Path B system-flow 当前裁定
 
-**结论：`INTERNAL NON_READY / BLOCKED`。公开系统流、Discovery 原子边界、Discovery→Formal fresh lineage、逐 SAVE 权威账本与验收重建已在源码层收紧；但生产 Path B 的五项 capability 与 14 个 section producer/executor 尚未全部有可复核的真实 UI 事实。当前也没有可用的当次真实 scope/持久会话，且实现工作树不 clean，因此没有运行 Shadow、Discovery、Formal，没有打开真实商品编辑页；真实 mutation / publish / auto retry 均为 0。**
+**结论：`INTERNAL NON_READY / BLOCKED`。公开系统流、Discovery 原子边界、Discovery→Formal fresh lineage、逐 SAVE 权威账本与验收重建已提交并推送到 `main@90e8233`；但生产 Path B 的五项 capability 与 14 个 section producer/executor 尚未全部有可复核的真实 UI 事实。当前也没有可用的当次真实 scope/经实时复核的持久会话，因此没有运行 Shadow、Discovery、Formal，没有打开真实商品编辑页；真实 mutation / publish / auto retry 均为 0。**
 
 当前阻断证据：
 
-- `DXM_REAL_SAVE_SCOPE_FILE` 未配置且没有可用的当次真实 scope；当前实现工作树也不 clean。scope 必须绑定 clean HEAD/worktree、Git 外 `DXM_DATA_DIR`、有效持久 browser session、fresh Reader/account/L2 与当次批准，不能用旧 clean HEAD、旧 scope 或历史会话冒充。
+- `DXM_REAL_SAVE_SCOPE_FILE` 未配置且没有可用的当次真实 scope。实现提交 `90e8233` 已由 `e6069d0..90e8233` 推送到 `origin/main`；任何后续真实 scope 仍必须绑定执行时再次确认的 clean HEAD/worktree、Git 外 `DXM_DATA_DIR`、有效持久 browser session、fresh Reader/account/L2 与当次批准，不能用旧 scope 或历史会话冒充。
+- 分支审计确认 `feature/dxm-production-two-stage@42de6d5` 是 `main` 的祖先，`main...feature/dxm-production-two-stage = 78/0`，其内容已由既有合并提交 `af01446` 纳入主线；本轮没有制造无内容 merge commit。
 - 公开 FastAPI 已具备 hash-only Prepare、同 task 单 active scope、原子 consume-and-start、Shadow、一次性 Discovery、按 key 恢复、fresh Formal 与 acceptance export。冻结 snapshot 现按同源 `real_write_stage_fields.SAVE1/SAVE2` 精确分区全部字段，并冻结两阶段 preimage/expected；调用方自报、漏字段、多字段或漂移仍会在任何 CAS/写入前拒绝。
 - Discovery 现只为首商品创建一个复合 `FIRST_SAVE_INTENT` command/lease/ledger/native-handshake，执行一次 SAVE1，独立 VERIFY 未发布后在同一事务封存 receipt、停止 task 并令 scope 进入 `discovery_sealed`；任何派发后不确定性进入 `UNKNOWN`，不得重试、不得进入 SAVE2 或下一商品。
 - Formal 必须在 sealed Discovery 之后重新完成 fresh Reader → preview/freeze → 新 snapshot/task → 新 formal scope → 新 Approval，并绑定 predecessor scope 与 `discoveryReceiptSha256`。仓储层在任何 CAS 前复验新 ID/hash、同 account/shop/三商品顺序、时间顺序，以及 Discovery after 值与 Formal 首商品 SAVE1 preimage 精确一致。
@@ -22,7 +23,7 @@
 
 唯一聚焦测试仍只有已封存的 `22 passed in 3.81s`，exit 0、skipped 0；继续阶段没有重跑 pytest。它只证明被测合同，不证明当前真实店铺、真实页面、持久会话或 1+6 次业务验收已经发生。
 
-**唯一下一步：先在不写入的 headed Playwright Reader/discovery 中，逐项取得并审阅上述五项 capability、缺失 section、复杂控件及非坐标语义控件的真实 DOM/readback 事实；据此补齐 producer/executor 并完成代码审阅。之后才可把白名单变更固定为 clean HEAD，在 Git 工作树外准备 data dir、有效持久会话和 fresh Reader/account/L2，由操作员签发当次 scope/ApprovalFile，严格按 Prepare → Shadow → Discovery → fresh Prepare → Formal 各自的一次性额度运行。任一证据缺失或 UNKNOWN 立即停止，不得自动重试。**
+**唯一下一步：以 `90e8233` 为当前静态基线，先在不写入的 headed Playwright Reader/discovery 中逐项取得并审阅上述五项 capability、缺失 section、复杂控件及非坐标语义控件的真实 DOM/readback 事实；据此补齐 producer/executor、重新审阅并形成新的 clean HEAD。之后才可在 Git 工作树外准备 data dir、有效持久会话和 fresh Reader/account/L2，由操作员签发当次 scope/ApprovalFile，严格按 Prepare → Shadow → Discovery → fresh Prepare → Formal 各自的一次性额度运行。任一证据缺失或 UNKNOWN 立即停止，不得自动重试。**
 
 ## P1 · 完整商品主链尚未接入生产
 
