@@ -1,5 +1,5 @@
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 class RuntimeIdentityResponse(BaseModel):
@@ -143,6 +143,14 @@ class DxmTemplateShopSyncRequest(BaseModel):
     shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
 
 
+class DxmEditorReadonlyInspectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
+    product_id: str = Field(pattern=r"^[1-9][0-9]*$")
+    session_ref: str = Field(pattern=r"^[0-9a-f]{16}$")
+    observe_dialog: Literal["translation", "video"] | None = None
+
+
 class LocalPlanTemplateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -265,8 +273,28 @@ class RealDxmPathBFieldHashBinding(BaseModel):
 
     field: str = Field(min_length=1, max_length=200, pattern=r"^[^*?%\r\n]+$")
     saveStage: Literal["SAVE1", "SAVE2"]
-    preimageSha256: str = Field(pattern=r"^[0-9A-F]{64}$")
-    expectedSha256: str = Field(pattern=r"^[0-9A-F]{64}$")
+    preimageSha256: str | None = Field(default=None, pattern=r"^[0-9A-F]{64}$")
+    expectedSha256: str | None = Field(default=None, pattern=r"^[0-9A-F]{64}$")
+    freezeAt: Literal["after_native_gate", "after_content_finalize"] | None = None
+    ruleSha256: str | None = Field(default=None, pattern=r"^[0-9A-F]{64}$")
+    inputSha256: str | None = Field(default=None, pattern=r"^[0-9A-F]{64}$")
+    delegatedTo: Literal["content_finalize.video", "content_finalize.translation"] | None = None
+
+    @model_validator(mode="after")
+    def exact_stage_authority(self):
+        keys = self.model_fields_set
+        if keys == {"field", "saveStage", "freezeAt", "ruleSha256"}:
+            if self.saveStage == "SAVE2" and self.freezeAt == "after_native_gate" and self.ruleSha256:
+                return self
+        elif keys == {"field", "saveStage", "preimageSha256", "expectedSha256"}:
+            if self.preimageSha256 and self.expectedSha256:
+                return self
+        elif keys == {'field', 'saveStage', 'freezeAt', 'ruleSha256', 'delegatedTo', 'preimageSha256', 'inputSha256'}:
+            if (self.saveStage == 'SAVE1' and self.freezeAt == 'after_content_finalize'
+                    and self.ruleSha256 and self.preimageSha256 and self.inputSha256 and self.delegatedTo
+                    and (self.delegatedTo == 'content_finalize.video') == (self.field == 'videoUrl')):
+                return self
+        raise ValueError("field authority must be exact value hashes, a shared content output rule, or a deferred SAVE2 rule")
 
 
 class RealDxmPathBPrepareProduct(BaseModel):

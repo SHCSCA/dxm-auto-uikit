@@ -60,6 +60,11 @@ DRIFT_POLICY_WARN = "WARN"
 
 _SCHEMA_VERSION = "dxm_plan_snapshot_compiler.v3"
 
+def plan_snapshot_sha256(snapshot: Mapping[str, Any]) -> str:
+    """Reproduce the compiler hash, excluding only its existing derived metadata."""
+    return canonical_sha256({key: value for key, value in snapshot.items()
+        if key not in {'id', 'task_id', 'created_at', 'snapshot_hash', 'plan_content_sha256', 'snapshot_instance_sha256'}})
+
 # ``ui_section`` is attached at the trusted Reader/schema boundary from exact
 # DXM bindings.  It is the only stage authority used here: labels, field-name
 # heuristics, request annotations, and operator-authored phase declarations are
@@ -297,7 +302,10 @@ class PlanSnapshotCompiler:
                 if plan.get("scope_contract") is not None
                 else {}
             ),
-            "dxm_template_refs": template_refs.frozen_summary(),
+            "dxm_template_refs": (
+                template_refs.frozen_summary(include_audit=True)
+                if plan.get("path") == "B" else template_refs.frozen_summary()
+            ),
             "fixed_values": self._values.clone(plan["fixed_values"]),
             "fill_rules": self._values.clone(plan["fill_rules"]),
             "source_policies": self._values.clone(plan.get("source_policies", {})),
@@ -315,7 +323,7 @@ class PlanSnapshotCompiler:
         }
         if plan.get("editor_actions"):
             snapshot["editor_actions"] = self._values.clone(plan["editor_actions"])
-        snapshot_hash = canonical_sha256(snapshot)
+        snapshot_hash = plan_snapshot_sha256(snapshot)
         snapshot["plan_content_sha256"] = plan_content_sha256
         snapshot["snapshot_hash"] = snapshot_hash
         return snapshot
@@ -373,6 +381,16 @@ class PlanSnapshotCompiler:
             content["target_category"] = {
                 "category_id": target_category["category_id"],
                 "schema_hash": target_category["schema_hash"],
+            }
+        if plan.get("editor_actions"):
+            content["editor_actions"] = self._values.clone(plan["editor_actions"])
+        if any('delegated_to' in entry for mapping in plan.get('field_mappings', {}).values()
+               for entry in mapping.get('entries', [])):
+            content['content_finalize_mappings'] = self._values.clone(plan['field_mappings'])
+        if self._defer_save2(plan):
+            content["deferred_save2_source"] = {
+                key: self._values.clone(plan.get(key)) for key in
+                ("semi_managed", "editor_actions", "dxm_template_refs", "field_mappings")
             }
         return {
             "plan_content_sha256": self._canonical_json_hash(content),
@@ -441,20 +459,7 @@ class PlanSnapshotCompiler:
 
     def assert_hash(self, snapshot: Mapping[str, Any]) -> None:
         reported = snapshot.get("snapshot_hash")
-        body = {
-            key: self._values.clone(value)
-            for key, value in snapshot.items()
-            if key
-            not in {
-                "id",
-                "task_id",
-                "created_at",
-                "snapshot_hash",
-                "plan_content_sha256",
-                "snapshot_instance_sha256",
-            }
-        }
-        if not isinstance(reported, str) or reported != canonical_sha256(body):
+        if not isinstance(reported, str) or reported != plan_snapshot_sha256(snapshot):
             self._reject(
                 "PLAN_SNAPSHOT_HASH_INVALID",
                 "plan snapshot hash cannot be reproduced",
@@ -697,13 +702,6 @@ class PlanSnapshotCompiler:
                 "required fields are not configured in field mappings: "
                 + ", ".join(missing_required_mappings),
             )
-        fill_rules = plan["fill_rules"][resolution_category_id]
-        source_policies = plan.get("source_policies", {}).get(resolution_category_id, {})
-        fixed_field_values = (
-            plan["fixed_values"]
-            .get("field_values", {})
-            .get(resolution_category_id, {})
-        )
         template_values = template_refs.values_for_category(
             resolution_category_id,
             allowed_fields=properties,
@@ -713,51 +711,17 @@ class PlanSnapshotCompiler:
         for entry in mapping["entries"]:
             field_key = entry["field_key"]
             property_schema = properties[field_key]
-            if (
-                field_key in fixed_field_values
-                and self._values.is_resolved_value(
-                    fixed_field_values[field_key]
-                )
-            ):
-                value = self._values.clone(fixed_field_values[field_key])
-                source = "fixed_value"
-                source_ref = f"{plan['id']}@{plan['version']}#fixed"
-            else:
-                rule = fill_rules.get(field_key)
-                if (
-                    isinstance(rule, dict)
-                    and set(rule) == {"value"}
-                    and self._values.is_resolved_value(rule["value"])
-                ):
-                    value = self._values.clone(rule["value"])
-                    source = LOCAL_PLAN_MODEL
-                    source_ref = f"{plan['id']}@{plan['version']}"
-                elif (
-                    source_policies.get(field_key) == "current"
-                    and field_key in current_values
-                    and self._values.is_resolved_value(current_values[field_key])
-                ):
-                    value = self._values.clone(current_values[field_key])
-                    source = "current"
-                    source_ref = f"{product_id}@scope"
-                elif (
-                    source_policies.get(field_key) != "current"
-                    and field_key in template_values
-                ):
-                    value, source_ref = template_values[field_key]
-                    source = DXM_TEMPLATE_REF_MODEL
-                elif (
-                    source_policies.get(field_key) != "template"
-                    and
-                    field_key in current_values
-                    and self._values.is_resolved_value(current_values[field_key])
-                ):
-                    value = self._values.clone(current_values[field_key])
-                    source = "current"
-                    source_ref = f"{product_id}@scope"
-                else:
-                    unresolved_fields.append(field_key)
-                    continue
+            if self._defer_save2(plan) and property_schema.get("ui_section") == _SAVE2_UI_SECTION:
+                continue
+            resolved = self._resolve_field_value(
+                field_key, plan=plan, category_id=resolution_category_id,
+                current_values=current_values, template_values=template_values,
+                product_id=product_id,
+            )
+            if resolved is None:
+                unresolved_fields.append(field_key)
+                continue
+            value, source, source_ref = resolved
             assert_value_matches_schema(
                 value,
                 property_schema,
@@ -846,6 +810,7 @@ class PlanSnapshotCompiler:
             current_values=current_values,
             resolved_fields=resolved_fields,
             unresolved_fields=unresolved_fields,
+            template_values=template_values,
         )
         item_snapshot = {
             "product_id": product_id,
@@ -882,6 +847,14 @@ class PlanSnapshotCompiler:
             plan_content_sha256=plan_content_sha256,
         )
         item_snapshot.update(item_result)
+        from src.batch_edit.frozen_execution_contract import build_content_finalize_policy
+
+        content_policy = build_content_finalize_policy(
+            item_snapshot, editor_actions=plan.get('editor_actions', {}).get(str(plan['category_ids'][0]), {}),
+            source_sha256=plan_content_sha256,
+        ) if plan.get('path') == 'B' else None
+        if content_policy is not None:
+            item_snapshot['content_finalize_policy'] = content_policy
         return item_snapshot
 
     def _freeze_real_write_stage_authority(
@@ -893,6 +866,7 @@ class PlanSnapshotCompiler:
         current_values: Mapping[str, Any],
         resolved_fields: list[dict[str, Any]],
         unresolved_fields: list[str],
+        template_values: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Freeze the exact Path B SAVE1/SAVE2 field and value authority.
 
@@ -946,6 +920,7 @@ class PlanSnapshotCompiler:
             "SAVE2": [],
         }
         seen_fields: set[str] = set()
+        deferred_fields: list[dict[str, Any]] = []
         for raw_entry in raw_entries:
             if not isinstance(raw_entry, Mapping):
                 self._reject(
@@ -978,6 +953,34 @@ class PlanSnapshotCompiler:
                     "REAL_WRITE_STAGE_AUTHORITY_MISSING",
                     f"field {field_key} has no trusted Reader ui_section",
                 )
+
+            if stage == "SAVE2" and self._defer_save2(plan):
+                if definition.get("ui_binding") != raw_entry.get("ui_binding"):
+                    self._reject("REAL_WRITE_BINDING_AUTHORITY_DRIFT", field_key)
+                category_id = str(plan["category_ids"][0])
+                policy = plan.get("source_policies", {}).get(category_id, {}).get(field_key)
+                resolved = self._resolve_field_value(
+                    field_key, plan=plan, category_id=category_id,
+                    current_values={}, template_values=template_values or {}, product_id="",
+                )
+                provenance = {}
+                if resolved is not None:
+                    value, source, source_ref = resolved
+                    assert_value_matches_schema(value, definition, field_key=field_key)
+                    rule = {"value": self._values.clone(value)}
+                    provenance = {"source": source, "source_ref": source_ref}
+                elif policy == "current":
+                    rule = {"source": "current"}
+                else:
+                    self._reject("SEMI_MANAGED_RULE_MISSING", f"shared template has no rule for {field_key}")
+                deferred_fields.append({
+                    "field_key": field_key, "ui_binding": definition["ui_binding"],
+                    "ui_label_zh": raw_entry.get("ui_label_zh") or field_key,
+                    "property_schema": self._values.clone(definition), "rule": rule,
+                    **provenance,
+                })
+                stage_fields[stage].append(field_key)
+                continue
 
             if field_key in unresolved:
                 if stage == "SAVE2":
@@ -1029,7 +1032,7 @@ class PlanSnapshotCompiler:
             field_key
             for fields in stage_fields.values()
             for field_key in fields
-        }:
+        } - {field["field_key"] for field in deferred_fields}:
             self._reject(
                 "REAL_WRITE_STAGE_COVERAGE_INVALID",
                 "Path B stage authority must exactly cover all resolved fields",
@@ -1040,7 +1043,7 @@ class PlanSnapshotCompiler:
                 "Path B requires non-empty trusted SAVE1 and SAVE2 field sets",
             )
 
-        return {
+        result = {
             "real_write_stage_fields": stage_fields,
             "real_write_stage_facts": {
                 "schema": _REAL_WRITE_STAGE_FACTS_SCHEMA,
@@ -1053,6 +1056,23 @@ class PlanSnapshotCompiler:
                 "SAVE2": stage_facts["SAVE2"],
             },
         }
+        if deferred_fields:
+            # Freeze the shared source, not product-specific expected values.
+            source = {key: self._values.clone(plan.get(key)) for key in (
+                "id", "version", "shop_id", "category_ids", "fixed_values", "fill_rules",
+                "source_policies", "dxm_template_refs", "editor_actions", "semi_managed",
+            )}
+            policy = {
+                "schema": "dxm.deferred_save2_policy.v1", "freeze_timing": "after_native_gate",
+                "source_sha256": canonical_sha256(source), "fields": deferred_fields,
+            }
+            result["deferred_save2"] = {**policy, "policy_sha256": canonical_sha256(policy)}
+        return result
+
+    @staticmethod
+    def _defer_save2(plan: Mapping[str, Any]) -> bool:
+        semi = plan.get("semi_managed")
+        return plan.get("path") == "B" and isinstance(semi, Mapping) and semi.get("freeze_timing") == "after_native_gate"
 
     def _build_item_identity_hashes(
         self,
@@ -1106,6 +1126,34 @@ class PlanSnapshotCompiler:
             ),
         }
 
+    def _resolve_field_value(
+        self, field_key: str, *, plan: Mapping[str, Any], category_id: str,
+        current_values: Mapping[str, Any], template_values: Mapping[str, Any],
+        product_id: str,
+    ) -> tuple[Any, str, str] | None:
+        fixed = plan["fixed_values"].get("field_values", {}).get(category_id, {})
+        plan_ref = f"{plan['id']}@{plan['version']}"
+        if field_key in fixed and self._values.is_resolved_value(fixed[field_key]):
+            return self._values.clone(fixed[field_key]), "fixed_value", plan_ref + "#fixed"
+        rule = plan["fill_rules"].get(category_id, {}).get(field_key)
+        if isinstance(rule, dict):
+            if set(rule) == {"value"} and self._values.is_resolved_value(rule["value"]):
+                return self._values.clone(rule["value"]), LOCAL_PLAN_MODEL, plan_ref
+            if field_key == "aeopAeProductSKUs" and set(rule) == {"source", "set_each"}:
+                rows = current_values.get(field_key)
+                if not isinstance(rows, list) or not rows or any(not isinstance(row, dict) for row in rows):
+                    self._reject("LOCAL_PLAN_RULE_INPUT_INVALID", "shared SKU rule requires non-empty Reader SKU rows")
+                # One template rule; product rows are inputs, never overrides.
+                value = [dict(self._values.clone(row), **self._values.clone(rule["set_each"])) for row in rows]
+                return value, LOCAL_PLAN_MODEL, plan_ref + "#set_each"
+        policy = plan.get("source_policies", {}).get(category_id, {}).get(field_key, "auto")
+        if policy != "current" and field_key in template_values:
+            value, ref = template_values[field_key]
+            return self._values.clone(value), DXM_TEMPLATE_REF_MODEL, ref
+        if policy != "template" and field_key in current_values and self._values.is_resolved_value(current_values[field_key]):
+            return self._values.clone(current_values[field_key]), "current", f"{product_id}@scope"
+        return None
+
     def _resolve_target_category_preflight(
         self,
         target_category: Mapping[str, Any],
@@ -1131,18 +1179,6 @@ class PlanSnapshotCompiler:
             }
         else:
             mapping_entries = set()
-        fill_rules = (
-            plan["fill_rules"].get(category_id, {})
-            if isinstance(plan["fill_rules"], dict)
-            else {}
-        )
-        fixed_field_values = (
-            plan["fixed_values"]
-            .get("field_values", {})
-            .get(category_id, {})
-            if isinstance(plan["fixed_values"], dict)
-            else {}
-        )
         template_values = template_refs.values_for_category(
             category_id,
             allowed_fields=properties,
@@ -1150,27 +1186,20 @@ class PlanSnapshotCompiler:
         resolved_sources: dict[str, str] = {}
         unresolved: list[str] = []
         for field_key in required_keys:
-            if (
-                field_key in fixed_field_values
-                and self._values.is_resolved_value(fixed_field_values[field_key])
-            ):
-                resolved_sources[field_key] = "fixed_value"
-            elif (
-                field_key in fill_rules
-                and isinstance(fill_rules[field_key], dict)
-                and set(fill_rules[field_key]) == {"value"}
-                and self._values.is_resolved_value(fill_rules[field_key]["value"])
-            ):
-                resolved_sources[field_key] = LOCAL_PLAN_MODEL
-            elif field_key in template_values:
-                resolved_sources[field_key] = DXM_TEMPLATE_REF_MODEL
-            elif (
-                field_key in current_values
-                and self._values.is_resolved_value(current_values[field_key])
-            ):
-                resolved_sources[field_key] = f"current@{product_id}"
-            else:
+            if self._defer_save2(plan) and properties[field_key].get("ui_section") == _SAVE2_UI_SECTION:
+                resolved_sources[field_key] = "shared_template_after_native_gate"
+                continue
+            resolved = self._resolve_field_value(
+                field_key, plan=plan, category_id=category_id,
+                current_values=current_values, template_values=template_values,
+                product_id=product_id,
+            )
+            if resolved is None:
                 unresolved.append(field_key)
+            else:
+                value, source, _ref = resolved
+                assert_value_matches_schema(value, properties[field_key], field_key=field_key)
+                resolved_sources[field_key] = f"current@{product_id}" if source == "current" else source
         if unresolved:
             self._reject(
                 "PLAN_TARGET_REQUIRED_FIELD_UNRESOLVED",

@@ -337,6 +337,20 @@ def enrich_dxm_editor_schema(
                     str(key): dict(value) if isinstance(value, Mapping) else value
                     for key, value in sku_properties.items()
                 }
+                # edit.json SKU rows use decimal strings, unlike top-level packaging numbers.
+                for key, label in (
+                    ("packageWeight", "重量（kg）"), ("packageLength", "包装长度（cm）"),
+                    ("packageWidth", "包装宽度（cm）"), ("packageHeight", "包装高度（cm）"),
+                ):
+                    sku_properties.setdefault(key, {
+                        "type": "string", "pattern": r"^(?:0|[1-9]\d*)(?:\.\d+)?$",
+                        "ui_label_zh": label, "source_api": "/api/smtProduct/edit.json",
+                    })
+                sku_properties.setdefault("originalBox", {
+                    "type": "string", "ui_label_zh": "是否原箱",
+                    "values": [{"id": "0", "name": "否"}, {"id": "1", "name": "是"}],
+                    "source_api": "/api/smtProduct/edit.json",
+                })
                 sku_properties["logisticAttrList"] = {
                     "type": "array",
                     "ui_label_zh": "SKU 物流属性",

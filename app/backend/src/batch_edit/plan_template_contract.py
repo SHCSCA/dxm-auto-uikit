@@ -33,6 +33,72 @@ _clone = _plan_values.clone
 _reject = _plan_values.reject
 
 
+def validate_editor_actions(actions: Any, field_values: Mapping[str, Any] | None = None) -> None:
+    """Validate shared action configuration; this does not establish runtime capability."""
+    if not isinstance(actions, dict) or set(actions) - {"description", "marketing_images", "video", "wholesale", "translation"}:
+        _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", "unsupported shared editor action")
+    if "description" in actions and actions["description"] != {
+        "editor": "new", "generate_mobile_from_pc": True, "confirm_before_save": True,
+    }:
+        _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", "description action must bind the proven new-editor workflow")
+    if "marketing_images" in actions and actions["marketing_images"] != {
+        "generate_from_product_images": True, "required_slots": ["1:1_white_background", "3:4_scene"],
+    }:
+        _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", "marketing image action must bind the proven one-click workflow")
+    if not set(actions).intersection({"video", "wholesale", "translation"}):
+        return
+
+    from dataclasses import fields
+    from src.batch_edit.path_a_section_templates import AutoTranslateConfig, VideoGenerationConfig, WholesaleConfig
+    from src.batch_edit.translator import BatchTranslator
+    from src.batch_edit.wholesale_filler import WholesaleFiller
+
+    for name, model in (("video", VideoGenerationConfig), ("wholesale", WholesaleConfig), ("translation", AutoTranslateConfig)):
+        if name not in actions:
+            continue
+        config = actions[name]
+        required_keys = {field.name for field in fields(model)}
+        allowed_shapes = (required_keys, required_keys | {'generation_rule'}) if name == 'video' else (required_keys,)
+        if (not isinstance(config, dict) or set(config) not in allowed_shapes
+                or config.get("enabled") is not True):
+            _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", f"{name} requires every explicit configuration field and enabled=true")
+        if name == "video":
+            if 'generation_rule' in config:
+                from src.batch_edit.video_generator import validate_native_video_generation_rule
+                try:
+                    validate_native_video_generation_rule(config['generation_rule'])
+                except ValueError as exc:
+                    _reject('LOCAL_PLAN_EDITOR_ACTIONS_INVALID', str(exc))
+            valid = (config["failure_strategy"] == "pause"
+                     and type(config["max_wait_seconds"]) is int and type(config["poll_interval_seconds"]) is int
+                     and 0 < config["poll_interval_seconds"] <= config["max_wait_seconds"])
+        elif name == "wholesale":
+            valid = (type(config["min_quantity"]) is int and type(config["discount_percent"]) is int
+                     and WholesaleFiller.TIER_MIN_QUANTITY_RANGE[0] <= config["min_quantity"] <= WholesaleFiller.TIER_MIN_QUANTITY_RANGE[1]
+                     and WholesaleFiller.DISCOUNT_RANGE[0] <= config["discount_percent"] <= WholesaleFiller.DISCOUNT_RANGE[1]
+                     and isinstance(config["deduction_method"], str)
+                     and config["deduction_method"] in WholesaleFiller.VALID_DEDUCTION_METHODS)
+        else:
+            apply_to = config["apply_to"]
+            # Use the existing translator's concrete field names, including both descriptions.
+            valid = (config["direction"] == "zh_en" and isinstance(config["translate_type"], str)
+                     and config["translate_type"] in BatchTranslator.TRANSLATE_TYPE_MAP
+                     and isinstance(apply_to, list) and all(isinstance(value, str) for value in apply_to)
+                     and len(apply_to) == len(set(apply_to))
+                     and set(apply_to) == {"title", "attributes", "description_pc", "description_mobile", "custom_name"})
+        if not valid:
+            _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", f"{name} explicit configuration is invalid")
+    wholesale = actions.get("wholesale")
+    if wholesale is not None and field_values is not None:
+        for field_key, action_key in (("bulkOrder", "min_quantity"), ("bulkDiscount", "discount_percent")):
+            if field_key in field_values and (isinstance(field_values[field_key], bool) or field_values[field_key] != wholesale[action_key]):
+                _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", f"wholesale conflicts with frozen field {field_key}")
+        if "reduceStrategy" in field_values and not (
+            field_values["reduceStrategy"] == "payment_success_deduct" and wholesale["deduction_method"] == "payment"
+        ):
+            _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", "wholesale deduction conflicts with or lacks a proven reduceStrategy binding")
+
+
 def normalize_local_plan_payload(payload: Any) -> dict[str, Any]:
     plan = _exact_object(
         payload,
@@ -103,6 +169,9 @@ def normalize_local_plan_payload(payload: Any) -> dict[str, Any]:
             "local plan status must be draft or ready",
         )
     semi_managed = plan.get("semi_managed")
+    if isinstance(semi_managed, dict) and "freeze_timing" in semi_managed:
+        if plan["path"] != "B" or semi_managed["freeze_timing"] != "after_native_gate":
+            _reject("SEMI_MANAGED_FREEZE_TIMING_INVALID", "deferred freeze is only allowed after the native Path B gate")
     source_snapshots = plan.get("source_snapshots", {})
     if configuration_contract == "local_plan_template.v3":
         if not isinstance(source_snapshots, dict):
@@ -204,10 +273,26 @@ def normalize_local_plan_payload(payload: Any) -> dict[str, Any]:
             )
         for field_key, rule in category_rules.items():
             _stable_field_key(field_key)
-            if not isinstance(rule, dict) or set(rule) != {"value"}:
+            if isinstance(rule, dict) and set(rule) == {"value"}:
+                continue
+            row_values = rule.get("set_each") if isinstance(rule, dict) else None
+            if (
+                field_key != "aeopAeProductSKUs"
+                or not isinstance(rule, dict)
+                or set(rule) != {"source", "set_each"}
+                or rule["source"] != "current"
+                or not isinstance(row_values, dict)
+                or not row_values
+                or set(row_values) - {
+                    "skuPrice", "cargoPrice", "ipmSkuStock", "packageWeight",
+                    "packageLength", "packageWidth", "packageHeight",
+                    "originalBox", "logisticAttrList",
+                }
+                or any(not _is_resolved_value(value) for value in row_values.values())
+            ):
                 _reject(
                     "LOCAL_PLAN_FILL_RULES_INVALID",
-                    "each fill rule must contain only value",
+                    "fill rules require value or a shared current-SKU set_each rule; SKU identity cannot be overridden",
                 )
         normalized_mapping = normalize_field_mapping(
             field_mappings[category_id],
@@ -226,28 +311,17 @@ def normalize_local_plan_payload(payload: Any) -> dict[str, Any]:
         }
         category_source_policies = source_policies.get(category_id, {})
         category_editor_actions = editor_actions.get(category_id, {})
-        if not isinstance(category_editor_actions, dict) or set(category_editor_actions) - {"description", "marketing_images"}:
-            _reject(
-                "LOCAL_PLAN_EDITOR_ACTIONS_INVALID",
-                "category editor actions only support description and marketing_images",
-            )
-        if "description" in category_editor_actions and category_editor_actions["description"] != {
-            "editor": "new",
-            "generate_mobile_from_pc": True,
-            "confirm_before_save": True,
-        }:
-            _reject(
-                "LOCAL_PLAN_EDITOR_ACTIONS_INVALID",
-                "description action must bind the proven new-editor workflow",
-            )
-        if "marketing_images" in category_editor_actions and category_editor_actions["marketing_images"] != {
-            "generate_from_product_images": True,
-            "required_slots": ["1:1_white_background", "3:4_scene"],
-        }:
-            _reject(
-                "LOCAL_PLAN_EDITOR_ACTIONS_INVALID",
-                "marketing image action must bind the proven one-click workflow",
-            )
+        explicit_values = {
+            field_key: rule["value"] for field_key, rule in category_rules.items()
+            if isinstance(rule, dict) and set(rule) == {"value"}
+        }
+        explicit_values.update(category_fixed_values)
+        validate_editor_actions(category_editor_actions, explicit_values)
+        for entry in normalized_mapping['entries']:
+            if 'delegated_to' in entry:
+                action = entry['delegated_to'].removeprefix('content_finalize.')
+                if plan.get('path') != 'B' or category_editor_actions.get(action, {}).get('enabled') is not True:
+                    _reject('CONTENT_FINALIZE_ACTION_REQUIRED', 'delegated fields require the enabled shared Path B action')
         if not isinstance(category_source_policies, dict):
             _reject(
                 "LOCAL_PLAN_SOURCE_POLICIES_INVALID",
@@ -389,6 +463,7 @@ def normalize_field_mapping(
             raw_entry,
             {"ui_label_zh", "field_key", "category_schema_path", "ui_binding"},
             f"field_mappings[{category_id}].entries[{index}]",
+            optional_keys=frozenset({"delegated_to"}),
         )
         label = _non_empty_text(entry["ui_label_zh"], "ui_label_zh")
         if HAN_PATTERN.search(label) is None:
@@ -418,6 +493,13 @@ def normalize_field_mapping(
                 "field mapping is absent from category schema",
             )
         ui_binding = _non_empty_text(entry["ui_binding"], "ui_binding")
+        owner = entry.get("delegated_to")
+        if "delegated_to" in entry and (
+            not isinstance(owner, str) or owner not in {"content_finalize.video", "content_finalize.translation"}
+        ):
+            _reject("CONTENT_FINALIZE_OWNER_INVALID", "only video and translation may own generated output fields")
+        if owner == 'content_finalize.video' and (field_key != 'videoUrl' or ui_binding != 'dxm_editor:videoUrl'):
+            _reject('CONTENT_FINALIZE_VIDEO_FIELD_INVALID', 'video output must bind the product video field')
         if isinstance(properties, Mapping):
             expected_binding = properties[field_key].get("ui_binding")
             if (
@@ -438,6 +520,7 @@ def normalize_field_mapping(
                 "field_key": field_key,
                 "category_schema_path": path,
                 "ui_binding": ui_binding,
+                **({"delegated_to": owner} if "delegated_to" in entry else {}),
             }
         )
     body = {"mapping_version": version, "entries": normalized_entries}

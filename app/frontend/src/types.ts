@@ -340,7 +340,7 @@ export type LocalPlanTemplate = {
   path: 'A' | 'B'
   scope_contract?: 'single_category.v1' | 'single_target_category.v2'
   fixed_values: Record<string, unknown>
-  fill_rules: Record<string, Record<string, { value: unknown }>>
+  fill_rules: Record<string, Record<string, { value: unknown } | { source: 'current'; set_each: Record<string, unknown> }>>
   dxm_template_refs: Array<{ ref_id: number; source_digest: string }>
   field_mappings: Record<string, {
     mapping_version: string

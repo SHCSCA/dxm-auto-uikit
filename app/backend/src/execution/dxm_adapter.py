@@ -3,11 +3,12 @@ import re
 import hashlib
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
+from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS, derive_frozen_main_fill_facts
 from src.execution.browser_agent_protocol import canonical_frozen_target_identity
 from src.execution.canonical_receipt import (
     ContentFinalizeReceipt,
@@ -33,11 +34,17 @@ _CONTRACT_SOURCE_KEYS = (
     'unpublished_proof',
     'mandatory_capability_receipts',
     'path_b_section_receipts',
+    'rollback_preparation',
+    'wholesale_observation',
+    'translation_observation',
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
     {
         'open_editor',
         'verify_edit_ownership',
+        'prepare_rollback',
+        'validate_editor_wholesale',
+        'translate_editor_content',
         'fill_editor_required_defaults',
         'fill_editor_variants',
         'fill_media_assets',
@@ -164,6 +171,7 @@ class DxmWorkflowAdapter:
 
     def __init__(self, login_flow: Any) -> None:
         self.login_flow = login_flow
+        self._execution_evidence_context: dict[str, Any] = {}
 
     @staticmethod
     def _require_frozen_target_identity(
@@ -196,11 +204,13 @@ class DxmWorkflowAdapter:
             clearer()
 
     def set_execution_evidence_context(self, context: dict[str, Any] | None) -> None:
+        self._execution_evidence_context = dict(context or {})
         setter = getattr(self.login_flow, 'set_execution_evidence_context', None)
         if callable(setter):
             setter(context)
 
     def clear_execution_evidence_context(self) -> None:
+        self._execution_evidence_context = {}
         clearer = getattr(self.login_flow, 'clear_execution_evidence_context', None)
         if callable(clearer):
             clearer()
@@ -302,6 +312,9 @@ class DxmWorkflowAdapter:
             "evidence_sha256": proof["evidence_sha256"].upper(),
             "observed_at": proof.get("observed_at"),
         }
+
+    def observe_save2_before_first_write(self, *, item: Mapping[str, Any], store_name: str) -> dict[str, Any]:
+        return self.login_flow.observe_save2_before_first_write(item=item, store_name=store_name)
 
     @classmethod
     def _validate_embedded_path_b_receipts(
@@ -555,6 +568,12 @@ class DxmWorkflowAdapter:
             representative_product_ids=representative_product_ids,
         )
 
+    def read_dxm_template_library(self, *, shop_id: str) -> dict[str, Any]:
+        return self.login_flow.read_dxm_template_library(shop_id=shop_id)
+
+    def inspect_editor_readonly(self, **kwargs: Any) -> dict[str, Any]:
+        return self.login_flow.inspect_editor_readonly(**kwargs)
+
     def read_e2_product_details(
         self,
         *,
@@ -701,6 +720,81 @@ class DxmWorkflowAdapter:
                 'target_identity': _mapping_copy(target_identity),
             },
         )
+
+    def prepare_rollback(self, defaults=None, product_query=None, store_name=None, target_identity=None, shop_id=None):
+        from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
+        from src.batch_edit.rollback_manager import validate_rollback_preparation_observation, rollback_preparation_receipt
+
+        target = self._require_frozen_target_identity('prepare_rollback', target_identity, store_name)
+        execution = validate_frozen_execution_defaults(defaults)
+        context = self._execution_evidence_context
+        if (context.get('state') != 'PREPARE_ROLLBACK' or context.get('command_action') != 'prepare_rollback'
+                or context.get('mode') != 'batch_draft_save' or not context.get('command_id')
+                or context.get('browser_session_id') != self.browser_session_id()
+                or not isinstance(shop_id, str) or not shop_id.isdecimal()):
+            raise RuntimeError('ROLLBACK_COMMAND_CONTEXT_INVALID')
+        result = self.login_flow.observe_rollback_preparation(defaults=defaults, product_query=product_query,
+            store_name=store_name, target_identity=target, shop_id=shop_id)
+        result = dict(result)
+        if result.get('ok') is True:
+            observation = validate_rollback_preparation_observation(result.get('rollback_preparation'),
+                execution_payload=execution, target_identity=target, browser_session_id=self.browser_session_id())
+            if observation['shop_id'] != shop_id:
+                raise RuntimeError('ROLLBACK_SHOP_DRIFT')
+            result['mandatory_capability_receipts'] = {'rollbackPreparation':
+                rollback_preparation_receipt(observation, context['command_id'])}
+        return self._result('prepare_rollback', result, before_values={
+            'defaults': dict(defaults), 'product_query': product_query, 'store_name': store_name,
+            'target_identity': target, 'shop_id': shop_id})
+
+    def validate_editor_wholesale(self, defaults=None, product_query=None, store_name=None, target_identity=None, shop_id=None):
+        from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
+        from src.batch_edit.wholesale_filler import validate_editor_wholesale_observation, build_editor_wholesale_receipt
+
+        target = self._require_frozen_target_identity('validate_editor_wholesale', target_identity, store_name)
+        execution = validate_frozen_execution_defaults(defaults)
+        context = self._execution_evidence_context
+        if (context.get('state') != 'BATCH_WHOLESALE_FILL'
+                or context.get('command_action') != 'validate_editor_wholesale'
+                or context.get('mode') != 'batch_draft_save' or not context.get('command_id')
+                or execution.get('execution_path') != 'B'
+                or context.get('browser_session_id') != self.browser_session_id()
+                or not isinstance(shop_id, str) or not shop_id.isdecimal()):
+            raise RuntimeError('WHOLESALE_COMMAND_CONTEXT_INVALID')
+        result = dict(self.login_flow.validate_editor_wholesale(defaults=defaults, product_query=product_query,
+            store_name=store_name, shop_id=shop_id, target_identity=target))
+        if result.get('ok') is True:
+            observation = validate_editor_wholesale_observation(result.get('wholesale_observation'),
+                defaults=defaults, expected_payload=execution, target_identity=target, command_context=context)
+            receipt = build_editor_wholesale_receipt(observation)
+            if result.get('mandatory_capability_receipts') != {'wholesale': receipt}:
+                raise RuntimeError('WHOLESALE_RECEIPT_DRIFT')
+            result['wholesale_observation'] = observation
+        return self._result('validate_editor_wholesale', result, before_values={
+            'defaults': dict(defaults), 'product_query': product_query, 'store_name': store_name,
+            'target_identity': target, 'shop_id': shop_id})
+
+    def translate_editor_content(self, defaults=None, product_query=None, store_name=None, target_identity=None, shop_id=None):
+        from src.batch_edit.translator import validate_editor_translation_observation, build_editor_translation_receipt
+        from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
+
+        target = self._require_frozen_target_identity('translate_editor_content', target_identity, store_name)
+        payload = validate_frozen_execution_defaults(defaults)
+        context = self._execution_evidence_context
+        if (context.get('state') != 'BATCH_TRANSLATE_EXECUTE' or context.get('command_action') != 'translate_editor_content'
+                or context.get('mode') != 'batch_draft_save' or context.get('browser_session_id') != self.browser_session_id()):
+            raise RuntimeError('TRANSLATION_COMMAND_CONTEXT_INVALID')
+        result = dict(self.login_flow.translate_editor_content(defaults=defaults, product_query=product_query,
+            store_name=store_name, target_identity=target, shop_id=shop_id))
+        if result.get('ok') is True:
+            observation = validate_editor_translation_observation(result.get('translation_observation'), defaults=defaults,
+                target_identity=target, command_context=context, expected_payload=payload)
+            if observation['shop_id'] != shop_id:
+                raise RuntimeError('TRANSLATION_SHOP_DRIFT')
+            result['mandatory_capability_receipts'] = {'translation': build_editor_translation_receipt(observation, payload)}
+        return self._result('translate_editor_content', result, before_values={
+            'defaults': dict(defaults), 'product_query': product_query, 'store_name': store_name,
+            'target_identity': target, 'shop_id': shop_id})
 
     def fill_editor_variants(
         self,
@@ -1182,10 +1276,45 @@ class DxmWorkflowAdapter:
             )
 
         self._derive_action_postconditions(action, evidence, sources, postconditions)
+        frozen_facts = derive_frozen_main_fill_facts(
+            action, before_values=before_values, editor_result=sources.get('editor_action_result'))
+        if frozen_facts is not None:
+            postconditions = frozen_facts['postconditions']
+        if action == 'prepare_rollback':
+            from src.batch_edit.rollback_manager import validate_rollback_preparation_observation
+
+            try:
+                validate_rollback_preparation_observation(sources.get('rollback_preparation'),
+                    execution_payload=before_values['defaults']['_frozen_execution_payload'],
+                    target_identity=before_values['target_identity'], browser_session_id=self.browser_session_id())
+                postconditions = {name: True for name in required_names}
+            except (KeyError, TypeError, ValueError):
+                postconditions = {name: False for name in required_names}
+        if action == 'validate_editor_wholesale':
+            from src.batch_edit.wholesale_filler import validate_editor_wholesale_observation
+
+            try:
+                validate_editor_wholesale_observation(sources.get('wholesale_observation'),
+                    defaults=before_values['defaults'],
+                    expected_payload=before_values['defaults']['_frozen_execution_payload'],
+                    target_identity=before_values['target_identity'], command_context=self._execution_evidence_context)
+                postconditions = {name: True for name in required_names}
+            except (KeyError, TypeError, ValueError):
+                postconditions = {name: False for name in required_names}
+        if action == 'translate_editor_content':
+            from src.batch_edit.translator import validate_editor_translation_observation
+
+            try:
+                validate_editor_translation_observation(sources.get('translation_observation'),
+                    defaults=before_values['defaults'], target_identity=before_values['target_identity'],
+                    command_context=self._execution_evidence_context)
+                postconditions = {name: True for name in required_names}
+            except (KeyError, TypeError, ValueError):
+                postconditions = {name: False for name in required_names}
         if action == 'fill_semi_managed_defaults' and self._contains_deferred_validation(sources):
             postconditions = {name: False for name in required_names}
 
-        after_values = self._after_values(action, sources)
+        after_values = frozen_facts['after_values'] if frozen_facts is not None else self._after_values(action, sources)
         observations = {
             key: dict(value)
             for key, value in sources.items()
@@ -1285,6 +1414,12 @@ class DxmWorkflowAdapter:
 
     @staticmethod
     def _after_values(action: str, sources: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
+        if action == 'prepare_rollback':
+            return {'preimage_readback': dict(sources.get('rollback_preparation') or {})}
+        if action == 'validate_editor_wholesale':
+            return {'wholesale_readback': deepcopy((sources.get('wholesale_observation') or {}).get('after', {}))}
+        if action == 'translate_editor_content':
+            return {'translation_readback': deepcopy((sources.get('translation_observation') or {}).get('after', {}))}
         explicit = sources.get('contract_observations') or {}
         explicit_after = explicit.get('after_values')
         if isinstance(explicit_after, Mapping) and explicit_after:

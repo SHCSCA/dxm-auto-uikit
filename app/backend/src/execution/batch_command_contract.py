@@ -193,7 +193,7 @@ def validate_path_b_save1_discovery_dispatch(
     command_state: Any,
     command_action: Any,
 ) -> dict[str, Any] | None:
-    """Reject every non-composite or out-of-head mutation for Discovery.
+    """Keep Discovery on its first product: content work, then one composite SAVE1.
 
     ``None`` means the task is not a discovery task.  A profile-shaped payload
     is never ignored: malformed or widened values fail closed.
@@ -206,6 +206,10 @@ def validate_path_b_save1_discovery_dispatch(
     if raw_profile is None:
         return None
     profile = validate_path_b_save1_discovery_profile(raw_profile)
+    from src.execution.browser_agent_protocol import CONTENT_MUTATION_COMMANDS
+    content_action = CONTENT_MUTATION_COMMANDS.get(command_state)
+    permitted_command = ((command_state == PATH_B_SAVE1_DISCOVERY_STATE and command_action == PATH_B_SAVE1_DISCOVERY_ACTION)
+        or (content_action is not None and command_action == content_action[0]))
     jobs = task.get("jobs") if isinstance(task.get("jobs"), list) else []
     real_authorization = payload.get("real_dxm_write_authorization")
     if (
@@ -248,8 +252,8 @@ def validate_path_b_save1_discovery_dispatch(
         or len(set(job_product_ids)) != 3
         or job_product_ids != ordered_product_ids
         or current_job_id != first_job_id
-        or command_state != PATH_B_SAVE1_DISCOVERY_STATE
-        or command_action != PATH_B_SAVE1_DISCOVERY_ACTION
+        or not permitted_command
+        or (content_action is not None and first_job.get('current_step_code') != command_state)
         or statuses[0] != "running"
         or statuses.count("running") != 1
         or any(status != "pending" for status in statuses[1:])

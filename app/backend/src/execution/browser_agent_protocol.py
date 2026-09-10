@@ -17,7 +17,14 @@ from src.execution.batch_command_contract import (
 from src.execution.product_identity import is_stable_product_id
 
 
+CONTENT_MUTATION_COMMANDS = {
+    "BATCH_VIDEO_SUBMIT": ("submit_editor_video", "video_generate_click"),
+    "BATCH_VIDEO_PLACE": ("place_editor_video", "video_place_click"),
+    "BATCH_TRANSLATE_EXECUTE": ("translate_editor_content", "translate_language_click"),
+}
+
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
+    **{(state, action): {mutation: 1} for state, (action, mutation) in CONTENT_MUTATION_COMMANDS.items()},
     ("FIRST_SAVE_INTENT", "first_save_intent"): {
         "first_save_intent": 1,
     },
@@ -677,6 +684,8 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         field_name="execution_mode",
     )
     allowed_modes = {"single_save", "batch_save", "batch_draft_save"}
+    if pair[0] in CONTENT_MUTATION_COMMANDS:
+        allowed_modes = {"batch_draft_save"}
     if execution_mode not in allowed_modes:
         raise MutationCommandContractError(
             "MUTATION_EXECUTION_MODE_INVALID",
@@ -685,6 +694,7 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
 
     if execution_mode == "batch_draft_save":
         expected_pre_dispatch_page = {
+            **{state: "editor" for state in CONTENT_MUTATION_COMMANDS},
             "FIRST_SAVE_INTENT": "editor",
             "SAVE_ONLY": "editor",
             "SAVE2_ONLY": "semi_managed",

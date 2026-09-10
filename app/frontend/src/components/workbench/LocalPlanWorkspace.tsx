@@ -27,7 +27,7 @@ type LocalPlanWorkspaceProps = {
 
 type SchemaFieldDraft = {
   uiLabelZh: string
-  strategy: 'auto' | 'current' | 'template' | 'fill' | 'fixed'
+  strategy: 'auto' | 'current' | 'template' | 'fill' | 'fixed' | 'shared_rows'
   value: unknown
 }
 
@@ -900,11 +900,12 @@ export function LocalPlanWorkspace({
                                         : undefined}
                                     templateName={selectedTemplate?.display_name}
                                     value={effectiveValue}
+                                    sharedRows={draft?.strategy === 'shared_rows'}
                                     pathValue={isPathSwitch ? planPath === 'B' : undefined}
                                     syncing={syncingFieldKey === fieldKey}
                                     onSync={activeSection !== 'attribute_info' && definition.option_source ? () => { void syncReadonlyRefs(fieldKey) } : undefined}
                                     onChange={(value) => updateFieldDraft(categoryId, fieldKey, {
-                                      strategy: isConfiguredValue(value) ? 'fill' : 'current',
+                                      strategy: draft?.strategy === 'shared_rows' ? 'shared_rows' : isConfiguredValue(value) ? 'fill' : 'current',
                                       value,
                                     })}
                                   />
@@ -1225,7 +1226,7 @@ function buildFieldDrafts(
   const result: SchemaFieldDrafts = {}
   for (const categoryId of Object.keys(schemas)) {
     const schema = schemas[categoryId]
-    const existingRules = (plan.fill_rules[categoryId] ?? {}) as Record<string, { value: unknown }>
+    const existingRules = plan.fill_rules[categoryId] ?? {}
     const existingSourcePolicies = plan.source_policies?.[categoryId] ?? {}
     const fixedByCategory = plan.fixed_values.field_values
     const existingFixed = (
@@ -1249,11 +1250,13 @@ function buildFieldDrafts(
           strategy: Object.prototype.hasOwnProperty.call(existingFixedMap, fieldKey)
             ? 'fixed'
             : existingRules[fieldKey]
-              ? 'fill'
+              ? 'set_each' in existingRules[fieldKey] ? 'shared_rows' : 'fill'
               : existingSourcePolicies[fieldKey] ?? 'auto',
           value: Object.prototype.hasOwnProperty.call(existingFixedMap, fieldKey)
             ? existingFixedMap[fieldKey]
-            : existingRules[fieldKey]?.value,
+            : existingRules[fieldKey] && 'set_each' in existingRules[fieldKey]
+              ? existingRules[fieldKey].set_each
+              : (existingRules[fieldKey] as { value: unknown } | undefined)?.value,
         },
       ]),
     )
@@ -1284,7 +1287,7 @@ function hydrateSelectedTemplateValues(
         for (const [fieldKey, value] of Object.entries(values)) {
           if (!schema.properties[fieldKey]) continue
           const previous = categoryDrafts[fieldKey]
-          if (previous?.strategy === 'fill' || previous?.strategy === 'fixed') continue
+          if (previous?.strategy === 'fill' || previous?.strategy === 'fixed' || previous?.strategy === 'shared_rows') continue
           categoryDrafts[fieldKey] = {
             ...(previous ?? {
               uiLabelZh: schemaLabel(schema.properties[fieldKey], 0),
@@ -1363,6 +1366,13 @@ function buildStructuredPlanFields(
       }
       if (draft.strategy === 'fill' && isConfiguredValue(draft.value)) {
         fillRules[categoryId][fieldKey] = { value: draft.value }
+      }
+      if (draft.strategy === 'shared_rows') {
+        if (fieldKey !== 'aeopAeProductSKUs' || !draft.value || typeof draft.value !== 'object' || Array.isArray(draft.value) || !Object.keys(draft.value).length) {
+          throw new Error('SKU 公共规则不能为空，且只能配置全体 SKU 共用的字段。')
+        }
+        fillRules[categoryId][fieldKey] = { source: 'current', set_each: draft.value as Record<string, unknown> }
+        sourcePolicies[categoryId][fieldKey] = 'template'
       }
       if (draft.strategy === 'fixed' && isConfiguredValue(draft.value)) {
         fixedFieldValues[categoryId][fieldKey] = draft.value
@@ -1481,6 +1491,7 @@ type DirectSchemaFieldProps = {
   readOnlyValue?: string
   templateName?: string
   value: unknown
+  sharedRows?: boolean
   pathValue?: boolean
   syncing: boolean
   onSync?: () => void
@@ -1496,6 +1507,7 @@ function DirectSchemaField({
   readOnlyValue,
   templateName,
   value,
+  sharedRows,
   pathValue,
   syncing,
   onSync,
@@ -1523,6 +1535,14 @@ function DirectSchemaField({
           <strong>{readOnlyValue || '由当前店铺与方案类目确定'}</strong>
           <small>{fieldKey === 'categoryId' ? '执行时整批商品统一切换到此类目' : '来自方案当前店铺，不依赖单独商品'}</small>
         </div>
+      ) : sharedRows && definition.items?.properties ? (
+        <SchemaValueEditor
+          definition={{ ...definition.items, properties: Object.fromEntries(Object.entries(definition.items.properties).filter(([key]) => key !== 'skuCode' && key !== 'aeopSKUProperty')) }}
+          fieldKey={fieldKey}
+          value={value}
+          valueLabel="每行 SKU 统一配置"
+          onChange={onChange}
+        />
       ) : definition.ui_control === 'sku_matrix' ? (
         <SkuMatrixEditor
           definition={definition}
@@ -1567,7 +1587,7 @@ function DirectSchemaField({
         />
       )}
       <small className="e2-schema-field__help">
-        {templateName ? `已由模板「${templateName}」带入；仍可在这里调整。` : inheritedLabel || '留空时沿用每件商品原值。'}
+        {sharedRows ? '此规则作用于每件商品的全部 SKU；保留各自的行身份，未配置的字段沿用输入值。' : templateName ? `已由模板「${templateName}」带入；仍可在这里调整。` : inheritedLabel || '留空时沿用每件商品原值。'}
       </small>
     </div>
   )

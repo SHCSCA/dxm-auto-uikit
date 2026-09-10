@@ -9,11 +9,14 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from src.batch_edit.frozen_execution_contract import (
+    load_save2_stage_freezes,
+    validate_save2_persistence,
     FrozenExecutionContractError,
     compile_frozen_execution_payload,
     validate_frozen_execution_defaults,
 )
 from src.batch_edit.scope_contract import ScopeContractError, canonical_sha256
+from src.batch_edit.plan_snapshot_compiler import plan_snapshot_sha256
 from src.db import loads
 from src.execution.action_result_contract import controlled_dxm_page_identity
 from src.execution.batch_command_contract import (
@@ -26,6 +29,7 @@ from src.execution.batch_command_contract import (
     validate_path_b_save1_discovery_dispatch,
 )
 from src.execution.browser_agent_protocol import (
+    CONTENT_MUTATION_COMMANDS,
     BrowserAgentCommand,
     MutationCommandContractError,
     canonical_frozen_target_identity,
@@ -63,6 +67,10 @@ _BATCH_SAVE_ACTIONS = {
     "SAVE2_ONLY": "save_only",
     PATH_B_SAVE1_DISCOVERY_STATE: PATH_B_SAVE1_DISCOVERY_ACTION,
 }
+_BATCH_ACTION_BINDINGS = {**_BATCH_SAVE_BINDINGS,
+    **{state: ("SAVE1", "editor") for state in CONTENT_MUTATION_COMMANDS}}
+_BATCH_ACTIONS = {**_BATCH_SAVE_ACTIONS,
+    **{state: spec[0] for state, spec in CONTENT_MUTATION_COMMANDS.items()}}
 _BATCH_SAVE_AND_VERIFY_STATES = frozenset(
     {
         "SAVE_ONLY",
@@ -181,14 +189,11 @@ def snapshot_row_authority_in_transaction(
     snapshot = loads(stored.get("snapshot_json"), {})
     if not isinstance(snapshot, dict):
         _reject("AUTH_SNAPSHOT_ROW_AUTHORITY_MISMATCH")
-    snapshot_body = {
-        key: value for key, value in snapshot.items() if key != "snapshot_hash"
-    }
     local_plan = snapshot.get("local_plan_template")
     idempotency_key = stored.get("idempotency_key")
     created_at = stored.get("created_at")
     try:
-        snapshot_body_sha256 = canonical_sha256(snapshot_body)
+        snapshot_body_sha256 = plan_snapshot_sha256(snapshot)
         embedded_snapshot_sha256 = canonical_sha256(payload.get("plan_snapshot"))
         stored_snapshot_sha256 = canonical_sha256(snapshot)
     except (ScopeContractError, TypeError, ValueError):
@@ -263,6 +268,15 @@ def validate_current_task_against_frozen_authority(
         current_task = _task_authority_projection(task)
         if canonical_sha256(current_task) != canonical_sha256(expected_task):
             _reject("AUTH_CURRENT_TASK_DRIFT")
+        if canonical['execution']['payload'].get('save_stage') == 'SAVE2':
+            try:
+                job = next(row for row in task['jobs'] if row['id'] == canonical['command']['payload']['job_id'])
+                validate_save2_persistence(conn, task, job, browser_session_id=canonical['runtime']['browser_session_id'])
+                current_execution = compile_frozen_execution_payload(task, job, save_stage='SAVE2')
+                if current_execution != canonical['execution']['payload']:
+                    _reject('AUTH_SAVE2_STAGE_FREEZE_DRIFT')
+            except (FrozenExecutionContractError, KeyError, StopIteration):
+                _reject('AUTH_SAVE2_STAGE_FREEZE_DRIFT')
         snapshot_id = canonical["snapshot"]["plan_snapshot_id"]
         row = conn.execute(
             "SELECT * FROM plan_snapshots WHERE id=?",
@@ -522,11 +536,11 @@ def _validate(
         validate_browser_agent_command(command)
     except (MutationCommandContractError, TypeError, ValueError):
         _reject("AUTH_COMMAND_CONTRACT_INVALID")
-    save_binding = _BATCH_SAVE_BINDINGS.get(command.state)
+    save_binding = _BATCH_ACTION_BINDINGS.get(command.state)
     if (
         command.execution_mode != "batch_draft_save"
         or save_binding is None
-        or command.action != _BATCH_SAVE_ACTIONS.get(command.state)
+        or command.action != _BATCH_ACTIONS.get(command.state)
         or command.expected_page != save_binding[1]
     ):
         _reject("AUTH_COMMAND_MODE_MISMATCH")
@@ -568,6 +582,11 @@ def _validate(
         item_snapshot, snapshot, command
     )
     execution_payload = _validate_execution(task, job, command)
+    if execution_payload.get('save_stage') == 'SAVE2':
+        try:
+            validate_save2_persistence(conn, task, job, browser_session_id=live.browser_session_id)
+        except FrozenExecutionContractError:
+            _reject('AUTH_SAVE2_STAGE_FREEZE_DRIFT')
     _validate_live_identity(
         identity,
         command,
@@ -677,6 +696,10 @@ def _load_task_by_id(conn: Any, task_id: Any) -> dict[str, Any]:
     ]
     if task.get("mode") != "batch_draft_save":
         _reject("AUTH_COMMAND_MODE_MISMATCH")
+    try:
+        task['_save2_freezes'] = load_save2_stage_freezes(conn, task_id)
+    except FrozenExecutionContractError:
+        _reject('AUTH_SAVE2_STAGE_FREEZE_DRIFT')
     return task
 
 
@@ -781,9 +804,8 @@ def _load_snapshot_binding(
     if not isinstance(snapshot, dict):
         _reject("AUTH_COMMAND_SNAPSHOT_MISMATCH")
     snapshot_hash = snapshot.get("snapshot_hash")
-    body = {key: value for key, value in snapshot.items() if key != "snapshot_hash"}
     try:
-        reproduced_hash = canonical_sha256(body)
+        reproduced_hash = plan_snapshot_sha256(snapshot)
         embedded_hash = canonical_sha256(payload.get("plan_snapshot"))
         stored_hash = canonical_sha256(snapshot)
     except (ScopeContractError, TypeError, ValueError):
@@ -888,6 +910,27 @@ def _canonical_path_b_save_lease(value: Any) -> dict[str, Any]:
     return lease
 
 
+def content_action_lease(save1_lease: Any, state: str) -> dict[str, Any]:
+    """Narrow the approved SAVE1 scope to one editor action, never reuse its lease."""
+    base = _canonical_path_b_save_lease(save1_lease)
+    if state not in CONTENT_MUTATION_COMMANDS or base['save_stage'] != 'SAVE1':
+        _reject('AUTH_CONTENT_ACTION_LEASE_INVALID')
+    body = {key: value for key, value in base.items() if key != 'lease_id'}
+    body.update(parent_lease_id=base['lease_id'], action_state=state)
+    return {**body, 'lease_id': canonical_sha256(body)}
+
+
+def content_action_execution_payload(task, job, state):
+    """Use original shared inputs for content work; generated SAVE remains sealed."""
+    if state not in CONTENT_MUTATION_COMMANDS or task.get('payload', {}).get('path') != 'B':
+        raise FrozenExecutionContractError('CONTENT_ACTION_PATH_INVALID', 'content actions require Path B')
+    expected = compile_frozen_execution_payload(task, job)
+    policy = expected.get('content_finalize_policy')
+    if not isinstance(policy, Mapping) or policy.get('schema') != 'dxm.content_finalize_policy.v1':
+        raise FrozenExecutionContractError('CONTENT_ACTION_POLICY_REQUIRED', 'shared output owners must be frozen')
+    return expected
+
+
 def _validated_path_b_save_lease(
     conn: Any,
     task: Mapping[str, Any],
@@ -969,7 +1012,7 @@ def _validated_path_b_save_lease(
         )
     ):
         _reject("AUTH_REAL_SAVE_LEASE_INVALID")
-    save_stage, _expected_page = _BATCH_SAVE_BINDINGS[command.state]
+    save_stage, _expected_page = _BATCH_ACTION_BINDINGS[command.state]
     matches = [
         lease
         for lease in leases
@@ -980,6 +1023,8 @@ def _validated_path_b_save_lease(
     if len(matches) != 1:
         _reject("AUTH_REAL_SAVE_LEASE_MISMATCH")
     selected = matches[0]
+    if command.state in CONTENT_MUTATION_COMMANDS:
+        selected = content_action_lease(selected, command.state)
     if str(command.authorization_lease_id or "") != str(selected["lease_id"]):
         _reject("AUTH_COMMAND_AUTHORIZATION_MISMATCH")
     selected_fingerprint = canonical_sha256(selected)
@@ -1006,6 +1051,14 @@ def _validated_path_b_save_lease(
         canonical_scope = validate_real_dxm_write_scope(scope, now=checked_at)
     except (RealDxmWriteScopeError, TypeError, ValueError):
         _reject("AUTH_REAL_WRITE_SCOPE_INVALID")
+    if command.state in CONTENT_MUTATION_COMMANDS:
+        from src.batch_edit.frozen_execution_contract import frozen_scope_field_bindings
+        items = [item for item in snapshot['item_snapshots'] if str(item.get('product_id')) == str(product_id)]
+        products = [item for item in canonical_scope['orderedProducts'] if item['productId'] == product_id]
+        if (canonical_scope['schema'] != 'real_dxm_write_scope.v3' or len(items) != 1 or len(products) != 1
+                or products[0]['allowedFields'] != frozen_scope_field_bindings(items[0])
+                or job.get('status') != 'running' or job.get('current_step_code') != command.state):
+            _reject('AUTH_CONTENT_ACTION_SCOPE_MISMATCH')
     scope_snapshot = canonical_scope.get("snapshot")
     scope_products = canonical_scope.get("orderedProducts")
     scope_account = canonical_scope.get("account")
@@ -1146,6 +1199,8 @@ def _validate_authorization(
     except ValueError:
         _reject("AUTH_LEASE_AUTHORITY_MISMATCH")
     path = str(payload.get("path") or "")
+    if command.state in CONTENT_MUTATION_COMMANDS and path != 'B':
+        _reject('AUTH_CONTENT_ACTION_PATH_INVALID')
     if path == "A":
         if str(approval.get("lease_id") or "") != str(command.authorization_lease_id or ""):
             _reject("AUTH_COMMAND_AUTHORIZATION_MISMATCH")
@@ -1168,7 +1223,7 @@ def _validate_authorization(
             checked_at=checked_at,
         )
         frozen_parent_lease_authority = parent_lease_authority
-        save_stage = _BATCH_SAVE_BINDINGS[command.state][0]
+        save_stage = _BATCH_ACTION_BINDINGS[command.state][0]
     else:
         _reject("AUTH_COMMAND_MODE_MISMATCH")
 
@@ -1273,7 +1328,10 @@ def _validate_execution(
     command: BrowserAgentCommand,
 ) -> dict[str, Any]:
     try:
-        expected = compile_frozen_execution_payload(task, job)
+        if command.state in CONTENT_MUTATION_COMMANDS:
+            expected = content_action_execution_payload(task, job, command.state)
+        else:
+            expected = compile_frozen_execution_payload(task, job, save_stage='SAVE2' if command.state == 'SAVE2_ONLY' else 'SAVE1', for_save=True)
         actual = validate_frozen_execution_defaults(
             command.params.get("defaults"),
             expected_payload=expected,
@@ -1300,7 +1358,7 @@ def _validate_live_identity(
         _reject("AUTH_BROWSER_IDENTITY_UNAVAILABLE")
     if identity.get("browser_session_id") != live.browser_session_id:
         _reject("AUTH_BROWSER_SESSION_MISMATCH")
-    expected_page = _BATCH_SAVE_BINDINGS.get(command.state, (None, None))[1]
+    expected_page = _BATCH_ACTION_BINDINGS.get(command.state, (None, None))[1]
     if (
         expected_page is None
         or identity.get("page_kind") != expected_page
@@ -1420,7 +1478,17 @@ def _validated_authority(value: Mapping[str, Any]) -> dict[str, Any]:
             else None
         )
         try:
-            canonical_child_lease = _canonical_path_b_save_lease(lease_authority)
+            content_state = command_payload.get('state') if isinstance(command_payload, dict) else None
+            if content_state in CONTENT_MUTATION_COMMANDS:
+                bases = [item for item in real_save_leases if isinstance(item, dict)
+                    and item.get('product_id') == lease_authority.get('product_id') and item.get('save_stage') == 'SAVE1']
+                if len(bases) != 1:
+                    _reject('AUTH_FROZEN_AUTHORITY_INVALID')
+                canonical_child_lease = content_action_lease(bases[0], content_state)
+                if canonical_child_lease != lease_authority:
+                    _reject('AUTH_FROZEN_AUTHORITY_INVALID')
+            else:
+                canonical_child_lease = _canonical_path_b_save_lease(lease_authority)
             canonical_parent_lease = canonical_authorization_lease_authority(
                 parent_lease_authority
             )
@@ -1431,10 +1499,10 @@ def _validated_authority(value: Mapping[str, Any]) -> dict[str, Any]:
             _reject("AUTH_FROZEN_AUTHORITY_INVALID")
         if (
             not isinstance(command_payload, dict)
-            or command_payload.get("state") not in _BATCH_SAVE_BINDINGS
+            or command_payload.get("state") not in _BATCH_ACTION_BINDINGS
             or command_payload.get("action")
-            != _BATCH_SAVE_ACTIONS.get(command_payload.get("state"))
-            or save_stage != _BATCH_SAVE_BINDINGS[command_payload["state"]][0]
+            != _BATCH_ACTIONS.get(command_payload.get("state"))
+            or save_stage != _BATCH_ACTION_BINDINGS[command_payload["state"]][0]
             or canonical_child_lease.get("save_stage") != save_stage
             or authorization.get("lease_id") != canonical_child_lease.get("lease_id")
             or str(authorization.get("lease_fingerprint") or "").casefold()
@@ -1442,7 +1510,7 @@ def _validated_authority(value: Mapping[str, Any]) -> dict[str, Any]:
             or canonical_parent_lease != persisted_parent_lease
             or not isinstance(real_authorization, dict)
             or not isinstance(real_save_leases, list)
-            or canonical_child_lease not in real_save_leases
+            or (content_state not in CONTENT_MUTATION_COMMANDS and canonical_child_lease not in real_save_leases)
         ):
             _reject("AUTH_FROZEN_AUTHORITY_INVALID")
     else:
@@ -1452,9 +1520,8 @@ def _validated_authority(value: Mapping[str, Any]) -> dict[str, Any]:
     row_binding = snapshot.get("row_binding")
     if not isinstance(plan_snapshot, dict) or not isinstance(row_binding, dict):
         _reject("AUTH_FROZEN_AUTHORITY_INVALID")
-    body = {key: item for key, item in plan_snapshot.items() if key != "snapshot_hash"}
     if (
-        canonical_sha256(body) != plan_snapshot.get("snapshot_hash")
+        plan_snapshot_sha256(plan_snapshot) != plan_snapshot.get("snapshot_hash")
         or snapshot.get("plan_snapshot_hash") != plan_snapshot.get("snapshot_hash")
         or snapshot.get("plan_snapshot_id")
         != canonical["task_authority"].get("plan_snapshot_id")

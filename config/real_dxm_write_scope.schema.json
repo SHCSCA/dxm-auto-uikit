@@ -217,6 +217,34 @@
         }
       }
     },
+    "contentFinalizeField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "saveStage", "freezeAt", "ruleSha256", "delegatedTo", "preimageSha256", "inputSha256"],
+      "properties": {
+        "field": {"$ref": "#/$defs/allowedField/properties/field"},
+        "saveStage": {"const": "SAVE1"},
+        "freezeAt": {"const": "after_content_finalize"},
+        "ruleSha256": {"$ref": "#/$defs/sha256"},
+        "preimageSha256": {"$ref": "#/$defs/sha256"},
+        "inputSha256": {"$ref": "#/$defs/sha256"},
+        "delegatedTo": {"enum": ["content_finalize.video", "content_finalize.translation"]}
+      },
+      "if": {"properties": {"delegatedTo": {"const": "content_finalize.video"}}},
+      "then": {"properties": {"field": {"const": "videoUrl"}}},
+      "else": {"properties": {"field": {"not": {"const": "videoUrl"}}}}
+    },
+    "deferredSave2Field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "saveStage", "freezeAt", "ruleSha256"],
+      "properties": {
+        "field": {"$ref": "#/$defs/allowedField/properties/field"},
+        "saveStage": {"const": "SAVE2"},
+        "freezeAt": {"const": "after_native_gate"},
+        "ruleSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
     "save1": {
       "type": "object",
       "additionalProperties": false,
@@ -272,7 +300,7 @@
           "minItems": 2,
           "uniqueItems": true,
           "items": {
-            "$ref": "#/$defs/allowedField"
+            "oneOf": [{"$ref": "#/$defs/allowedField"}, {"$ref": "#/$defs/deferredSave2Field"}, {"$ref": "#/$defs/contentFinalizeField"}]
           },
           "allOf": [
             {
@@ -324,6 +352,39 @@
     "writeScope": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"schema": {"const": "real_dxm_write_scope.v1"}}},
+          "then": {"properties": {"orderedProducts": {"items": {"properties": {"allowedFields": {"items": {"$ref": "#/$defs/allowedField"}}}}}}},
+          "else": {"properties": {"orderedProducts": {"items": {"properties": {"allowedFields": {"items": {
+            "if": {"properties": {"saveStage": {"const": "SAVE2"}}},
+            "then": {"$ref": "#/$defs/deferredSave2Field"},
+            "else": {"oneOf": [{"$ref": "#/$defs/allowedField"}, {"$ref": "#/$defs/contentFinalizeField"}]}
+          }}}}}}}
+        },
+        {
+          "if": {"properties": {"schema": {"const": "real_dxm_write_scope.v2"}}},
+          "then": {"properties": {"orderedProducts": {"items": {"properties": {"allowedFields": {"items": {
+            "if": {"properties": {"saveStage": {"const": "SAVE2"}}},
+            "then": {"$ref": "#/$defs/deferredSave2Field"},
+            "else": {"$ref": "#/$defs/allowedField"}
+          }}}}}}}
+        },
+        {
+          "if": {"properties": {"schema": {"const": "real_dxm_write_scope.v3"}}},
+          "then": {"properties": {"orderedProducts": {"items": {"properties": {"allowedFields": {
+            "items": {
+              "if": {"properties": {"saveStage": {"const": "SAVE2"}}},
+              "then": {"$ref": "#/$defs/deferredSave2Field"},
+              "else": {"oneOf": [{"$ref": "#/$defs/allowedField"}, {"$ref": "#/$defs/contentFinalizeField"}]}
+            },
+            "allOf": [
+              {"contains": {"required": ["delegatedTo"], "properties": {"delegatedTo": {"const": "content_finalize.video"}}}},
+              {"contains": {"required": ["delegatedTo"], "properties": {"delegatedTo": {"const": "content_finalize.translation"}}}}
+            ]
+          }}}}}}
+        }
+      ],
       "required": [
         "schema",
         "stage",
@@ -345,7 +406,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "real_dxm_write_scope.v1"
+          "enum": ["real_dxm_write_scope.v1", "real_dxm_write_scope.v2", "real_dxm_write_scope.v3"]
         },
         "stage": {
           "const": "execute"

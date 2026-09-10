@@ -23,6 +23,11 @@
 #   -DiscoveryReceiptFile    -> Discovery output / Formal input.  It is never
 #     overwritten and contains the public persisted receipt projection.
 #
+# Inspect uses only the authenticated Reader/template-sync APIs. Its private
+# output contains current product values for configuration, never save proof.
+# It does not consume a Shadow/Discovery/Formal attempt or issue a scope.
+# Configure versions one shared local template through the public API, checks
+# its readback, and never starts a product task or issues a write scope.
 # Required order:
 #   Prepare(discovery scope) -> Shadow -> Discovery ->
 #   Prepare(fresh Formal scope, with journal/key/receipt) -> Formal.
@@ -33,13 +38,16 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Prepare", "Shadow", "Discovery", "Formal")]
+  [ValidateSet("Inspect", "Configure", "Prepare", "Shadow", "Discovery", "Formal")]
   [string]$Phase,
 
   [string]$BaseUrl = "http://127.0.0.1:8000",
   [string]$ScopeFile = $env:DXM_REAL_SAVE_SCOPE_FILE,
   [string]$ApprovalFile = "",
   [string]$PrepareRequestFile = "",
+  [string]$InspectionRequestFile = "",
+  [string]$ConfigurationRequestFile = "",
+  [int]$LocalPlanTemplateId = 0,
   [string]$ShadowRequestFile = "",
   [string]$EvidenceDirectory = "",
   [string]$AttemptJournalFile = "",
@@ -210,8 +218,8 @@ function Assert-ScopeContract {
   foreach ($name in $required) {
     if (-not (Test-Property -Value $Scope -Name $name)) { throw "Scope is missing required field $name." }
   }
-  if ($Scope.schema -ne "real_dxm_write_scope.v1" -or $Scope.stage -ne "execute" -or $Scope.path -ne "B") {
-    throw "Scope schema, stage, and path must be real_dxm_write_scope.v1 / execute / B."
+  if ($Scope.schema -notin @("real_dxm_write_scope.v1", "real_dxm_write_scope.v2", "real_dxm_write_scope.v3") -or $Scope.stage -ne "execute" -or $Scope.path -ne "B") {
+    throw "Scope schema, stage, and path must be real_dxm_write_scope.v1 or v2 / execute / B."
   }
   if ($Scope.publishAllowed -ne $false -or [int]$Scope.maxPhysicalRequestsPerSave -ne 1) {
     throw "Scope must bind publishAllowed=false and maxPhysicalRequestsPerSave=1."
@@ -327,14 +335,19 @@ function Invoke-PublicJson {
   $uri = $BaseUrl.TrimEnd("/") + $Path
   try {
     if ($null -eq $Body) {
-      $response = Invoke-RestMethod -Uri $uri -Method $Method -TimeoutSec $TimeoutSec
+      $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -Method $Method -TimeoutSec $TimeoutSec
     } else {
       $json = $Body | ConvertTo-Json -Depth 100 -Compress
       $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-      $response = Invoke-RestMethod -Uri $uri -Method $Method -ContentType "application/json; charset=utf-8" -Body $bytes -TimeoutSec $TimeoutSec
+      $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -Method $Method -ContentType "application/json; charset=utf-8" -Body $bytes -TimeoutSec $TimeoutSec
     }
+    # Windows PowerShell 5 may decode JSON without charset as Latin-1.
+    $stream = $response.RawContentStream
+    if ($stream.CanSeek) { $stream.Position = 0 }
+    $reader = [System.IO.StreamReader]::new($stream, [System.Text.UTF8Encoding]::new($false, $true), $false)
+    try { $payload = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
     Add-Trace -Method $Method -Path $Path -Status "ok"
-    return $response
+    return $payload
   } catch {
     $reason = Get-HttpReasonCode -Record $_
     $statusCode = Get-HttpStatusCode -Record $_
@@ -791,17 +804,28 @@ function Assert-PrepareRequest {
     $stageCounts = @{ SAVE1 = 0; SAVE2 = 0 }
     $seenFields = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($binding in @($product.fieldHashBindings)) {
-      Assert-AllowedProperties -Value $binding -Allowed @(
-        "field", "saveStage", "preimageSha256", "expectedSha256"
-      ) -Label "prepareRequest.fieldHashBindings[]"
+      $deferred = $null -ne $binding.PSObject.Properties['freezeAt']
+      $generated = $deferred -and $binding.saveStage -ceq 'SAVE1'
+      $allowed = if ($generated) { @('field', 'saveStage', 'freezeAt', 'ruleSha256', 'delegatedTo', 'preimageSha256', 'inputSha256') } elseif ($deferred) { @('field', 'saveStage', 'freezeAt', 'ruleSha256') } else { @('field', 'saveStage', 'preimageSha256', 'expectedSha256') }
+      Assert-AllowedProperties -Value $binding -Allowed $allowed -Label "prepareRequest.fieldHashBindings[]"
+      $valueAuthorityValid = if ($generated) {
+        $binding.freezeAt -ceq 'after_content_finalize' -and
+        $binding.delegatedTo -cin @('content_finalize.video', 'content_finalize.translation') -and
+        (($binding.delegatedTo -ceq 'content_finalize.video') -eq ($binding.field -ceq 'videoUrl')) -and
+        [string]$binding.ruleSha256 -cmatch '^[0-9A-F]{64}$' -and
+        [string]$binding.preimageSha256 -cmatch '^[0-9A-F]{64}$' -and [string]$binding.inputSha256 -cmatch '^[0-9A-F]{64}$'
+      } elseif ($deferred) {
+        $binding.saveStage -ceq 'SAVE2' -and $binding.freezeAt -ceq 'after_native_gate' -and [string]$binding.ruleSha256 -cmatch '^[0-9A-F]{64}$'
+      } else {
+        [string]$binding.preimageSha256 -cmatch '^[0-9A-F]{64}$' -and [string]$binding.expectedSha256 -cmatch '^[0-9A-F]{64}$'
+      }
       $field = [string]$binding.field
       if (
         [string]::IsNullOrWhiteSpace($field) -or
         $field -cne $field.Trim() -or
         -not $seenFields.Add($field) -or
         [string]$binding.saveStage -notin @("SAVE1", "SAVE2") -or
-        [string]$binding.preimageSha256 -cnotmatch "^[0-9A-F]{64}$" -or
-        [string]$binding.expectedSha256 -cnotmatch "^[0-9A-F]{64}$"
+        -not $valueAuthorityValid
       ) {
         throw "Prepare field hash binding is invalid or duplicated."
       }
@@ -831,6 +855,183 @@ function New-PreparePlanRequestBody {
     $body.idempotency_key = [string]$Request.idempotencyKey
   }
   return $body
+}
+
+function ConvertTo-StableConfigurationValue {
+  param([AllowNull()][object]$Value)
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [System.Collections.IDictionary] -or $Value -is [pscustomobject]) {
+    $result = [ordered]@{}
+    $keys = if ($Value -is [System.Collections.IDictionary]) { @($Value.Keys) } else { @($Value.PSObject.Properties.Name) }
+    foreach ($key in @($keys | Sort-Object -CaseSensitive)) {
+      $result[$key] = ConvertTo-StableConfigurationValue -Value $Value.$key
+    }
+    return $result
+  }
+  if ($Value -is [array]) {
+    $items = [System.Collections.Generic.List[object]]::new()
+    foreach ($item in $Value) { $items.Add((ConvertTo-StableConfigurationValue -Value $item)) }
+    return ,$items.ToArray()
+  }
+  return $Value
+}
+
+function Invoke-ConfigurationPhase {
+  param([Parameter(Mandatory = $true)][object]$Request)
+
+  Assert-AllowedProperties -Value $Request -Allowed @("schemaVersion", "baseLocalPlanTemplateId", "planChanges") -Label "configurationRequest"
+  if ($Request.schemaVersion -cne "real_dxm_path_b_configuration_request.v1" -or [string]$Request.baseLocalPlanTemplateId -cnotmatch "^[1-9][0-9]*$") {
+    throw "CONFIGURATION_REQUEST_INVALID"
+  }
+  $editable = @("name", "version", "fixed_values", "fill_rules", "dxm_template_refs", "source_policies", "editor_actions", "status", "semi_managed", "source_snapshots", "provenance")
+  Assert-AllowedProperties -Value $Request.planChanges -Allowed $editable -Label "planChanges"
+  if (-not (Test-Property -Value $Request.planChanges -Name "version")) { throw "CONFIGURATION_VERSION_REQUIRED" }
+  $base = Invoke-PublicJson -Method GET -Path "/api/local-plan-templates/$([int]$Request.baseLocalPlanTemplateId)"
+  if ($base.path -cne "B" -or $base.configuration_contract -cne "local_plan_template.v3" -or $base.scope_contract -cne "single_target_category.v2" -or @($base.category_ids).Count -ne 1) {
+    throw "CONFIGURATION_BASE_PLAN_INVALID"
+  }
+  $body = [ordered]@{}
+  foreach ($name in @($editable + @("shop_id", "category_ids", "path", "field_mappings", "scope_contract", "configuration_contract", "validation_policy", "exception_policy"))) {
+    if (Test-Property -Value $base -Name $name) { $body[$name] = $base.$name }
+    if (Test-Property -Value $Request.planChanges -Name $name) { $body[$name] = $Request.planChanges.$name }
+  }
+  if ($body.fixed_values.publish_allowed -ne $false) { throw "CONFIGURATION_PUBLISH_FORBIDDEN" }
+  $saved = Invoke-PublicJson -Method POST -Path "/api/local-plan-templates/$([int]$Request.baseLocalPlanTemplateId)/versions" -Body $body
+  if ([string]$saved.id -cnotmatch "^[1-9][0-9]*$") { throw "CONFIGURATION_SAVE_ID_MISSING" }
+  $readback = Invoke-PublicJson -Method GET -Path "/api/local-plan-templates/$([int]$saved.id)"
+  foreach ($name in $body.Keys) {
+    $expected = ConvertTo-StableConfigurationValue -Value $body[$name]
+    $actual = ConvertTo-StableConfigurationValue -Value $readback.$name
+    if ((ConvertTo-Json -InputObject $expected -Depth 100 -Compress) -cne (ConvertTo-Json -InputObject $actual -Depth 100 -Compress)) {
+      throw "CONFIGURATION_READBACK_MISMATCH:$name"
+    }
+  }
+  return [ordered]@{
+    schemaVersion = "real_dxm_path_b_configuration.v1"
+    createdAt = [DateTimeOffset]::UtcNow.ToString("o")
+    localPlanTemplateId = [int]$readback.id
+    configurationPersisted = $true
+    plan = $readback
+    executionAllowed = $false
+    scopeIssued = $false
+  }
+}
+
+function Invoke-InspectionPhase {
+  param([Parameter(Mandatory = $true)][object]$Request)
+
+  Assert-AllowedProperties -Value $Request -Allowed @("schemaVersion", "shopId", "orderedProductIds") -Label "inspectionRequest"
+  $ids = @($Request.orderedProductIds | ForEach-Object { [string]$_ })
+  if (
+    $Request.schemaVersion -cne "real_dxm_path_b_inspection_request.v1" -or
+    [string]$Request.shopId -cnotmatch "^[1-9][0-9]*$" -or
+    $ids.Count -ne 3 -or @($ids | Select-Object -Unique).Count -ne 3 -or
+    @($ids | Where-Object { $_ -cnotmatch "^[1-9][0-9]*$" }).Count -ne 0
+  ) { throw "INSPECTION_SCOPE_INVALID" }
+  Assert-NoWildcards -Value $Request -Label "inspectionRequest"
+  $shops = Invoke-PublicJson -Method GET -Path "/api/dxm/draft-reader/shops"
+  if (
+    $shops.source -cne "api" -or $shops.session_bound -ne $true -or
+    [string]$shops.session_ref -cnotmatch "^[0-9a-f]{16}$" -or
+    @($shops.shops | Where-Object { [string]$_.id -ceq [string]$Request.shopId }).Count -ne 1
+  ) { throw "INSPECTION_READER_NOT_BOUND" }
+
+  $selected = @{}
+  $pageNo = 1
+  do {
+    $path = "/api/dxm/draft-reader/products?shop_id=$([uri]::EscapeDataString([string]$Request.shopId))&page_no=$pageNo&page_size=100"
+    $page = Invoke-PublicJson -Method GET -Path $path
+    if ($page.source -cne "api" -or $page.session_bound -ne $true -or [string]$page.session_ref -cne [string]$shops.session_ref) {
+      throw "INSPECTION_PRODUCT_READER_NOT_BOUND"
+    }
+    foreach ($item in @($page.items)) {
+      $id = [string]$item.id
+      if ($ids -cnotcontains $id) { continue }
+      if (
+        $selected.ContainsKey($id) -or [string]$item.shop_id -cne [string]$Request.shopId -or
+        [string]$item.category_id -cnotmatch "^[1-9][0-9]*$" -or [string]$item.dxm_state -cne "draft"
+      ) { throw "INSPECTION_PRODUCT_IDENTITY_CONFLICT" }
+      $selected[$id] = $item
+    }
+    $pageNo += 1
+  } while ($selected.Count -lt 3 -and $page.pagination.has_next -eq $true)
+  if ($selected.Count -ne 3) { throw "INSPECTION_PRODUCT_NOT_IN_FRESH_READER" }
+
+  $items = [System.Collections.Generic.List[object]]::new()
+  foreach ($id in $ids) {
+    $product = $selected[$id]
+    $categoryId = [string]$product.category_id
+    $sync = Invoke-PublicJson -Method POST -Path "/api/dxm-template-refs/sync?include_current_values=true" -Body @{
+      shop_id = [string]$Request.shopId
+      category_ids = @($categoryId)
+      representative_product_ids = @{ $categoryId = $id }
+    }
+    if ($sync.source -cne "api" -or $sync.session_bound -ne $true -or [string]$sync.session_ref -cne [string]$shops.session_ref) {
+      throw "INSPECTION_TEMPLATE_READER_NOT_BOUND"
+    }
+    $current = $sync.representative_products.$categoryId
+    $schema = $sync.category_schemas.$categoryId
+    if ([string]$current.__product_id -cne $id -or $null -eq $schema.properties) {
+      throw "INSPECTION_CURRENT_VALUES_NOT_BOUND"
+    }
+    $missing = @($schema.required | Where-Object {
+      $field = [string]$_
+      -not (Test-Property -Value $current -Name $field) -or $null -eq $current.$field -or
+      ($current.$field -is [string] -and [string]::IsNullOrWhiteSpace($current.$field)) -or
+      ($current.$field -is [array] -and $current.$field.Count -eq 0)
+    })
+    $items.Add([ordered]@{
+      productId = $id
+      categoryId = $categoryId
+      currentValues = $current
+      categorySchema = $schema
+      templateRefs = @($sync.refs)
+      missingCurrentRequiredFields = $missing
+    })
+  }
+  $finalShops = Invoke-PublicJson -Method GET -Path "/api/dxm/draft-reader/shops"
+  if ($finalShops.source -cne "api" -or $finalShops.session_bound -ne $true -or [string]$finalShops.session_ref -cne [string]$shops.session_ref) {
+    throw "INSPECTION_SESSION_DRIFT"
+  }
+  $planPreflight = $null
+  if ($LocalPlanTemplateId -gt 0) {
+    $plan = Invoke-PublicJson -Method GET -Path "/api/local-plan-templates/$LocalPlanTemplateId"
+    if ([string]$plan.shop_id -cne [string]$Request.shopId -or $plan.path -cne "B" -or @($plan.category_ids).Count -ne 1) {
+      throw "INSPECTION_PLAN_SCOPE_CONFLICT"
+    }
+    $planPreflight = [ordered]@{ localPlanTemplateId = $LocalPlanTemplateId; ok = $false; reasonCode = $null; snapshotHash = $null }
+    try {
+      $preview = Invoke-PublicJson -Method POST -Path "/api/plan-snapshots/preview" -Body @{
+        local_plan_template_id = $LocalPlanTemplateId
+        shop_id = [string]$Request.shopId
+        session_ref = [string]$shops.session_ref
+        product_ids = $ids
+        target_category_id = [string]$plan.category_ids[0]
+      }
+      if ($preview.schema -cne "dxm_batch_draft_save_plan.v1" -or $preview.path -cne "B" -or $preview.publish_allowed -ne $false -or
+          [string]$preview.shop_scope -cne [string]$Request.shopId -or [int]$preview.local_plan_template.id -ne $LocalPlanTemplateId -or
+          (@($preview.product_ids) -join ',') -cne ($ids -join ',') -or [string]$preview.snapshot_hash -cnotmatch '^[A-Fa-f0-9]{64}$') {
+        throw "INSPECTION_PLAN_PREVIEW_NOT_BOUND"
+      }
+      $planPreflight.ok = $true
+      $planPreflight.snapshotHash = [string]$preview.snapshot_hash
+    } catch {
+      if ($_.Exception.Data["HttpStatusCode"] -ne 409) { throw }
+      $planPreflight.reasonCode = $_.Exception.Message
+    }
+  }
+  return [ordered]@{
+    schemaVersion = "real_dxm_path_b_inspection.v1"
+    createdAt = [DateTimeOffset]::UtcNow.ToString("o")
+    shopId = [string]$Request.shopId
+    sessionRef = [string]$shops.session_ref
+    orderedProductIds = $ids
+    items = @($items)
+    planPreflight = $planPreflight
+    executionAllowed = $false
+    scopeIssued = $false
+    evidenceScope = "configuration_reader_only"
+  }
 }
 
 function Invoke-PreparePhase {
@@ -915,7 +1116,17 @@ function Invoke-PreparePhase {
       ) {
         throw "PREPARE_FIELD_STAGE_AUTHORITY_DRIFT"
       }
-      if (
+      if ($null -ne $binding.PSObject.Properties['freezeAt']) {
+        if ($binding.saveStage -ceq 'SAVE1') {
+          if ($fieldHash.freezeAt -cne 'after_content_finalize' -or $fieldHash.ruleSha256 -cne $binding.ruleSha256 -or
+              $fieldHash.delegatedTo -cne $binding.delegatedTo -or $fieldHash.preimageAvailable -ne $true -or
+              $fieldHash.preimageSha256 -cne $binding.preimageSha256 -or $fieldHash.inputSha256 -cne $binding.inputSha256) {
+            throw 'PREPARE_CONTENT_RULE_DRIFT'
+          }
+        } elseif ($fieldHash.freezeAt -cne 'after_native_gate' -or $fieldHash.ruleSha256 -cne $binding.ruleSha256 -or $fieldHash.preimageAvailable -ne $false) {
+          throw 'PREPARE_DEFERRED_RULE_DRIFT'
+        }
+      } elseif (
         $fieldHash.preimageAvailable -ne $true -or
         [string]$fieldHash.preimageSha256 -cne [string]$binding.preimageSha256 -or
         [string]$fieldHash.expectedSha256 -cne [string]$binding.expectedSha256
@@ -1828,6 +2039,43 @@ try {
   Invoke-RestMethod -Uri ($BaseUrl.TrimEnd("/") + "/health") -Method GET -TimeoutSec 10 | Out-Null
 } catch {
   throw "Backend health check failed before the one-shot phase was consumed."
+}
+
+if ($Phase -in @("Inspect", "Configure")) {
+  if ($LocalPlanTemplateId -lt 0) { throw "INSPECTION_PLAN_ID_INVALID" }
+  $requestLabel = if ($Phase -eq "Inspect") { "InspectionRequestFile" } else { "ConfigurationRequestFile" }
+  $inputPath = if ($Phase -eq "Inspect") { $InspectionRequestFile } else { $ConfigurationRequestFile }
+  $requestPath = Resolve-ExternalFile -Path $inputPath -Label $requestLabel -RepositoryRoot $repoRoot
+  $inspectionRequest = Read-JsonFile -Path $requestPath -Label $requestLabel
+  if ([string]::IsNullOrWhiteSpace($EvidenceDirectory)) {
+    $EvidenceDirectory = Join-Path (Split-Path -Parent $requestPath) "dxm-path-b-system-evidence"
+  }
+  $evidenceRoot = Resolve-ExternalDirectory -Path $EvidenceDirectory -RepositoryRoot $repoRoot
+  $runName = "path-b-" + $Phase.ToLowerInvariant() + "-" + [DateTimeOffset]::UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + [guid]::NewGuid().ToString("N")
+  $inspectionPath = Join-Path $evidenceRoot "$runName.json"
+  $tracePath = Join-Path $evidenceRoot "$runName-trace.json"
+  $completed = $false
+  try {
+    $inspection = if ($Phase -eq "Inspect") { Invoke-InspectionPhase -Request $inspectionRequest } else { Invoke-ConfigurationPhase -Request $inspectionRequest }
+    Write-NewExternalJson -Path $inspectionPath -Value $inspection -ConflictCode "INSPECTION_OUTPUT_EXISTS"
+    $completed = $true
+  } finally {
+    Write-NewExternalJson -Path $tracePath -ConflictCode "INSPECTION_TRACE_EXISTS" -Value ([ordered]@{
+      schemaVersion = "real_dxm_path_b_system_trace.v1"
+      phase = $Phase
+      completed = $completed
+      calls = @($script:Trace)
+      executionAllowed = $false
+      scopeIssued = $false
+    })
+  }
+  Write-Host "phase=$Phase status=completed executionAllowed=false"
+  if ($Phase -eq "Inspect" -and $LocalPlanTemplateId -gt 0) {
+    Write-Host "planPreflightOk=$($inspection.planPreflight.ok) reason=$($inspection.planPreflight.reasonCode)"
+  }
+  Write-Host "report=$inspectionPath"
+  Write-Host "trace=$tracePath"
+  return
 }
 
 if ($Phase -eq "Prepare") {

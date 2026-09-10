@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -28,6 +29,7 @@ from src.batch_edit.plan_schema_contract import (
 from src.batch_edit.frozen_execution_contract import (
     FrozenExecutionContractError,
     validate_frozen_execution_defaults,
+    validate_save2_runtime_origin,
 )
 from src.batch_edit.path_a_section_templates import PATH_A_FILL_CONTEXT_KEY
 from src.batch_edit.scope_contract import canonical_sha256
@@ -256,6 +258,8 @@ class DxmLoginFlow:
         # session-bound read envelope so the API/audit layer can explain a
         # slow or empty sync without exposing credentials or product data.
         self._active_e2_request_trace: list[dict[str, Any]] | None = None
+        self._save2_prefill_state: dict[str, Any] | None = None
+        self._save1_prefill_state: dict[str, Any] | None = None
 
     def set_mutation_authorizer(
         self,
@@ -345,6 +349,543 @@ class DxmLoginFlow:
             'capability': canonical,
             'reason_code': reason_codes[canonical],
         }
+
+    def observe_save2_before_first_write(self, *, item: Mapping[str, Any], store_name: str) -> dict[str, Any]:
+        """Observe only the already-entered native second page; never navigate or click."""
+        from src.batch_edit.frozen_execution_contract import deferred_save2_policy
+
+        policy = deferred_save2_policy(item)
+        page = self._page
+        if page is None or self._page_identity_result(str(page.url), 'semi_managed').get('ok') is not True:
+            raise RuntimeError('SAVE2_NATIVE_PAGE_NOT_ENTERED')
+        self._require_frozen_product_page_identity(
+            page, target_identity=item['target_identity'], store_name=store_name,
+            phase='半托管首写前冻结',
+        )
+        browser_id = self.browser_session_id()
+        # These are type hints for the existing reader, not resolved values.
+        # The result must come from a unique control, including an observed empty value.
+        descriptors = [{
+            'field_key': field['field_key'], 'ui_binding': field['ui_binding'],
+            'ui_label_zh': field['ui_label_zh'], 'resolved_value': field['rule'].get('value',
+                {'boolean': False, 'array': [], 'object': {}, 'integer': 0, 'number': 0.0, 'string': ''}.get(field['property_schema'].get('type'))),
+        } for field in policy['fields']]
+        body = {'schema': 'dxm.batch_draft_save.execution_payload.v1', 'fields': descriptors, 'unresolved_fields': []}
+        observed = self._capture_frozen_execution_values(
+            page, {**body, 'payload_hash': canonical_sha256(body)}, phase='save2_before_first_write',
+        )
+        if observed.get('ok') is not True:
+            raise RuntimeError('SAVE2_PREIMAGE_BINDINGS_NOT_OBSERVED')
+        self._require_frozen_product_page_identity(
+            page, target_identity=item['target_identity'], store_name=store_name,
+            phase='半托管冻结读回后',
+        )
+        if browser_id != self.browser_session_id():
+            raise RuntimeError('SAVE2_OBSERVATION_SESSION_DRIFT')
+        screenshot = SCREENSHOT_DIR / f'save2-preimage-{uuid.uuid4().hex}.png'
+        page.screenshot(path=str(screenshot), full_page=True)
+        return {
+            'product_id': item['product_id'], 'shop_id': item['shop_id'],
+            'browser_session_id': browser_id, 'page_url': str(page.url),
+            'target_identity_sha256': item['target_identity_sha256'],
+            'observed_at': self._evidence_observed_at(),
+            'values': {field['field_key']: field['value'] for field in observed['values']},
+            'bindings': {field['field_key']: field['ui_binding'] for field in policy['fields']},
+            'write_attempted': False, 'evidence_ref': self._evidence_descriptor(screenshot),
+        }
+
+    def observe_rollback_preparation(
+        self, *, defaults: dict[str, Any], product_query: str | None,
+        store_name: str, shop_id: str, target_identity: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Observe restorable SAVE1 values on the owned page; never navigate or write."""
+        payload = validate_frozen_execution_defaults(defaults)
+        target, target_sha = self._normalize_frozen_target_identity(target_identity, store_name=store_name)
+        product_id = str(payload.get('product_id') or '')
+        if (payload.get('save_stage', 'SAVE1') != 'SAVE1'
+                or target['stable_identity']['kind'] != 'product_id'
+                or target['stable_identity']['value'] != product_id):
+            raise RuntimeError('ROLLBACK_PREPARATION_TARGET_INVALID')
+        shop_id = self._positive_reader_id(shop_id, label='回滚准备店铺')
+        page = self._page
+        if page is None or not self._is_dxm_editor_url(str(page.url)):
+            raise RuntimeError('ROLLBACK_PREPARATION_EDITOR_REQUIRED')
+        self._require_frozen_product_page_identity(
+            page, target_identity=target, store_name=store_name, phase='回滚准备首读前',
+        )
+        browser_id = self.browser_session_id()
+        page_url = str(page.url)
+        schema = self._capture_current_editor_category_schema(page, payload, phase='rollback_preparation')
+        if schema.get('ok') is not True:
+            raise RuntimeError('ROLLBACK_PREPARATION_CURRENT_SCHEMA_UNPROVEN')
+        # The same strict engine must be able to write both the target and the original values.
+        # A display-only JSON marker or an unavailable original option is not a recovery plan.
+        preflight = self._fill_frozen_execution_payload_on_page(page, payload, operation='preflight')
+        if preflight.get('ok') is not True or preflight.get('write_attempted') is not False:
+            raise RuntimeError('ROLLBACK_PREPARATION_BINDINGS_UNPROVEN')
+        observations = preflight.get('observations', [])
+        fields = payload['fields']
+        if (len(observations) != len(fields)
+                or [value.get('field_key') for value in observations] != [field['field_key'] for field in fields]
+                or any(value.get('found') is not True or 'value' not in value for value in observations)):
+            raise RuntimeError('ROLLBACK_PREPARATION_VALUES_INCOMPLETE')
+        restore_body = {key: value for key, value in payload.items() if key != 'payload_hash'}
+        restore_body['fields'] = [
+            {**field, 'resolved_value': observed['value']} for field, observed in zip(fields, observations)
+        ]
+        screenshot = SCREENSHOT_DIR / f'rollback-preimage-{uuid.uuid4().hex}.png'
+        page.screenshot(path=str(screenshot), full_page=True)
+        recovery = self._fill_frozen_execution_payload_on_page(
+            page, {**restore_body, 'payload_hash': canonical_sha256(restore_body)}, operation='preflight',
+        )
+        if (recovery.get('ok') is not True or recovery.get('write_attempted') is not False
+                or recovery.get('observations') != observations):
+            raise RuntimeError('ROLLBACK_PREPARATION_RESTORE_UNPROVEN_OR_DRIFTED')
+        after_schema = self._capture_current_editor_category_schema(page, payload, phase='rollback_preparation_after')
+        if (after_schema.get('ok') is not True
+                or after_schema.get('observed_category_id') != schema['observed_category_id']
+                or after_schema.get('observed_category_schema_hash') != schema['observed_category_schema_hash']):
+            raise RuntimeError('ROLLBACK_PREPARATION_SCHEMA_DRIFT')
+        self._require_frozen_product_page_identity(
+            page, target_identity=target, store_name=store_name, phase='回滚准备读回后',
+        )
+        if browser_id != self.browser_session_id() or page_url != str(page.url):
+            raise RuntimeError('ROLLBACK_PREPARATION_SESSION_DRIFT')
+        result = {
+            'ok': True, 'stage': 'rollback_preparation_observed', 'page_url': page_url,
+            'write_attempted': False,
+            'rollback_preparation': {
+                'schema': 'dxm.rollback-preimage-observation.v1',
+                'product_id': product_id, 'shop_id': shop_id,
+                'browser_session_id': browser_id, 'target_identity_sha256': target_sha,
+                'page_url': page_url, 'category_id': schema['observed_category_id'],
+                'category_schema_hash': schema['observed_category_schema_hash'],
+                'execution_payload_hash': payload['payload_hash'],
+                'observed_at': self._evidence_observed_at(), 'write_attempted': False,
+                'values': [
+                    {'field_key': field['field_key'], 'value': observed['value'],
+                     'ui_binding': field['ui_binding'], 'unique': True, 'visible': True, 'writable': True}
+                    for field, observed in zip(fields, observations)
+                ],
+                'evidence_ref': self._evidence_descriptor(screenshot),
+            },
+        }
+        context = self._execution_evidence_context or {}
+        self._save1_prefill_state = {
+            'observation': result['rollback_preparation'], 'page': page,
+            'task_id': context.get('task_id'), 'job_id': context.get('job_id'),
+            'attempted': False, 'result': None,
+        }
+        return result
+
+    def validate_editor_wholesale(
+        self, *, defaults: dict[str, Any], product_query: str | None,
+        store_name: str, shop_id: str, target_identity: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Fresh post-fill validation, without enabling controls or reapplying values."""
+        from src.batch_edit.wholesale_filler import (
+            build_editor_wholesale_receipt, validate_editor_wholesale_observation,
+        )
+
+        payload = validate_frozen_execution_defaults(defaults)
+        target, _ = self._normalize_frozen_target_identity(target_identity, store_name=store_name)
+        context = self._execution_evidence_context or {}
+        page, prepared = self._page, getattr(self, '_save1_prefill_state', None)
+        if (payload.get('execution_path') != 'B' or payload.get('save_stage', 'SAVE1') != 'SAVE1'
+                or page is None or not self._is_dxm_editor_url(str(page.url))
+                or not prepared or prepared['page'] is not page or prepared.get('result') is None
+                or not prepared.get('writer')
+                or any(not context.get(key) or prepared[key] != context[key] for key in ('task_id', 'job_id'))
+                or prepared['observation']['execution_payload_hash'] != payload['payload_hash']
+                or prepared['observation']['shop_id'] != self._positive_reader_id(shop_id, label='批发验证店铺')
+                or prepared['observation']['browser_session_id'] != self.browser_session_id()
+                or prepared['observation']['page_url'] != str(page.url)):
+            raise RuntimeError('WHOLESALE_FILL_CONTINUITY_UNPROVEN')
+        self._require_frozen_product_page_identity(
+            page, target_identity=target, store_name=store_name, phase='批发独立验证前',
+        )
+        started_at = self._evidence_observed_at()
+        page_url, browser_id = str(page.url), self.browser_session_id()
+        keys = {'bulkOrder', 'bulkDiscount', 'reduceStrategy', 'aeopAeProductSKUs'}
+        fields = [field for field in payload['fields'] if field['field_key'] in keys]
+        if {field['field_key'] for field in fields} != keys or len(fields) != len(keys):
+            raise RuntimeError('WHOLESALE_FIELDS_INCOMPLETE')
+        # Read-only projection: this hash never replaces the command's frozen payload.
+        body = {key: deepcopy(value) for key, value in payload.items() if key != 'payload_hash'}
+        body['fields'] = fields
+        read_payload = {**body, 'payload_hash': canonical_sha256(body)}
+
+        def observe() -> dict[str, Any]:
+            # Post-fill category is the configured target; retain the original execution authority.
+            schema_input = {**payload, 'category_id': payload.get('target_category', {}).get('category_id', payload['category_id'])}
+            schema = self._capture_current_editor_category_schema(page, schema_input, phase='wholesale_finalize')
+            observed = self._fill_frozen_execution_payload_on_page(page, read_payload, operation='readback')
+            values = observed.get('observations')
+            if (schema.get('ok') is not True or observed.get('ok') is not True
+                    or not isinstance(values, list) or len(values) != len(fields)
+                    or [value.get('field_key') for value in values] != [field['field_key'] for field in fields]):
+                raise RuntimeError('WHOLESALE_FRESH_READBACK_UNPROVEN')
+            return {
+                'category_schema': schema,
+                'enabled_control': self._observe_wholesale_enabled_control(page),
+                'fields': [{**value, 'ui_binding': field['ui_binding']} for value, field in zip(values, fields)],
+            }
+
+        before = observe()
+        screenshot = SCREENSHOT_DIR / f'wholesale-validation-{uuid.uuid4().hex}.png'
+        page.screenshot(path=str(screenshot), full_page=True)
+        after = observe()
+        self._require_frozen_product_page_identity(
+            page, target_identity=target, store_name=store_name, phase='批发独立验证后',
+        )
+        if page_url != str(page.url) or browser_id != self.browser_session_id():
+            raise RuntimeError('WHOLESALE_VALIDATION_SESSION_DRIFT')
+        observation = {
+            'schema': 'dxm.editor_wholesale_observation.v1',
+            'command': {**{key: context.get(key) for key in (
+                'command_id', 'state', 'task_id', 'job_id', 'runtime_id', 'browser_session_id')},
+                'action': context.get('command_action')},
+            'target_identity': target, 'page_url': page_url,
+            'execution_payload_hash': payload['payload_hash'],
+            'started_at': started_at, 'completed_at': self._evidence_observed_at(),
+            'write_attempted': False, 'before': before, 'after': after,
+            'writer': deepcopy(prepared['writer']), 'evidence_ref': self._evidence_descriptor(screenshot),
+        }
+        validated = validate_editor_wholesale_observation(
+            observation, defaults=defaults, expected_payload=payload,
+            target_identity=target, command_context=context,
+        )
+        prepared['wholesale_observation'] = deepcopy(validated)
+        return {
+            'ok': True, 'stage': 'editor_wholesale_verified', 'page_url': page_url,
+            'target_identity': target, 'store_name': store_name, 'product_query': product_query,
+            'write_attempted': False, 'wholesale_observation': validated,
+            'evidence_ref': validated['evidence_ref'],
+            'mandatory_capability_receipts': {'wholesale': build_editor_wholesale_receipt(validated)},
+        }
+
+    def translate_editor_content(self, *, defaults, product_query, store_name, shop_id, target_identity):
+        from src.batch_edit.translator import (
+            NativeTranslationNetwork, native_translation_fields, native_translation_texts,
+            prepare_native_translation, validate_native_translation_surface, validate_native_translation_values,
+        )
+        from src.execution.editor_readonly_inspection import (
+            EDITOR_CONTENT_ACTION_SURFACE_SCRIPT, EDITOR_TRANSLATION_SURFACE_BINDING,
+        )
+
+        payload = validate_frozen_execution_defaults(defaults)
+        fields, owners = native_translation_fields(payload)
+        context = self._execution_evidence_context or {}
+        page, prepared = self._page, self._save1_prefill_state
+        target, _ = self._normalize_frozen_target_identity(target_identity, store_name=store_name)
+        deadline = context.get('deadline_monotonic')
+        if (page is None or not self._is_dxm_editor_url(str(page.url)) or not prepared
+                or prepared.get('page') is not page or prepared.get('result') is None
+                or context.get('state') != 'BATCH_TRANSLATE_EXECUTE' or context.get('mode') != 'batch_draft_save'
+                or context.get('command_action') != 'translate_editor_content' or not context.get('command_id')
+                or any(not context.get(key) or prepared.get(key) != context[key] for key in ('task_id', 'job_id'))
+                or prepared['observation']['execution_payload_hash'] != payload['payload_hash']
+                or prepared['observation']['shop_id'] != self._positive_reader_id(shop_id, label='翻译店铺')
+                or prepared['observation']['browser_session_id'] != self.browser_session_id()
+                or type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= time.monotonic()):
+            raise RuntimeError('TRANSLATION_COMMAND_CONTINUITY_UNPROVEN')
+        wholesale = prepared.get('wholesale_observation', {})
+        if (wholesale.get('execution_payload_hash') != payload['payload_hash']
+                or any(wholesale.get('command', {}).get(key) != context.get(key)
+                       for key in ('task_id', 'job_id', 'runtime_id', 'browser_session_id'))):
+            raise RuntimeError('TRANSLATION_WHOLESALE_PREDECESSOR_REQUIRED')
+        previous = getattr(self, '_translation_network_state', None)
+        if previous is not None:
+            if (previous['job_id'] == context['job_id'] or previous['succeeded'] is not True
+                    or previous['window'].failure_code is not None):
+                raise RuntimeError('TRANSLATION_PREVIOUS_OPERATION_UNRESOLVED')
+            previous['window'].close()
+        config = payload['editor_actions']['translation']
+        page_url, browser_id = str(page.url), self.browser_session_id()
+        body = {key: deepcopy(value) for key, value in payload.items() if key != 'payload_hash'}
+        body['fields'] = fields
+        read_payload = {**body, 'payload_hash': canonical_sha256(body)}
+
+        def read_values():
+            self._require_frozen_product_page_identity(page, target_identity=target, store_name=store_name, phase='翻译字段读回')
+            if self._page is not page or str(page.url) != page_url or self.browser_session_id() != browser_id:
+                raise RuntimeError('TRANSLATION_PAGE_OR_SESSION_DRIFT')
+            result = self._capture_frozen_execution_values(page, read_payload, phase='native_translation')
+            if result.get('ok') is not True:
+                raise RuntimeError('TRANSLATION_FIELD_READBACK_UNPROVEN')
+            return {item['field_key']: item['value'] for item in result['values']}
+
+        schema_input = {**payload, 'category_id': payload.get('target_category', {}).get('category_id', payload['category_id'])}
+        if self._capture_current_editor_category_schema(page, schema_input, phase='native_translation').get('ok') is not True:
+            raise RuntimeError('TRANSLATION_CATEGORY_SCHEMA_DRIFT')
+        started_at = self._evidence_observed_at()
+        before = read_values()
+        if before != {field['field_key']: field['resolved_value'] for field in fields}:
+            raise RuntimeError('TRANSLATION_PREIMAGE_DRIFT')
+        surface = prepare_native_translation(page, config)
+        if read_values() != before:
+            raise RuntimeError('TRANSLATION_PREPARATION_CHANGED_FIELDS')
+        texts = [text for key, owner in owners.items()
+                 for text in native_translation_texts(before[key], owner['property_schema'])]
+        window = NativeTranslationNetwork(page, allowed_texts=texts,
+            readonly_requests=DXM_E2_PLAN_READ_ALLOWLIST | DXM_DRAFT_READ_ALLOWLIST)
+        window.install()
+        state = {'window': window, 'job_id': context['job_id'], 'succeeded': False}
+        self._translation_network_state = state
+
+        def pre_dispatch():
+            if time.monotonic() >= deadline or read_values() != before:
+                raise RuntimeError('TRANSLATION_PRE_DISPATCH_DRIFT')
+            current = page.evaluate(EDITOR_CONTENT_ACTION_SURFACE_SCRIPT, 'translation')
+            validate_native_translation_surface(current, config)
+            if current != surface:
+                raise RuntimeError('TRANSLATION_PRE_DISPATCH_SURFACE_DRIFT')
+
+        def click_language():
+            panel = page.locator(EDITOR_TRANSLATION_SURFACE_BINDING)
+            language = panel.locator('.panel-language-list > .panel-language-item').filter(
+                has=page.locator('.panel-language-title').filter(has_text=re.compile(r'^中文 → 英文$')))
+            if panel.count() != 1 or language.count() != 1 or not language.is_visible() or not language.is_enabled():
+                raise RuntimeError('TRANSLATION_LANGUAGE_NOT_UNIQUE')
+            window.arm()
+            language.click(timeout=max(1, min(5000, int((deadline - time.monotonic()) * 1000))))
+            return {'dispatched': True}
+
+        try:
+            dispatch = self._dispatch_authorized_mutation('translate_language_click', click_language,
+                                                         pre_dispatch_guard=pre_dispatch)
+            while True:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('TRANSLATION_COMPLETION_DEADLINE')
+                if window.failure_code:
+                    raise RuntimeError(window.failure_code)
+                try:
+                    network = window.evidence()
+                    after = read_values()
+                    validate_native_translation_values(payload, before, after, network)
+                    break
+                except ValueError as exc:
+                    if str(exc) not in {'TRANSLATION_NETWORK_PENDING', 'TRANSLATION_NETWORK_MISSING',
+                                        'TRANSLATION_TEXT_RESULT_INVALID', 'TRANSLATION_READBACK_NOT_PROVIDER_OUTPUT'}:
+                        raise
+                page.wait_for_timeout(100)
+            window.seal()
+            screenshot = SCREENSHOT_DIR / f'translation-{uuid.uuid4().hex}.png'
+            page.screenshot(path=str(screenshot), full_page=True)
+            verified = read_values()
+            network = window.evidence()
+            validate_native_translation_values(payload, before, verified, network)
+            if verified != after:
+                raise RuntimeError('TRANSLATION_POST_CAPTURE_DRIFT')
+            observation = {'schema': 'dxm.editor_translation_observation.v1',
+                'command': {key: context.get(key) for key in ('command_id', 'state', 'command_action', 'task_id', 'job_id',
+                                                            'runtime_id', 'browser_session_id')},
+                'execution_payload_hash': payload['payload_hash'], 'target_identity': target,
+                'page_url': page_url, 'shop_id': shop_id, 'started_at': started_at,
+                'completed_at': self._evidence_observed_at(), 'surface': surface, 'before': before, 'after': verified,
+                'network': network, 'mutation_authorization': dispatch['authorization_facts'],
+                'wholesale_command_id': wholesale['command']['command_id'],
+                'evidence_ref': self._evidence_descriptor(screenshot)}
+            state['succeeded'] = True
+            return {'ok': True, 'stage': 'editor_translation_observed', 'page_url': page_url,
+                    'target_identity': target, 'store_name': store_name, 'product_query': product_query,
+                    'write_attempted': True, 'translation_observation': observation,
+                    'evidence_ref': observation['evidence_ref']}
+        finally:
+            window.seal()
+
+    @staticmethod
+    def _observe_wholesale_enabled_control(page: Page) -> dict[str, Any]:
+        return page.evaluate(r"""() => {
+          const visible = node => !!node && node.getBoundingClientRect().width > 0
+            && node.getBoundingClientRect().height > 0
+            && getComputedStyle(node).visibility !== 'hidden' && getComputedStyle(node).display !== 'none';
+          const groups = Array.from(document.querySelectorAll('.ant-form-item')).filter(group =>
+            visible(group) && group.querySelectorAll('.input-number-wrapper[class~="w-100!"] input').length === 1
+            && group.querySelectorAll('.input-number-wrapper[class~="w-140!"] input').length === 1
+            && group.querySelector('.ant-form-item-label')?.textContent.trim() === '批发');
+          const group = groups.length === 1 ? groups[0] : null;
+          const checks = group ? Array.from(group.querySelectorAll('.ant-checkbox-wrapper-in-form-item input[type="checkbox"]')) : [];
+          const quantity = group?.querySelector('.input-number-wrapper[class~="w-100!"] input');
+          const discount = group?.querySelector('.input-number-wrapper[class~="w-140!"] input');
+          const check = checks.length === 1 ? checks[0] : null;
+          return {ui_binding:'dxm_editor:wholesale.enabled', found:!!check,
+            match_count:groups.length === 1 ? checks.length : groups.length,
+            visible:visible(check) && visible(quantity) && visible(discount), checked:check?.checked === true,
+            discount_unit:discount?.closest('.input-number-wrapper')?.parentElement?.textContent.trim() ?? '',
+            quantity_enabled:!!quantity && !quantity.disabled && !quantity.readOnly,
+            discount_enabled:!!discount && !discount.disabled && !discount.readOnly};
+        }""")
+
+    def inspect_editor_readonly(
+        self, *, shop_id: str, product_id: str, session_ref: str, guard: Any,
+        observe_dialog: str | None = None,
+    ) -> dict[str, Any]:
+        from src.execution.editor_readonly_inspection import (
+            EDITOR_READONLY_DOM_SCRIPT, EDITOR_READONLY_READY_SCRIPT,
+            EDITOR_READONLY_HYDRATED_SCRIPT,
+            EDITOR_DIALOG_REVEAL_BINDINGS, EDITOR_READONLY_FORM_SCRIPT,
+            EDITOR_READONLY_OVERLAYS_SCRIPT, wait_editor_form_stable,
+            EDITOR_TRANSLATION_SURFACE_BINDING, EDITOR_VIDEO_SURFACE_BINDING,
+            EDITOR_CONTENT_ACTION_SURFACE_SCRIPT,
+        )
+        from src.services.dxm_plan_reader import DxmPlanReader
+
+        if observe_dialog is not None and observe_dialog not in EDITOR_DIALOG_REVEAL_BINDINGS:
+            raise DxmDraftReaderError('EDITOR_INSPECTION_DIALOG_INVALID', '只允许观察翻译或视频入口弹窗。')
+        shop_id = self._positive_reader_id(shop_id, label='店铺')
+        product_id = self._positive_reader_id(product_id, label='商品')
+        before = self.read_e2_product_details(shop_id=shop_id, product_ids=[product_id])
+        browser_id, account_ref, payload = DxmPlanReader._validated_envelope(before)
+        if DxmPlanReader._session_ref(browser_id, account_ref) != session_ref:
+            raise DxmDraftReaderError('DXM_PLAN_SESSION_MISMATCH', '只读检查会话已变化。')
+        products = payload.get('products')
+        if not isinstance(products, list) or len(products) != 1:
+            raise DxmDraftReaderError('PRODUCT_IDENTITY_CONFLICT', '只读检查缺少唯一草稿。')
+        observed_id, detail = DxmPlanReader._validated_product_detail(products[0], shop_id=shop_id)
+        if observed_id != product_id:
+            raise DxmDraftReaderError('PRODUCT_IDENTITY_CONFLICT', '只读检查草稿身份不符。')
+        _original, context, current_browser_id = self._draft_reader_session()
+        if current_browser_id != browser_id:
+            raise DxmDraftReaderError('BROWSER_SESSION_MISMATCH', '只读检查浏览器已变化。')
+        page = context.new_page()
+        page_errors: list[str] = []
+        dialog_observation = None
+        before_dom = None
+        overlay_dom = None
+        entry_probe = None
+        content_surface = None
+        page.on('pageerror', lambda error: page_errors.append(str(error)[:1000]) if len(page_errors) < 20 else None)
+        try:
+            guard.install(page)
+            guard.bind_page(page)
+            def block_websocket(route):
+                guard.websockets.append({'url': route.url, 'forbidden_keyword_hits': []})
+                route.close()
+            page.route_web_socket('**/*', block_websocket)
+            cdp = context.new_cdp_session(page)
+            cdp.send('Network.setBypassServiceWorker', {'bypass': True})
+            page.goto(f'https://www.dianxiaomi.com/web/smt/edit?id={product_id}', wait_until='domcontentloaded', timeout=30000)
+            title_loaded = False
+            form_loaded = False
+            try:
+                page.wait_for_function(EDITOR_READONLY_READY_SCRIPT, arg=detail.get('subject'), timeout=20000)
+                title_loaded = True
+                page.wait_for_function(EDITOR_READONLY_HYDRATED_SCRIPT, arg=detail.get('sourceUrl'), timeout=30000)
+                form_loaded = True
+                page.wait_for_load_state('networkidle', timeout=15000)
+            except TimeoutError:
+                pass
+            parsed = urlparse(str(page.url))
+            if parsed.scheme != 'https' or parsed.netloc != 'www.dianxiaomi.com' or parsed.path != '/web/smt/edit' or parse_qs(parsed.query).get('id') != [product_id]:
+                raise DxmDraftReaderError('PRODUCT_IDENTITY_CONFLICT', '只读检查未停在同一商品编辑页。')
+            dom = page.evaluate(EDITOR_READONLY_DOM_SCRIPT)
+            if observe_dialog is not None:
+                before_dom = dom
+                dialog_observation = {
+                    'requested': observe_dialog, 'clickAttempted': False, 'clickCompleted': False,
+                    'ok': False, 'reasonCode': 'EDITOR_DIALOG_NOT_OBSERVED',
+                }
+                existing_dialogs = page.locator('[role="dialog"]:visible,.ant-modal:visible')
+                main_form = page.locator('.product-add-wrapper')
+                if not (title_loaded and form_loaded) or main_form.count() != 1:
+                    dialog_observation['reasonCode'] = 'EDITOR_DIALOG_PAGE_NOT_READY'
+                elif existing_dialogs.count() != 0:
+                    dialog_observation['reasonCode'] = 'EDITOR_DIALOG_ALREADY_VISIBLE'
+                else:
+                    stability = wait_editor_form_stable(page, main_form)
+                    dialog_observation['formStability'] = {key: value for key, value in stability.items() if key != 'snapshot'}
+                    main_form_before = stability['snapshot']
+                    before_dom = page.evaluate(EDITOR_READONLY_DOM_SCRIPT)
+                    selector, button_name = EDITOR_DIALOG_REVEAL_BINDINGS[observe_dialog]
+                    button = page.locator(selector)
+                    entry_probe = {'containerCount': button.count()}
+                    if button.count() == 1:
+                        entry_probe['accessibility'] = button.aria_snapshot(timeout=5000)
+                        entry_probe['scopeButtons'] = button.evaluate("""root => [...root.querySelectorAll('button')].map(el => ({
+                          text:el.textContent, innerText:el.innerText, label:el.getAttribute('aria-label'),
+                          title:el.getAttribute('title'), role:el.getAttribute('role'),
+                          hiddenAncestor:el.closest('[aria-hidden=true]')?.getAttribute('class') || null,
+                          svgTitles:[...el.querySelectorAll('svg title')].map(node => node.textContent)
+                        }))""")
+                    if observe_dialog == 'video':
+                        # The observed accessible name includes a CSS icon glyph; visible text does not.
+                        button = button.locator('button')
+                    entry_probe['namedCount'] = button.count()
+                    entry_probe['candidates'] = button.evaluate_all("els => els.map(el => ({text:el.textContent,innerText:el.innerText,disabled:!!el.disabled,tag:el.tagName,className:el.className}))")
+                    button = button.filter(has_text=re.compile('^' + re.escape(button_name) + '$'))
+                    entry_probe['filteredCount'] = button.count()
+                    try:
+                        if stability['ok'] is not True:
+                            raise RuntimeError('EDITOR_DIALOG_FORM_NOT_STABLE')
+                        if button.count() != 1 or not button.is_visible() or not button.is_enabled():
+                            raise RuntimeError('EDITOR_DIALOG_ENTRY_NOT_UNIQUE_VISIBLE')
+                        dialog_observation['clickAttempted'] = True
+                        button.click(timeout=5000)
+                        dialog_observation['clickCompleted'] = True
+                        surface = page.locator(EDITOR_TRANSLATION_SURFACE_BINDING) if observe_dialog == 'translation' else page.locator(EDITOR_VIDEO_SURFACE_BINDING)
+                        dialog_observation['waitStage'] = 'surface_visible'
+                        dialog_observation['surfaceMatchCountBeforeWait'] = surface.count()
+                        surface.wait_for(state='visible', timeout=10000)
+                        dialog_observation['surfaceType'] = 'translation_popover' if observe_dialog == 'translation' else 'modal'
+                        dialog_observation['dialogCount'] = surface.count()
+                        dialog_observation['waitStage'] = 'network_idle'
+                        page.wait_for_load_state('networkidle', timeout=5000)
+                        dialog_observation['waitStage'] = 'complete'
+                        dialog_observation['ok'] = surface.count() == 1
+                        dialog_observation['reasonCode'] = 'EDITOR_DIALOG_OBSERVED' if dialog_observation['ok'] else 'EDITOR_DIALOG_NOT_UNIQUE'
+                    except Exception as exc:
+                        dialog_observation['reasonCode'] = 'EDITOR_DIALOG_REVEAL_FAILED'
+                        dialog_observation['errorType'] = type(exc).__name__
+                        dialog_observation['entryFailure'] = str(exc)[:300] if isinstance(exc, RuntimeError) else type(exc).__name__
+                    try:
+                        main_form_after = main_form.evaluate(EDITOR_READONLY_FORM_SCRIPT)
+                        form_unchanged = main_form_after == main_form_before
+                        dialog_observation.update({
+                            'mainFormBeforeSha256': canonical_sha256(main_form_before),
+                            'mainFormAfterSha256': canonical_sha256(main_form_after),
+                            'mainFormUnchanged': form_unchanged,
+                        })
+                        parsed_after = urlparse(str(page.url))
+                        same_page = parsed_after.scheme == 'https' and parsed_after.netloc == 'www.dianxiaomi.com' and parsed_after.path == '/web/smt/edit' and parse_qs(parsed_after.query).get('id') == [product_id]
+                        if not form_unchanged or not same_page:
+                            dialog_observation['ok'] = False
+                            dialog_observation['reasonCode'] = 'EDITOR_DIALOG_UNEXPECTED_EFFECT'
+                    except Exception as exc:
+                        dialog_observation['ok'] = False
+                        dialog_observation['reasonCode'] = 'EDITOR_DIALOG_READBACK_FAILED'
+                        dialog_observation['errorType'] = type(exc).__name__
+                    dom = page.evaluate(EDITOR_READONLY_DOM_SCRIPT)
+                    overlay_dom = page.evaluate(EDITOR_READONLY_OVERLAYS_SCRIPT)
+                    content_surface = page.evaluate(EDITOR_CONTENT_ACTION_SURFACE_SCRIPT, observe_dialog)
+        finally:
+            page.close()
+        after = self.read_e2_product_details(shop_id=shop_id, product_ids=[product_id])
+        if after != before:
+            raise DxmDraftReaderError('EDITOR_INSPECTION_DATA_DRIFT', '只读检查期间商品或会话变化，不能用作执行依据。')
+        network = guard.summary()
+        result = {
+            'schemaVersion': 'dxm.editor.readonly_inspection.v1',
+            'source': 'visible_production_editor_readonly',
+            'createdAt': self._evidence_observed_at(),
+            'sessionRef': session_ref, 'shopId': shop_id, 'productId': product_id,
+            'categoryId': str(detail.get('categoryId') or ''),
+            'titleLoaded': title_loaded, 'formLoaded': form_loaded,
+            'pageErrors': page_errors, 'network': network, 'dom': dom,
+            'ok': title_loaded and form_loaded and not page_errors and not any(network.get(key) for key in (
+                'blocked_request_count', 'write_request_count', 'non_read_request_count',
+                'forbidden_keyword_request_count', 'websocket_count', 'allowlist_error_count',
+            )),
+            'executionAllowed': False, 'capabilityCertified': False,
+        }
+        if dialog_observation is not None:
+            result.update({'dialogObservation': dialog_observation, 'beforeDom': before_dom,
+                           'overlayDom': overlay_dom, 'entryProbe': entry_probe, 'contentSurface': content_surface})
+            result['ok'] = result['ok'] and dialog_observation['ok']
+        path = DATA_DIR / 'editor_readonly_inspection' / f'{uuid.uuid4().hex}.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+        return {key: value for key, value in result.items() if key not in {'dom', 'beforeDom', 'overlayDom', 'entryProbe', 'contentSurface'}} | {'artifact': self._evidence_descriptor(path)}
 
     def _path_b_capability_command_context(
         self,
@@ -494,6 +1035,9 @@ class DxmLoginFlow:
         *,
         pre_dispatch_guard: Callable[[], Any] | None = None,
     ) -> dict[str, Any]:
+        translation_state = getattr(self, '_translation_network_state', None)
+        if translation_state is not None and translation_state['window'].failure_code:
+            raise MutationAuthorizationError(translation_state['window'].failure_code)
         authorizer = self._mutation_authorizer
         if authorizer is None:
             raise MutationAuthorizationError('AUTH_VERIFIER_MISSING: 真实写入点击缺少即时授权校验器')
@@ -6726,7 +7270,9 @@ class DxmLoginFlow:
             return attached
 
         state_page_url = state.get('page_url')
-        if action in {'save_only', 'first_save_intent', 'verify_not_published'} and self._is_dxm_editor_url(state_page_url):
+        frozen = (defaults or {}).get('_frozen_execution_payload')
+        late_save2 = isinstance(frozen, Mapping) and frozen.get('save_stage') == 'SAVE2'
+        if not late_save2 and action in {'save_only', 'first_save_intent', 'verify_not_published'} and self._is_dxm_editor_url(state_page_url):
             editor_url = str(state_page_url or '')
             if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), editor_url):
                 open_editor_page = self._find_open_editor_page_for_url(editor_url)
@@ -7036,7 +7582,9 @@ class DxmLoginFlow:
         if not semi_url:
             raise RuntimeError('缺少上次半托管页地址')
         source_editor_url = state.get('source_editor_url') or state.get('editor_page_url')
-        if action == 'fill_semi_managed_defaults' and self._is_visible_dxm_editor_page(page):
+        if late_save2 and action in {'fill_semi_managed_defaults', 'save_only'}:
+            validate_save2_runtime_origin(frozen, page_url=str(page.url), browser_session_id=self.browser_session_id())
+        if not late_save2 and action == 'fill_semi_managed_defaults' and self._is_visible_dxm_editor_page(page):
             frozen_before = (
                 self._require_frozen_editor_identity(
                     page,
@@ -7070,7 +7618,11 @@ class DxmLoginFlow:
                 )
             return result
         needs_source_reopen = bool(source_editor_url and 'editFromSmt' in str(semi_url) and '?' not in str(semi_url))
-        if needs_source_reopen:
+        if late_save2:
+            # The native handshake owns navigation; a frozen second page is never reopened here.
+            if str(page.url) != str(semi_url):
+                raise RuntimeError('SAVE2_NATIVE_PAGE_CONTINUITY_LOST')
+        elif needs_source_reopen:
             self._goto_with_live_hud(page, source_editor_url, wait_until='domcontentloaded', timeout=45000)
             page.wait_for_timeout(2000)
             self._wait_for_body_text(
@@ -7111,7 +7663,8 @@ class DxmLoginFlow:
             ['半托管', '重量', '包装尺寸', '物流属性'],
             expected_identity='semi_managed',
         )
-        self._dismiss_blocking_modals(page)
+        if not late_save2:
+            self._dismiss_blocking_modals(page)
         frozen_before = (
             self._require_frozen_product_page_identity(
                 page,
@@ -7162,10 +7715,10 @@ class DxmLoginFlow:
                 page,
                 target_identity=normalized_target,
                 store_name=store_name,
-                baseline_field_integrity=(prefill.get('fill_result') or {}).get('field_integrity'),
+                baseline_field_integrity=prefill.get('field_integrity') if late_save2 else (prefill.get('fill_result') or {}).get('field_integrity'),
                 required_readback_complete=prefill.get('ok') is True,
-                expected_execution_payload=None,
-                baseline_execution_readback=None,
+                expected_execution_payload=frozen if late_save2 else None,
+                baseline_execution_readback=prefill.get('frozen_execution_readback') if late_save2 else None,
                 baseline_save_field_values=prefill.get('save_field_baseline'),
             )
         if source_editor_url and isinstance(result, dict) and not result.get('source_editor_url'):
@@ -8453,6 +9006,45 @@ class DxmLoginFlow:
         *,
         category_schema_readback: Mapping[str, Any],
     ) -> dict[str, Any]:
+        late_save2 = execution_payload.get('save_stage') == 'SAVE2'
+        path_b_main = execution_payload.get('execution_path') == 'B' and not late_save2
+        prepared = getattr(self, '_save1_prefill_state', None) if path_b_main else None
+        if path_b_main:
+            context = self._execution_evidence_context or {}
+            observation = prepared['observation'] if prepared else {}
+            if (not prepared or prepared['page'] is not page
+                    or not context.get('task_id') or not context.get('job_id')
+                    or any(prepared[key] != context[key] for key in ('task_id', 'job_id'))
+                    or observation.get('execution_payload_hash') != execution_payload['payload_hash']
+                    or observation.get('browser_session_id') != self.browser_session_id()
+                    or observation.get('page_url') != str(page.url)):
+                raise RuntimeError('SAVE1_PREPARATION_CONTINUITY_MISSING')
+            if prepared['attempted']:
+                if prepared['result'] is None:
+                    raise RuntimeError('SAVE1_PREFILL_ALREADY_ATTEMPTED')
+                readback = self._capture_frozen_execution_readback(page, execution_payload, phase='after_prefill')
+                if (readback != prepared['result']['frozen_execution_readback']
+                        or self._capture_save_field_integrity_snapshot(page) != prepared['result']['field_integrity']):
+                    raise RuntimeError('SAVE1_PREFILL_READBACK_DRIFT')
+                cached_fill = prepared['result']['preflight_results']['frozen_execution']
+                reused_fill = {
+                    **cached_fill, 'write_attempted': False,
+                    'fields': [{**field, 'write_attempted': False} for field in cached_fill['fields']],
+                }
+                return {
+                    **prepared['result'], 'write_attempted': False, 'prefill_reused': True,
+                    'preflight_results': {'frozen_execution': reused_fill},
+                }
+        if late_save2:
+            validate_save2_runtime_origin(execution_payload, page_url=str(page.url), browser_session_id=self.browser_session_id())
+            previous = self._save2_prefill_state
+            if previous and previous['freeze_sha256'] == execution_payload['stage_freeze_sha256']:
+                if previous['result'] is None:
+                    raise RuntimeError('SAVE2_PREFILL_ALREADY_ATTEMPTED')
+                readback = self._capture_frozen_execution_readback(page, execution_payload, phase='after_prefill')
+                if readback != previous['result']['frozen_execution_readback'] or self._capture_save_field_integrity_snapshot(page) != previous['result']['field_integrity']:
+                    raise RuntimeError('SAVE2_PREFILL_READBACK_DRIFT')
+                return previous['result']
         save_field_baseline = self._capture_frozen_execution_values(
             page,
             execution_payload,
@@ -8472,10 +9064,24 @@ class DxmLoginFlow:
                 'write_attempted': False,
                 'published': None,
             }
+        if late_save2:
+            if canonical_sha256({field['field_key']: field['value'] for field in save_field_baseline['values']}) != canonical_sha256(execution_payload['stage_preimage']['values']):
+                raise RuntimeError('SAVE2_PREIMAGE_DRIFT_BEFORE_FIRST_WRITE')
+            self._save2_prefill_state = {'freeze_sha256': execution_payload['stage_freeze_sha256'], 'result': None}
+        if path_b_main:
+            writer_command = {**{key: context.get(key) for key in (
+                'command_id', 'state', 'task_id', 'job_id', 'runtime_id', 'browser_session_id')},
+                'action': context.get('command_action')}
+            if (writer_command['action'] != 'fill_editor_required_defaults'
+                    or writer_command['state'] != 'FILL_BASE_INFO'
+                    or any(value is None or value == '' for value in writer_command.values())):
+                raise RuntimeError('SAVE1_PREFILL_WRITER_CONTEXT_MISSING')
+            prepared['attempted'] = True
         fill_result = self._fill_frozen_execution_payload_on_page(
             page,
             execution_payload,
-            flow=self,
+            flow=None if late_save2 else self,
+            prepared_preimage=prepared['observation'] if path_b_main else None,
         )
         preflight_results = {'frozen_execution': fill_result}
         if fill_result.get('ok') is not True:
@@ -8534,7 +9140,7 @@ class DxmLoginFlow:
             }
         before_by_field = {
             str(item.get('field_key') or ''): item
-            for item in save_field_baseline.get('values') or []
+            for item in (prepared['observation']['values'] if path_b_main else save_field_baseline.get('values') or [])
             if isinstance(item, Mapping)
         }
         canonical_save_field_baseline = [
@@ -8563,7 +9169,7 @@ class DxmLoginFlow:
                 'write_attempted': bool(fill_result.get('write_attempted')),
                 'published': None,
             }
-        return {
+        result = {
             'ok': True,
             'stage': 'editor_save_prefill_ready',
             'label': '保存前冻结字段配置已完成',
@@ -8578,8 +9184,18 @@ class DxmLoginFlow:
             'category_schema_readback': dict(category_schema_readback),
             'frozen_execution_readback': frozen_execution_readback,
             'save_field_baseline': canonical_save_field_baseline,
+            'write_attempted': bool(fill_result.get('write_attempted')),
             'published': None,
         }
+        if late_save2:
+            self._save2_prefill_state['result'] = result
+        if path_b_main:
+            prepared['result'] = result
+            prepared['writer'] = {
+                'command': writer_command, 'execution_payload_hash': execution_payload['payload_hash'],
+                'fill_result_hash': canonical_sha256(fill_result), 'fill_result': deepcopy(fill_result),
+            }
+        return result
 
     @staticmethod
     def _fill_frozen_execution_payload_on_page(
@@ -8588,8 +9204,26 @@ class DxmLoginFlow:
         *,
         operation: str = 'apply',
         flow: Any = None,
+        prepared_preimage: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if operation not in {'apply', 'readback', 'preflight'}:
+            return {
+                'ok': False,
+                'failure_code': 'FROZEN_EXECUTION_OPERATION_INVALID',
+                'fields': [],
+                'field_count': 0,
+                'write_attempted': False,
+            }
         payload_hash = str(execution_payload.get('payload_hash') or '').strip().upper()
+        path_b_main = execution_payload.get('execution_path') == 'B' and execution_payload.get('save_stage', 'SAVE1') == 'SAVE1'
+        if path_b_main and operation == 'apply' and (
+            not isinstance(prepared_preimage, Mapping)
+            or prepared_preimage.get('schema') != 'dxm.rollback-preimage-observation.v1'
+            or prepared_preimage.get('execution_payload_hash') != payload_hash
+            or not isinstance(prepared_preimage.get('values'), list)
+        ):
+            return {'ok': False, 'failure_code': 'SAVE1_PREPARATION_REQUIRED',
+                    'fields': [], 'field_count': 0, 'write_attempted': False}
         payload_body = {
             key: value
             for key, value in execution_payload.items()
@@ -8667,7 +9301,9 @@ class DxmLoginFlow:
             }
 
         try:
-            raw_result = page.evaluate(r'''({fields, operation}) => {
+            raw_result = page.evaluate(r'''({fields, operation, preimage}) => {
+              const rawPreimage = preimage?.schema === 'dxm.rollback-preimage-values.v1';
+              const previousValues = rawPreimage ? preimage.values : preimage;
               const controlSelector = 'input,textarea,select,[contenteditable="true"],[data-resolved-json]';
               const visible = (el) => {
                 if (!el || !el.getBoundingClientRect) return false;
@@ -8716,7 +9352,7 @@ class DxmLoginFlow:
                 normalizeForExpected(observed, expected),
                 expected,
               );
-              const readControl = (el) => {
+              const readControl = (el, raw = false) => {
                 const jsonValue = el.getAttribute?.('data-resolved-json');
                 if (jsonValue) {
                   try { return JSON.parse(jsonValue); } catch (_) { return jsonValue; }
@@ -8725,11 +9361,11 @@ class DxmLoginFlow:
                 if (type === 'checkbox' || type === 'radio') return Boolean(el.checked);
                 if (el.tagName === 'SELECT') {
                   return el.multiple
-                    ? Array.from(el.selectedOptions || []).map((option) => clean(option.value || option.textContent))
-                    : clean(el.value || el.selectedOptions?.[0]?.textContent);
+                    ? Array.from(el.selectedOptions || []).map((option) => raw ? option.value : clean(option.value || option.textContent))
+                    : raw ? el.value : clean(el.value || el.selectedOptions?.[0]?.textContent);
                 }
-                if (el.getAttribute?.('contenteditable') === 'true') return clean(el.textContent);
-                return clean(el.value ?? el.textContent);
+                if (el.getAttribute?.('contenteditable') === 'true') return raw ? el.textContent : clean(el.textContent);
+                return raw ? (el.value ?? el.textContent) : clean(el.value ?? el.textContent);
               };
               const setText = (el, value) => {
                 if (!el || el.disabled || el.readOnly) return false;
@@ -8748,7 +9384,7 @@ class DxmLoginFlow:
                 el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:desired}));
                 el.dispatchEvent(new Event('change', {bubbles:true}));
                 el.dispatchEvent(new Event('blur', {bubbles:true}));
-                return readControl(el) === desired.trim();
+                return readControl(el, true) === desired;
               };
               const optionIdentity = (control) => {
                 const value = clean(control.value || control.getAttribute?.('data-value'));
@@ -8773,6 +9409,24 @@ class DxmLoginFlow:
                     ...query('[name="subject"]'),
                     ...query('#form_item_subject'),
                   ]).filter(visible));
+                }
+                if (key === 'reduceStrategy') {
+                  // Observed native option values; both must belong to one complete radio group.
+                  const radios = query('input[type="radio"][value="payment_success_deduct"],input[type="radio"][value="place_order_withhold"]').filter(visible);
+                  const group = radios[0]?.closest('.ant-radio-group');
+                  if (radios.length === 2 && new Set(radios.map(node => node.value)).size === 2
+                      && group && radios.every(node => node.closest('.ant-radio-group') === group)
+                      && query('input[type="radio"]', group).length === 2) exact.push(...radios);
+                }
+                if (key === 'bulkOrder' || key === 'bulkDiscount') {
+                  // Observed paired numeric controls; the label is an additional discriminator, not the binding.
+                  const groups = query('.ant-form-item').filter(group => visible(group)
+                    && query('.input-number-wrapper[class~="w-100!"] input', group).length === 1
+                    && query('.input-number-wrapper[class~="w-140!"] input', group).length === 1
+                    && query('.ant-checkbox-wrapper-in-form-item input[type="checkbox"]', group).length === 1
+                    && group.querySelector('.ant-form-item-label')?.textContent.trim() === '批发');
+                  if (groups.length === 1) exact.push(...query(
+                    `.input-number-wrapper[class~="${key === 'bulkOrder' ? 'w-100!' : 'w-140!'}"] input`, groups[0]).filter(visible));
                 }
                 exact.push(...unique([
                   ...query(`#form_item_${escape(key)}`),
@@ -8903,13 +9557,14 @@ class DxmLoginFlow:
                   write_attempted:false,
                 };
               }
-              if (operation === 'readback') {
-                const observations = plans.map(({field, plan}) => {
+              let observations = [];
+              if (operation === 'readback' || operation === 'preflight' || preimage !== null) {
+                observations = plans.map(({field, plan}) => {
                   if (plan.kind === 'sku_rows') {
                     const values = plan.rows.map((rowPlan) => {
                       const observed = {};
                       for (const keyPlan of rowPlan.keys) {
-                        observed[keyPlan.key] = readControl(keyPlan.control);
+                        observed[keyPlan.key] = readControl(keyPlan.control, operation === 'preflight' || rawPreimage);
                       }
                       return observed;
                     });
@@ -8945,15 +9600,15 @@ class DxmLoginFlow:
                       .filter(Boolean);
                     return {
                       field_key:field.field_key,
-                      found:selectedValues.length > 0,
+                      found:Array.isArray(field.resolved_value) || selectedValues.length > 0,
                       value:Array.isArray(field.resolved_value) ? selectedValues : selectedValues[0],
                       match_count:plan.match_count,
                       aggregate_kind:'choice_group',
                     };
                   }
                   const values = plan.controls
-                    .map(readControl)
-                    .filter((value) => value !== undefined && value !== '');
+                    .map(control => readControl(control, operation === 'preflight' || rawPreimage))
+                    .filter((value) => value !== undefined);
                   return {
                     field_key:field.field_key,
                     found:values.length > 0,
@@ -8962,7 +9617,7 @@ class DxmLoginFlow:
                     aggregate_kind:plan.kind === 'choice_group' ? 'choice_group' : 'single',
                   };
                 });
-                return {
+                if (operation === 'readback') return {
                   ok:observations.length === fields.length,
                   failure_code:null,
                   message:'已使用冻结 UI binding 共享运行时读取全部字段。',
@@ -8971,6 +9626,11 @@ class DxmLoginFlow:
                   fields:[],
                   write_attempted:false,
                 };
+                if (preimage !== null && (!same(Object.keys(previousValues).sort(), fields.map(field => field.field_key).sort())
+                    || observations.some(item => !item.found || !(rawPreimage ? same : sameExpected)(item.value, previousValues[item.field_key])))) {
+                  return {ok:false, failure_code:rawPreimage ? 'SAVE1_PREIMAGE_DRIFT_BEFORE_FIRST_WRITE' : 'SAVE2_PREIMAGE_DRIFT_BEFORE_FIRST_WRITE',
+                    fields:[], field_count:0, write_attempted:false};
+                }
               }
               const preflightSingle = (control, expected) => {
                 const type = clean(control.getAttribute?.('type')).toLowerCase();
@@ -8981,9 +9641,14 @@ class DxmLoginFlow:
                 ) {
                   return {ok:false, reason:'control_not_visible_actionable'};
                 }
+                if (operation === 'preflight' && (
+                    (control.tagName === 'INPUT' && /[\r\n]/.test(String(expected ?? '')))
+                    || (control.getAttribute?.('contenteditable') === 'true' && control.children.length > 0))) {
+                  return {ok:false, reason:'raw_value_not_losslessly_restorable'};
+                }
                 if (control.hasAttribute?.('data-resolved-json')) {
                   return {
-                    ok:sameExpected(readControl(control), expected),
+                    ok:operation !== 'preflight' && sameExpected(readControl(control), expected),
                     reason:'structured_readback_mismatch',
                   };
                 }
@@ -8991,7 +9656,8 @@ class DxmLoginFlow:
                   const desired = Array.isArray(expected) ? expected.map(String) : [String(expected ?? '')];
                   const options = Array.from(control.options || []);
                   const matches = desired.map((value) => options.filter((option) => (
-                    clean(option.value) === clean(value) || clean(option.textContent) === clean(value)
+                    (operation !== 'preflight' || (!option.disabled && !option.parentElement?.disabled))
+                    && (clean(option.value) === clean(value) || clean(option.textContent) === clean(value))
                   )));
                   if (matches.some((items) => items.length !== 1) || (!control.multiple && desired.length !== 1)) {
                     return {ok:false, reason:'select_option_not_exact'};
@@ -9009,6 +9675,9 @@ class DxmLoginFlow:
                 }
                 if (typeof expected === 'boolean' && controls.length === 1) return {ok:true};
                 const desired = (Array.isArray(expected) ? expected : [expected]).map((value) => clean(value));
+                if (operation === 'preflight' && controls.some(control => control.getAttribute?.('type') === 'radio') && desired.length !== 1) {
+                  return {ok:false, reason:'radio_requires_one_option'};
+                }
                 const matches = desired.map((value) => controls.filter((control) => optionIdentity(control).includes(value)));
                 return matches.some((items) => items.length !== 1)
                   ? {ok:false, reason:'choice_option_not_exact'}
@@ -9051,6 +9720,16 @@ class DxmLoginFlow:
                   write_attempted:false,
                 };
               }
+              if (operation === 'preflight') return {
+                ok:observations.length === fields.length && observations.every(item => item.found),
+                field_count:fields.length, observations,
+                fields:plans.map(({field, plan}) => ({
+                  field_key:field.field_key, ui_binding:field.ui_binding, ok:true,
+                  match_count:plan.match_count, aggregate_kind:plan.kind,
+                  strategy:plan.strategy, write_attempted:false,
+                })),
+                write_attempted:false,
+              };
               const writeSingle = (control, expected) => {
                 if (control.hasAttribute?.('data-resolved-json')) {
                   const observed = readControl(control);
@@ -9175,20 +9854,28 @@ class DxmLoginFlow:
                 fields:results,
                 write_attempted:writeAttempted,
               };
-            }''', {'fields': descriptors, 'operation': operation})
+            }''', {'fields': descriptors, 'operation': operation,
+                   'preimage': ({'schema': 'dxm.rollback-preimage-values.v1',
+                                 'values': {field['field_key']: field['value'] for field in prepared_preimage['values']}}
+                                if path_b_main and operation == 'apply' else
+                                execution_payload['stage_preimage']['values'] if execution_payload.get('save_stage') == 'SAVE2' and operation == 'apply' else None)})
         except Exception as exc:  # noqa: BLE001 - browser binding must fail closed.
+            # An apply may have written earlier fields before the transport failed.
+            # Only the read-only operation can still prove that no write was attempted.
+            uncertain = operation == 'apply'
             return {
                 'ok': False,
                 'stage': 'fill_frozen_execution_payload_failed',
-                'failure_code': 'FROZEN_EXECUTION_BROWSER_WRITE_FAILED',
-                'message': f'冻结字段页面写入异常：{str(exc)[:240]}',
+                'failure_code': 'UNKNOWN' if uncertain else 'FROZEN_EXECUTION_BROWSER_READ_FAILED',
+                'reason_code': 'FROZEN_EXECUTION_BROWSER_WRITE_UNCERTAIN' if uncertain else 'FROZEN_EXECUTION_BROWSER_READ_FAILED',
+                'message': f'冻结字段页面操作中断，已停止：{str(exc)[:240]}',
                 'execution_payload_hash': payload_hash,
                 'field_count': len(descriptors),
                 'fields': [],
-                'write_attempted': False,
+                'write_attempted': uncertain,
             }
 
-        visible_fallback = DxmLoginFlow._visible_frozen_fallback_result(
+        visible_fallback = None if path_b_main else DxmLoginFlow._visible_frozen_fallback_result(
             page,
             descriptors,
             payload_hash,
@@ -9278,6 +9965,7 @@ class DxmLoginFlow:
             'execution_payload_hash': payload_hash,
             'field_count': len(descriptors),
             'fields': list(raw_fields) if isinstance(raw_fields, list) else [],
+            **({'observations': raw_result.get('observations', [])} if operation == 'preflight' and ok else {}),
             'write_attempted': bool(
                 isinstance(raw_result, Mapping)
                 and raw_result.get('write_attempted') is True
@@ -10213,6 +10901,10 @@ class DxmLoginFlow:
         fill_context = defaults.get(PATH_A_FILL_CONTEXT_KEY)
         if isinstance(fill_context, Mapping):
             self._path_a_fill_context = dict(fill_context)
+        if frozen.get('execution_path') == 'B' and frozen.get('save_stage', 'SAVE1') == 'SAVE1':
+            prepared_result = self._prepare_editor_page_for_save(page, defaults, require_explicit_defaults=True)
+            fill_result = (prepared_result.get('preflight_results') or {}).get('frozen_execution') or {}
+            return {**fill_result, **prepared_result, 'fill_result': dict(fill_result)}
         return self._fill_frozen_execution_payload_on_page(page, frozen, flow=self)
 
     @staticmethod
@@ -10225,6 +10917,8 @@ class DxmLoginFlow:
         flow: Any,
         raw_result: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
+        if operation == 'preflight':
+            return None
         if raw_result is not None and raw_result.get('ok') is True:
             return None
         page_url = getattr(page, 'url', None)
@@ -10433,7 +11127,7 @@ class DxmLoginFlow:
 
         # Fallback: if the frozen ref only carried a freight template id, still
         # drive the field-level 运费模板 Select with that id.
-        if freight_result.get('ok') is not True:
+        if 'freight' not in reference_templates:
             freight_id = next(
                 (
                     field.get('resolved_value')
@@ -10445,29 +11139,28 @@ class DxmLoginFlow:
             if freight_id is not None:
                 freight_result = self._apply_visible_freight_template(page, freight_id)
 
-        applied = bool(
-            product_result.get('ok') is True
-            or attribute_result.get('ok') is True
-            or freight_result.get('ok') is True
-            or service_result.get('ok') is True
+        expected_sections = list(reference_templates)
+        configured_results = dict(reference_results)
+        if product_id or product_name:
+            expected_sections.append('product')
+            configured_results['product'] = product_result
+        if 'freight' not in reference_templates and not freight_result.get('skipped'):
+            expected_sections.append('freight')
+            configured_results['freight'] = freight_result
+        missing = self._missing_required_reference_template_results(
+            configured_results, expected_sections=expected_sections,
         )
-        reason = None
-        if not applied:
-            reason = (
-                str(product_result.get('reason') or '')
-                or str(attribute_result.get('reason') or '')
-                or str(freight_result.get('reason') or '')
-                or str(service_result.get('reason') or 'templates_not_applied')
-            )
+        applied = bool(expected_sections) and not missing
+        reason = None if applied else 'required_templates_not_applied:' + ','.join(missing)
         return {
             'ok': applied,
             'required': True,
             'reason': reason,
+            'missing': missing,
             'write_attempted': bool(
-                product_result.get('write_attempted')
-                or any(
-                    isinstance(item, Mapping) and item.get('ok') is True and not item.get('skipped')
-                    for item in (attribute_result, freight_result, service_result)
+                any(
+                    item.get('write_attempted') or (item.get('ok') is True and not item.get('skipped'))
+                    for item in configured_results.values()
                 )
             ),
             'product_template': product_result,
@@ -10480,79 +11173,6 @@ class DxmLoginFlow:
             ),
             'covers_freight': bool(freight_result.get('ok') is True),
             'covers_service': bool(service_result.get('ok') is True),
-        }
-
-    def _visible_editor_shop_id(self, page: Page) -> str:
-        try:
-            observed = page.evaluate(
-                r'''() => {
-                  const nodes = [
-                    document.querySelector('input[name="shopId"]'),
-                    document.querySelector('#shopId'),
-                    document.querySelector('[data-shop-id]'),
-                  ].filter(Boolean);
-                  for (const node of nodes) {
-                    const value = node.value || node.getAttribute('data-shop-id');
-                    if (value && /^\d+$/.test(String(value))) return String(value);
-                  }
-                  return '6517349';
-                }'''
-            )
-        except Exception:
-            observed = '6517349'
-        text = str(observed or '').strip()
-        return text if text.isdigit() else '6517349'
-
-    def _resolve_quoted_product_template(self, page: Page, freight_id: Any) -> dict[str, Any]:
-        try:
-            observed = page.evaluate(
-                r'''async ({shopId, freightId}) => {
-                  const response = await fetch('/api/userTemplate/pageList.json', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-                    body: new URLSearchParams({
-                      platform: 'smt',
-                      shopId: String(shopId || ''),
-                      pageNo: '1',
-                      pageSize: '50',
-                      total: '0',
-                      searchType: '1',
-                      searchValue: '',
-                    }).toString(),
-                  });
-                  if (!response.ok) return {ok:false, reason:'pageList_http_' + response.status};
-                  const payload = await response.json();
-                  const list = payload?.data?.page?.list;
-                  if (!Array.isArray(list) || !list.length) return {ok:false, reason:'product_template_list_empty'};
-                  const wanted = String(freightId || '');
-                  const hit = list.find((item) => {
-                    const modules = Array.isArray(item?.moduleList) ? item.moduleList : [];
-                    return modules.some((module) => String(module?.data || '').includes(wanted));
-                  }) || list.find((item) => String(item?.id || item?.idStr || '') === '1138913') || list[0];
-                  return {
-                    ok: Boolean(hit && (hit.name || hit.templateName || hit.id || hit.idStr)),
-                    id: String(hit?.idStr || hit?.id || ''),
-                    name: String(hit?.name || hit?.templateName || ''),
-                    reason: payload?.msg || null,
-                  };
-                }''',
-                {'shopId': self._visible_editor_shop_id(page), 'freightId': str(freight_id or '')},
-            )
-        except Exception as exc:  # noqa: BLE001 - template lookup must fail closed.
-            return {'ok': False, 'reason': f'quote_lookup_failed:{exc}'}
-        if isinstance(observed, Mapping) and observed.get('ok') is True:
-            return dict(observed)
-        return {
-            'ok': True,
-            'id': '1138913',
-            'name': '',
-            'reason': (
-                (observed or {}).get('reason')
-                if isinstance(observed, Mapping)
-                else 'quote_lookup_invalid'
-            ),
-            'fallback_frozen_product_template': True,
         }
 
     def _apply_quoted_product_template_on_page(
@@ -10627,50 +11247,6 @@ class DxmLoginFlow:
             'write_attempted': True,
             'strategy': 'quote_product_template',
         }
-
-    def _resolve_attribute_template_names(
-        self,
-        page: Page,
-        descriptors: list[dict[str, Any]],
-    ) -> list[str]:
-        wanted = {
-            str(item.get('ui_binding') or '').split(':')[-1]: item.get('expected', item.get('resolved_value'))
-            for item in descriptors
-            if str(item.get('ui_binding') or '').startswith('dxm_attribute:')
-        }
-        if not wanted:
-            return []
-        try:
-            observed = page.evaluate(
-                r'''async ({shopId, categoryId, wanted}) => {
-                  const response = await fetch('/api/smtAttributeTemplate/getTemplateListByCategory.json', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-                    body: new URLSearchParams({
-                      shopId: String(shopId || ''),
-                      categoryId: String(categoryId || '200083142'),
-                    }).toString(),
-                  });
-                  if (!response.ok) return {ok:false, names:[]};
-                  const payload = await response.json();
-                  const list = payload?.data?.attributeTemplateList || payload?.data?.list || payload?.data;
-                  if (!Array.isArray(list)) return {ok:false, names:[]};
-                  const names = list
-                    .map((item) => String(item?.templateName || item?.name || '').trim())
-                    .filter(Boolean);
-                  return {ok:names.length > 0, names};
-                }''',
-                {
-                    'shopId': self._visible_editor_shop_id(page),
-                    'categoryId': '200083142',
-                    'wanted': wanted,
-                },
-            )
-        except Exception:
-            return []
-        names = (observed or {}).get('names') if isinstance(observed, Mapping) else None
-        return [str(name) for name in names or [] if str(name).strip()][:5]
 
     def _plan_visible_frozen_field(self, page: Page, field: Mapping[str, Any]) -> dict[str, Any]:
         key = str(field.get('field_key') or '')
@@ -15113,6 +15689,8 @@ class DxmLoginFlow:
                 current_url=getattr(page, 'url', None),
                 human_step=f'店小秘引用模板处理完成：{section}',
             )
+            if results[section].get('ok') is not True:
+                break
         return results
 
     def _unsupported_dxm_reference_template_preflight(
@@ -15197,13 +15775,18 @@ class DxmLoginFlow:
             return {'names': [str(name) for name in config if str(name or '').strip()], 'required': True}
         return {'names': [], 'required': True}
 
-    def _missing_required_reference_template_results(self, results: dict[str, dict[str, Any]]) -> list[str]:
+    @staticmethod
+    def _missing_required_reference_template_results(
+        results: dict[str, dict[str, Any]], *, expected_sections=(),
+    ) -> list[str]:
+        results = {**{key: {'ok': False} for key in expected_sections}, **results}
         return [
             f'dxm_reference_templates.{section}'
             for section, result in results.items()
-            if not result.get('ok')
+            if result.get('ok') is not True
             and (
-                result.get('required', True)
+                section in expected_sections
+                or result.get('required', True)
                 or bool(result.get('names'))
                 or result.get('unsupported_runtime_section') is True
             )
@@ -16763,6 +17346,10 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        frozen = (defaults or {}).get('_frozen_execution_payload')
+        if isinstance(frozen, Mapping) and frozen.get('save_stage') == 'SAVE2':
+            result = self._prepare_frozen_execution_page_for_save(page, frozen, category_schema_readback={})
+            return {**result, 'stage': 'fill_semi_managed_defaults' if result.get('ok') is True else 'fill_semi_managed_defaults_failed'}
         unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
         if unsupported:
             return self._unsupported_dxm_reference_template_failure(
@@ -17891,7 +18478,11 @@ class DxmLoginFlow:
             frozen_readback_ok = expected_execution_payload is None
             category_schema_readback = None
             category_schema_readback_ok = expected_execution_payload is None
-            if expected_execution_payload is not None:
+            late_save2 = expected_execution_payload is not None and expected_execution_payload.get('save_stage') == 'SAVE2'
+            if late_save2:
+                validate_save2_runtime_origin(expected_execution_payload, page_url=str(page.url), browser_session_id=self.browser_session_id())
+                category_schema_readback_ok = self._page_identity_result(str(page.url), 'semi_managed').get('ok') is True
+            elif expected_execution_payload is not None:
                 category_schema_readback = self._capture_current_editor_category_schema(
                     page,
                     expected_execution_payload,
@@ -17922,6 +18513,7 @@ class DxmLoginFlow:
                     )
                     == expected_execution_payload.get('category_schema_hash')
                 )
+            if expected_execution_payload is not None:
                 frozen_readback = self._capture_frozen_execution_readback(
                     page,
                     expected_execution_payload,
@@ -17960,6 +18552,7 @@ class DxmLoginFlow:
                 'current_field_integrity': current,
                 'category_schema_readback': category_schema_readback,
                 'frozen_execution_readback': frozen_readback,
+                **({'stage_freeze_sha256': expected_execution_payload['stage_freeze_sha256']} if late_save2 else {}),
                 'required_readback_complete': required_readback_complete is True,
                 'write_attempted': False,
                 'phase': 'before_ledger_begin_dispatch',

@@ -787,7 +787,7 @@ class DxmPlanReader:
             except PlanSchemaError as exc:
                 raise DxmPlanReaderError(
                     "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
-                    f"编辑页字段 {field_key} 无法按类目 Schema 归一化。",
+                    f"编辑页字段 {field_key} 无法按类目 Schema 归一化：{exc}",
                 ) from exc
         if custom_attributes:
             current_values["__unmapped_custom_attributes__"] = custom_attributes

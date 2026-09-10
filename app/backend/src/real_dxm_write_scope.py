@@ -9,6 +9,8 @@ from typing import Any
 
 
 REAL_DXM_WRITE_SCOPE_SCHEMA = "real_dxm_write_scope.v1"
+REAL_DXM_STAGED_WRITE_SCOPE_SCHEMA = "real_dxm_write_scope.v2"
+REAL_DXM_CONTENT_WRITE_SCOPE_SCHEMA = "real_dxm_write_scope.v3"
 REAL_DXM_WRITE_APPROVAL_SCHEMA = "real_dxm_write_approval.v1"
 REAL_DXM_WRITE_STAGE = "execute"
 REAL_DXM_WRITE_PATH = "B"
@@ -244,7 +246,7 @@ def _normalize_scope(
         _SCOPE_KEYS if has_digest else _SCOPE_UNSIGNED_KEYS,
         "scope",
     )
-    if raw["schema"] != REAL_DXM_WRITE_SCOPE_SCHEMA:
+    if raw["schema"] not in {REAL_DXM_WRITE_SCOPE_SCHEMA, REAL_DXM_STAGED_WRITE_SCOPE_SCHEMA, REAL_DXM_CONTENT_WRITE_SCOPE_SCHEMA}:
         _reject("SCOPE_SCHEMA_MISMATCH", "unsupported real-write scope schema")
     if raw["stage"] != REAL_DXM_WRITE_STAGE:
         _reject("SCOPE_STAGE_MISMATCH", "real-write scope stage must be execute")
@@ -363,9 +365,11 @@ def _normalize_scope(
     ordered_products = _ordered_products(
         raw["orderedProducts"],
         strict=strict_canonical,
+        staged=raw["schema"] != REAL_DXM_WRITE_SCOPE_SCHEMA,
+        content=raw["schema"] == REAL_DXM_CONTENT_WRITE_SCOPE_SCHEMA,
     )
     unsigned = {
-        "schema": REAL_DXM_WRITE_SCOPE_SCHEMA,
+        "schema": raw["schema"],
         "stage": REAL_DXM_WRITE_STAGE,
         "path": REAL_DXM_WRITE_PATH,
         "issuedAt": issued_at_text,
@@ -488,7 +492,7 @@ def _normalize_approval(
     return {**unsigned, "approvalSha256": stored_digest}
 
 
-def _ordered_products(value: Any, *, strict: bool) -> list[dict[str, Any]]:
+def _ordered_products(value: Any, *, strict: bool, staged: bool = False, content: bool = False) -> list[dict[str, Any]]:
     products = _array(value, "scope.orderedProducts")
     if not 3 <= len(products) <= 100:
         _reject(
@@ -498,6 +502,8 @@ def _ordered_products(value: Any, *, strict: bool) -> list[dict[str, Any]]:
 
     normalized: list[dict[str, Any]] = []
     seen_products: set[int] = set()
+    shared_deferred_fields = None
+    shared_content_fields = None
     for expected_ordinal, item_value in enumerate(products, start=1):
         label = f"scope.orderedProducts[{expected_ordinal - 1}]"
         item = _exact_object(
@@ -547,8 +553,12 @@ def _ordered_products(value: Any, *, strict: bool) -> list[dict[str, Any]]:
         fields_per_stage = {stage: 0 for stage in REAL_DXM_WRITE_SAVE_STAGES}
         for field_index, field_value in enumerate(fields_raw):
             field_label = f"{label}.allowedFields[{field_index}]"
+            deferred = staged and isinstance(field_value, Mapping) and field_value.get("saveStage") == "SAVE2"
+            generated = content and isinstance(field_value, Mapping) and field_value.get('saveStage') == 'SAVE1' and 'freezeAt' in field_value
             field = _exact_object(
                 field_value,
+                {"field", "saveStage", "freezeAt", "ruleSha256"} if deferred else
+                {'field', 'saveStage', 'preimageSha256', 'inputSha256', 'freezeAt', 'ruleSha256', 'delegatedTo'} if generated else
                 {"field", "saveStage", "preimageSha256", "expectedSha256"},
                 field_label,
             )
@@ -582,6 +592,24 @@ def _ordered_products(value: Any, *, strict: bool) -> list[dict[str, Any]]:
                 )
             seen_field_names.add(field_name)
             fields_per_stage[save_stage] += 1
+            if generated:
+                owner = field['delegatedTo']
+                if (field['freezeAt'] != 'after_content_finalize' or not isinstance(owner, str)
+                        or owner not in {'content_finalize.video', 'content_finalize.translation'}
+                        or (owner == 'content_finalize.video') != (field_name == 'videoUrl')):
+                    _reject('CONTENT_OUTPUT_RULE_INVALID', 'SAVE1 outputs require exact shared video/translation ownership')
+                fields.append({'field': field_name, 'saveStage': 'SAVE1', 'freezeAt': 'after_content_finalize',
+                    'delegatedTo': owner, **{key: _sha256_text(field[key], f'{field_label}.{key}', strict=strict)
+                                           for key in ('preimageSha256', 'inputSha256', 'ruleSha256')}})
+                continue
+            if deferred:
+                if field["freezeAt"] != "after_native_gate":
+                    _reject("SAVE2_FREEZE_TIMING_INVALID", "SAVE2 must freeze after the native gate")
+                fields.append({
+                    "field": field_name, "saveStage": "SAVE2", "freezeAt": "after_native_gate",
+                    "ruleSha256": _sha256_text(field["ruleSha256"], f"{field_label}.ruleSha256", strict=strict),
+                })
+                continue
             fields.append(
                 {
                     "field": field_name,
@@ -603,6 +631,19 @@ def _ordered_products(value: Any, *, strict: bool) -> list[dict[str, Any]]:
                 "SAVE_ALLOWED_FIELDS_REQUIRED",
                 "SAVE1 and SAVE2 each require at least one explicit allowed field",
             )
+        if staged:
+            deferred_fields = [field for field in fields if field["saveStage"] == "SAVE2"]
+            if shared_deferred_fields is not None and deferred_fields != shared_deferred_fields:
+                _reject("SHARED_SAVE2_RULE_DRIFT", "all products must use the same shared SAVE2 rules")
+            shared_deferred_fields = deferred_fields
+        if content:
+            rules = [{key: field[key] for key in ('field', 'saveStage', 'freezeAt', 'ruleSha256', 'delegatedTo')}
+                     for field in fields if field.get('freezeAt') == 'after_content_finalize']
+            if ({field['delegatedTo'] for field in rules} != {'content_finalize.video', 'content_finalize.translation'}
+                    or len({field['ruleSha256'] for field in rules}) != 1
+                    or (shared_content_fields is not None and rules != shared_content_fields)):
+                _reject('SHARED_CONTENT_RULE_DRIFT', 'every product must use both owners from one identical common output policy')
+            shared_content_fields = rules
 
         normalized.append(
             {

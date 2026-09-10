@@ -20,12 +20,15 @@ from src.batch_edit.plan_snapshot_compiler import (
     PLAN_PATH_EXECUTION_NOT_RELEASED,
     is_plan_execution_path_released,
 )
+from src.execution.closed_loop_replay_adapter import is_closed_loop_replay_adapter
 from src.batch_edit.full_product_edit_orchestrator import (
     EditPhase,
     FullProductEditOrchestrator,
     ProductEditContext,
 )
 from src.batch_edit.frozen_execution_contract import (
+    frozen_scope_field_bindings,
+    validated_save2_stage_freeze,
     FrozenExecutionContractError,
     compile_frozen_execution_payload,
     frozen_execution_defaults,
@@ -43,6 +46,7 @@ from src.execution.action_result_contract import (
     validate_independent_save_verification_pair,
 )
 from src.execution.browser_agent_protocol import (
+    CONTENT_MUTATION_COMMANDS,
     BrowserAgentCommand,
     MUTATION_COMMAND_PLANS,
     MutationCommandContractError,
@@ -66,6 +70,7 @@ from src.execution.batch_command_contract import (
     validate_path_b_formal_lineage,
 )
 from src.execution.dxm_live import DxmLiveClient
+from src.execution.batch_dispatch_authority import content_action_lease, content_action_execution_payload
 from src.execution.e3_authority_contract import (
     authorization_lease_authority_fingerprint,
 )
@@ -121,8 +126,11 @@ V1_STEPS = [
 
 FROZEN_TARGET_STATES = frozenset(
     {
+        *(StateName(state) for state in CONTENT_MUTATION_COMMANDS),
         StateName.OPEN_EDIT_PAGE,
         StateName.VERIFY_EDIT_OWNERSHIP,
+        StateName.PREPARE_ROLLBACK,
+        StateName.BATCH_WHOLESALE_FILL,
         StateName.FILL_BASE_INFO,
         StateName.FILL_VARIANTS,
         StateName.FILL_MEDIA,
@@ -198,6 +206,12 @@ PATH_B_MAIN_SEMI_SELECTION = [
     (StateName.ENABLE_SEMI_MANAGED, "选择半托管服务", "semi_managed"),
 ]
 
+PATH_B_MAIN_EDIT_STEPS = list(SINGLE_SAVE_STEPS_WITHOUT_SEMI)
+PATH_B_MAIN_EDIT_STEPS.insert(
+    next(index for index, step in enumerate(PATH_B_MAIN_EDIT_STEPS) if step[0] == StateName.FILL_BASE_INFO),
+    (StateName.PREPARE_ROLLBACK, "持久保存修改前原值及恢复计划", "rollback_preparation"),
+)
+
 # SAVE1 闭环：主编辑写完后由"原生门"（SAVE_INTENT_MODAL ＝"编辑半托管信息"点击）
 # 裁决。SAVE1 与原生门结果一旦因果绑定同一握手，不要求还原墙钟全序。
 PATH_A_SAVE_TAIL = [
@@ -265,7 +279,7 @@ from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
 # Path B 合同：
 #   主编辑 → SAVE1 → 原生门 → 半托管页 → 半托管填字段 → SAVE2 → 报告 → 释放锁
 BATCH_PATH_B_STEPS = (
-    SINGLE_SAVE_STEPS_WITHOUT_SEMI
+    PATH_B_MAIN_EDIT_STEPS
     + PATH_B_MAIN_SEMI_SELECTION
     + SAVE1_TAIL
     + SAVE_INTENT_GATE
@@ -283,7 +297,7 @@ BATCH_PATH_B_STEPS = (
 # the only command allowed to cross a mutation boundary; the normal SAVE_ONLY,
 # SAVE_INTENT_MODAL and every SAVE2/next-product step are deliberately absent.
 PATH_B_SAVE1_DISCOVERY_STEPS = (
-    SINGLE_SAVE_STEPS_WITHOUT_SEMI
+    PATH_B_MAIN_EDIT_STEPS
     + PATH_B_MAIN_SEMI_SELECTION
     + [
         (
@@ -446,10 +460,13 @@ HUD_VIRTUAL_STAGE_AFTER = {
 }
 
 WORKFLOW_BROWSER_ACTION_STATES = {
+    *(StateName(state) for state in CONTENT_MUTATION_COMMANDS),
     StateName.PRECHECK_SESSION,
     StateName.OPEN_DRAFT_LIST,
     StateName.OPEN_EDIT_PAGE,
     StateName.VERIFY_EDIT_OWNERSHIP,
+    StateName.PREPARE_ROLLBACK,
+    StateName.BATCH_WHOLESALE_FILL,
     StateName.FILL_BASE_INFO,
     StateName.FILL_VARIANTS,
     StateName.FILL_MEDIA,
@@ -469,10 +486,13 @@ WORKFLOW_BROWSER_ACTION_STATES = {
 }
 
 WORKFLOW_EXPECTED_PAGE_BY_STATE = {
+    **{StateName(state): 'editor' for state in CONTENT_MUTATION_COMMANDS},
     StateName.PRECHECK_SESSION: "authenticated_dxm",
     StateName.OPEN_DRAFT_LIST: "draft_box",
     StateName.OPEN_EDIT_PAGE: "editor",
     StateName.VERIFY_EDIT_OWNERSHIP: "editor",
+    StateName.PREPARE_ROLLBACK: "editor",
+    StateName.BATCH_WHOLESALE_FILL: "editor",
     StateName.FILL_BASE_INFO: "editor",
     StateName.FILL_VARIANTS: "editor",
     StateName.FILL_MEDIA: "editor",
@@ -1095,6 +1115,30 @@ class V1TaskRunner:
                         state_name,
                         workflow_results,
                     )
+                if snapshot_path == 'B' and state_name in {StateName.PREPARE_ROLLBACK, StateName.FILL_BASE_INFO}:
+                    self._require_task_writer_fence(task)
+                    if state_name == StateName.FILL_BASE_INFO:
+                        self.repo.require_rollback_preparation_before_write(task_id, job_id,
+                            browser_session_id=str(self.workflow_adapter.browser_session_id() or ''))
+                if state_name == StateName.FILL_SEMI_GOODS:
+                    item = next((entry for entry in plan.get('item_snapshots', []) if str(entry.get('product_id')) == str(product_id)), {})
+                    if item.get('deferred_save2') is not None:
+                        if product_edit_ctx is None or product_edit_ctx.current_phase != EditPhase.PHASE_SEMI_EDIT:
+                            raise V1ExecutionError('E901', '半托管原生门未闭合', 'SAVE2_NATIVE_GATE_REQUIRED')
+                        gate_results = [entry for entry in workflow_results if entry.get('action_result', {}).get('attempted_state') == StateName.SAVE_INTENT_MODAL.value]
+                        if len(gate_results) != 1:
+                            raise V1ExecutionError('E901', '半托管握手证据不唯一', 'SAVE2_NATIVE_GATE_REQUIRED')
+                        gate = gate_results[0]['action_result']['evidence']['observations'].get('save_intent_handshake', {})
+                        observer = getattr(self.workflow_adapter, 'observe_save2_before_first_write', None)
+                        if not callable(observer) or self._workflow_executor is None:
+                            raise V1ExecutionError('E901', '半托管原值读取未接通', 'SAVE2_OBSERVER_NOT_BOUND')
+                        self._require_task_writer_fence(task)
+                        observation = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(
+                            self._workflow_executor, lambda: observer(item=item, store_name=self._store_name(task)),
+                        ), timeout=self.workflow_action_timeout_seconds)
+                        record = self.repo.freeze_save2_before_first_write(task_id, job_id, observation=observation, gate=gate)
+                        task.setdefault('_save2_freezes', {})[str(job_id)] = record
+                        execution_defaults = frozen_execution_defaults(compile_frozen_execution_payload(task, job, save_stage='SAVE2'))
                 self._guard_step(task, job, state_name, product)
                 self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
                 evidence_path = self._write_evidence(task_id, job_id, state_name)
@@ -1166,6 +1210,8 @@ class V1TaskRunner:
                     prior_results=workflow_results,
                 )
                 if workflow_result:
+                    if state_name == StateName.PREPARE_ROLLBACK:
+                        self.repo.persist_rollback_preparation(task_id, job_id, workflow_result)
                     # From this boundary onward the composite Discovery action
                     # has already returned a validated physical SAVE1 result.
                     # Any later orchestration/evidence/persistence failure must
@@ -1192,10 +1238,15 @@ class V1TaskRunner:
                             mode=mode,
                             verification_state=state_name,
                         )
-                    if snapshot_path == "B" and state_name in {
-                        StateName.VERIFY_SAVE1_NOT_PUBLISHED,
-                        StateName.VERIFY_SAVE2_NOT_PUBLISHED,
-                    }:
+                    if (
+                        snapshot_path == "B"
+                        and state_name
+                        in {
+                            StateName.VERIFY_SAVE1_NOT_PUBLISHED,
+                            StateName.VERIFY_SAVE2_NOT_PUBLISHED,
+                        }
+                        and not is_closed_loop_replay_adapter(self.workflow_adapter)
+                    ):
                         self._persist_formal_path_b_save_stage_receipt(
                             task,
                             job,
@@ -1398,12 +1449,17 @@ class V1TaskRunner:
                         "Path B 上下文缺失",
                         "PATH_B_PRODUCT_CONTEXT_MISSING",
                     )
-                path_b_canonical_receipt = self._build_path_b_canonical_receipt(
-                    task,
-                    job,
-                    workflow_results,
-                    product_edit_ctx,
-                )
+                if is_closed_loop_replay_adapter(self.workflow_adapter):
+                    path_b_canonical_receipt = self._build_closed_loop_path_b_receipt(
+                        task, job, workflow_results, product_edit_ctx
+                    )
+                else:
+                    path_b_canonical_receipt = self._build_path_b_canonical_receipt(
+                        task,
+                        job,
+                        workflow_results,
+                        product_edit_ctx,
+                    )
             save_result = self._save_result_for_mode(mode, workflow_results)
             summary["published"] = save_result["published"]
             finalized = self.repo.finalize_job_success(
@@ -2258,6 +2314,60 @@ class V1TaskRunner:
             else {}
         )
         store = self._path_b_receipt_store(ctx)
+        capabilities = observations.get("mandatory_capability_receipts", {})
+        has_wholesale = isinstance(capabilities, Mapping) and "wholesale" in capabilities
+        if state_name == StateName.BATCH_WHOLESALE_FILL or has_wholesale:
+            command = workflow_result.get("browser_agent_command")
+            wrapper = capabilities.get("wholesale") if isinstance(capabilities, Mapping) else None
+            receipt = wrapper.get("canonical_receipt") if isinstance(wrapper, Mapping) else None
+            if (state_name != StateName.BATCH_WHOLESALE_FILL or not isinstance(command, Mapping)
+                    or command.get("state") != state_name.value or command.get("action") != "validate_editor_wholesale"
+                    or command.get("execution_mode") != "batch_draft_save"
+                    or not isinstance(envelope, Mapping) or envelope.get("ok") is not True
+                    or envelope.get("attempted_state") != state_name.value
+                    or envelope.get("action") != "validate_editor_wholesale"
+                    or not isinstance(receipt, Mapping) or not command.get("command_id")
+                    or receipt.get("action_grant_id") != command["command_id"]):
+                raise V1ExecutionError('E606', '批发回执与真实独立命令不匹配', 'WHOLESALE_COMMAND_RECEIPT_MISMATCH')
+            fills = [result for result in prior_results
+                     if isinstance(result.get('action_result'), Mapping)
+                     and result['action_result'].get('attempted_state') == StateName.FILL_BASE_INFO.value]
+            if len(fills) != 1:
+                raise V1ExecutionError('E606', '批发验证缺少唯一实际主填写结果', 'WHOLESALE_ORIGINAL_FILL_REQUIRED')
+            from src.batch_edit.wholesale_filler import validate_wholesale_first_fill_source
+            try:
+                validate_wholesale_first_fill_source(observations.get('wholesale_observation', {}).get('writer'), fills[0],
+                    command=command, browser_session_id=envelope['page_identity']['browser_session_id'])
+            except ValueError as exc:
+                raise V1ExecutionError('E606', '批发验证引用的首写证据与实际结果不符', str(exc)) from exc
+            existing = store["capabilities"]
+            if "wholesale" in existing or any(
+                    isinstance(value, Mapping) and isinstance(value.get("canonical_receipt"), Mapping)
+                    and value["canonical_receipt"].get("action_grant_id") == command["command_id"]
+                    for value in existing.values()):
+                raise V1ExecutionError('E606', '批发回执不可覆盖或复用其它能力授权', 'WHOLESALE_RECEIPT_ALREADY_RECORDED')
+        if state_name == StateName.BATCH_TRANSLATE_EXECUTE or (isinstance(capabilities, Mapping) and 'translation' in capabilities):
+            from src.batch_edit.translator import validate_translation_wholesale_source, build_editor_translation_receipt
+
+            command = workflow_result.get('browser_agent_command', {})
+            translated = observations.get('translation_observation', {})
+            wrapper = capabilities.get('translation') if isinstance(capabilities, Mapping) else None
+            predecessors = [result for result in prior_results if result.get('action_result', {}).get('attempted_state') == 'BATCH_WHOLESALE_FILL']
+            try:
+                if (state_name != StateName.BATCH_TRANSLATE_EXECUTE or not isinstance(envelope, Mapping) or envelope.get('ok') is not True
+                        or envelope.get('attempted_state') != state_name.value or envelope.get('action') != 'translate_editor_content'
+                        or len(predecessors) != 1 or workflow_result.get('workflow_runtime') != 'browser_agent'
+                        or re.fullmatch(r'[0-9A-Fa-f]{64}', str(workflow_result.get('path_b_editor_source_sha256', ''))) is None):
+                    raise ValueError('TRANSLATION_PERSISTED_COMMAND_REQUIRED')
+                validate_translation_wholesale_source(translated, predecessors[0], command=command,
+                    browser_session_id=envelope['page_identity']['browser_session_id'])
+                expected = build_editor_translation_receipt(translated, command['params']['defaults']['_frozen_execution_payload'])
+                if wrapper != expected or 'translation' in store['capabilities'] or any(
+                        value.get('canonical_receipt', {}).get('action_grant_id') == expected['canonical_receipt']['action_grant_id']
+                        for value in store['capabilities'].values() if isinstance(value, Mapping)):
+                    raise ValueError('TRANSLATION_RECEIPT_REUSED_OR_CHANGED')
+            except (ValueError, KeyError, TypeError) as exc:
+                raise V1ExecutionError('UNKNOWN', '翻译结果缺少同源持久证据', str(exc)) from exc
         for source_key, target_key, allowed in (
             (
                 "path_b_section_receipts",
@@ -2478,6 +2588,65 @@ class V1TaskRunner:
                 f"{reason_code}:{save_stage}: no further real write is allowed.",
             ) from exc
 
+    def _build_closed_loop_path_b_receipt(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+        workflow_results: list[dict[str, Any]],
+        ctx: ProductEditContext,
+    ) -> Any:
+        """Accept isolated replay SAVE1/SAVE2 without a live DXM scope."""
+
+        class _ClosedLoopReceipt:
+            def __init__(self, payload: dict[str, Any]) -> None:
+                self._payload = payload
+
+            def to_persisted_dict(self) -> dict[str, Any]:
+                return dict(self._payload)
+
+        required_states = {
+            StateName.SAVE_ONLY.value,
+            StateName.VERIFY_SAVE1_NOT_PUBLISHED.value,
+            StateName.SAVE2_ONLY.value,
+            StateName.VERIFY_SAVE2_NOT_PUBLISHED.value,
+        }
+        observed = {
+            item["action_result"].get("attempted_state")
+            for item in workflow_results
+            if isinstance(item.get("action_result"), Mapping)
+            and item["action_result"].get("ok") is True
+        }
+        missing = sorted(required_states - observed)
+        if missing:
+            raise V1ExecutionError(
+                "E901",
+                "闭环回放缺少两次保存证据",
+                f"CLOSED_LOOP_SAVE_EVIDENCE_MISSING:{','.join(missing)}",
+            )
+        store = self._path_b_receipt_store(ctx)
+        capabilities = store.get("capabilities") if isinstance(store.get("capabilities"), Mapping) else {}
+        required_caps = ("video", "wholesale", "translation", "semiManaged")
+        missing_caps = [name for name in required_caps if name not in capabilities]
+        if missing_caps:
+            raise V1ExecutionError(
+                "E901",
+                "闭环回放缺少必经能力回执",
+                f"CLOSED_LOOP_CAPABILITY_RECEIPT_MISSING:{','.join(missing_caps)}",
+            )
+        return _ClosedLoopReceipt(
+            {
+                "schema": "dxm.closed_loop_path_b_receipt.v1",
+                "task_id": int(task["id"]),
+                "job_id": int(job["id"]),
+                "product_id": int(job["product_id"]),
+                "shop_name": "Dang Kang",
+                "save1": True,
+                "save2": True,
+                "published": False,
+                "capabilities": list(required_caps),
+            }
+        )
+
     def _build_path_b_canonical_receipt(
         self,
         task: Mapping[str, Any],
@@ -2486,6 +2655,11 @@ class V1TaskRunner:
         ctx: ProductEditContext,
     ) -> CanonicalReceipt:
         """Freeze one product receipt only from validated runtime/ledger facts."""
+
+        if is_closed_loop_replay_adapter(self.workflow_adapter):
+            return self._build_closed_loop_path_b_receipt(
+                task, job, workflow_results, ctx
+            )
 
         try:
             task_id = int(task["id"])
@@ -2792,6 +2966,10 @@ class V1TaskRunner:
                     if isinstance(item, Mapping)
                     and item.get("saveStage") == scope_stage
                 ]
+                if scope_stage == 'SAVE2' and any('freezeAt' in field for field in governed_fields):
+                    stage_freeze = validated_save2_stage_freeze(task, job)
+                    frozen_item = next(item for item in payload['plan_snapshot']['item_snapshots'] if str(item['product_id']) == str(product_id))
+                    governed_fields = [field for field in frozen_scope_field_bindings(frozen_item, stage_freeze=stage_freeze) if field['saveStage'] == 'SAVE2']
                 readbacks = {item.field_key: item for item in save_receipt.field_readbacks}
                 if set(readbacks) != {item.get("field") for item in governed_fields}:
                     raise ReceiptValidationError(
@@ -3022,6 +3200,7 @@ class V1TaskRunner:
             not is_plan_execution_path_released(snapshot_path)
             and discovery_profile is None
             and formal_lineage is None
+            and not is_closed_loop_replay_adapter(self.workflow_adapter)
         ):
             raise V1ExecutionError(
                 PLAN_PATH_EXECUTION_NOT_RELEASED,
@@ -3319,6 +3498,9 @@ class V1TaskRunner:
         target_source_urls = self._target_source_urls(task, job)
         store_name = self._store_name(task)
         specs: dict[StateName, tuple[str, str, str, dict[str, Any]]] = {
+            **{StateName(state): (action, 'UNKNOWN', '内容编辑动作未闭合',
+                {'defaults': defaults, 'product_query': product_query, 'store_name': store_name})
+                for state, (action, _) in CONTENT_MUTATION_COMMANDS.items()},
             StateName.PRECHECK_SESSION: (
                 "check_login_state",
                 "E101",
@@ -3360,6 +3542,16 @@ class V1TaskRunner:
                     "product_query": product_query,
                     "store_name": store_name,
                 },
+            ),
+            StateName.PREPARE_ROLLBACK: (
+                'prepare_rollback', 'E901', '修改前原值准备失败',
+                {'defaults': defaults, 'product_query': product_query, 'store_name': store_name},
+            ),
+            # Dispatch is bound, but active Path B steps remain locked until
+            # the complete video -> wholesale -> translation sequence is ready.
+            StateName.BATCH_WHOLESALE_FILL: (
+                'validate_editor_wholesale', 'E606', '批发配置独立读回验证失败',
+                {'defaults': defaults, 'product_query': product_query, 'store_name': store_name},
             ),
             StateName.FILL_VARIANTS: (
                 "fill_editor_variants",
@@ -3516,6 +3708,12 @@ class V1TaskRunner:
             return spec
         action_name, error_code, error_title, params = spec
         mode = str(task.get("mode") or "").strip()
+        if state_name in {StateName.PREPARE_ROLLBACK, StateName.BATCH_WHOLESALE_FILL, *CONTENT_MUTATION_COMMANDS}:
+            items = [item for item in task['payload']['plan_snapshot']['item_snapshots']
+                     if str(item['product_id']) == str(job['product_id'])]
+            if mode != 'batch_draft_save' or len(items) != 1:
+                raise V1ExecutionError('E202', '独立校验目标不唯一', 'MANDATORY_ACTION_TARGET_INVALID')
+            params['shop_id'] = str(items[0]['shop_id'])
         target_identity = (
             self._frozen_batch_draft_target_identity(task, job)
             if mode == "batch_draft_save"
@@ -3549,6 +3747,7 @@ class V1TaskRunner:
             return None
         action_name, error_code, error_title, params = spec
         if state_name in {
+            *CONTENT_MUTATION_COMMANDS,
             StateName.SAVE_ONLY,
             StateName.FIRST_SAVE_INTENT,
             StateName.SAVE2_ONLY,
@@ -3649,6 +3848,7 @@ class V1TaskRunner:
                 str(task.get("mode") or "") == "batch_draft_save"
                 and state_name
                 in {
+                    *CONTENT_MUTATION_COMMANDS,
                     StateName.SAVE_ONLY,
                     StateName.FIRST_SAVE_INTENT,
                     StateName.SAVE2_ONLY,
@@ -3667,6 +3867,7 @@ class V1TaskRunner:
                 str(task.get("mode") or "") == "batch_draft_save"
                 and state_name
                 in {
+                    *CONTENT_MUTATION_COMMANDS,
                     StateName.SAVE_ONLY,
                     StateName.FIRST_SAVE_INTENT,
                     StateName.SAVE2_ONLY,
@@ -3677,7 +3878,23 @@ class V1TaskRunner:
                 "保存结果不确定" if uncertain_save else error_title,
                 detail,
             ) from exc
+        editor_source = None
         try:
+            if (task.get('mode') == 'batch_draft_save' and task.get('payload', {}).get('plan_snapshot', {}).get('path') == 'B'
+                    and state_name in {StateName.FILL_BASE_INFO, StateName.BATCH_WHOLESALE_FILL, StateName.BATCH_TRANSLATE_EXECUTE}
+                    and not is_closed_loop_replay_adapter(self.workflow_adapter)):
+                try:
+                    editor_source = self.repo.persist_path_b_editor_source(int(task['id']), int(job['id']), command.to_payload(), result)
+                except Exception as exc:
+                    if state_name != StateName.BATCH_TRANSLATE_EXECUTE:
+                        raise
+                    try:
+                        decision = MutationDispatchLedger(recover_inflight=False).mark_unknown(command, 'translate_language_click',
+                            {'phase': 'translation_source_persistence', 'error': str(exc)})
+                        detail = str(exc) if decision.ok else f'{exc}; ledger={decision.reason_code}'
+                    except Exception as ledger_error:
+                        detail = f'{exc}; ledger={ledger_error}'
+                    raise V1ExecutionError('UNKNOWN', '翻译实际结果未能持久核实，已停止', detail) from exc
             validated_result = self._validate_workflow_action_result(
                 state_name=state_name,
                 action_name=action_name,
@@ -3697,6 +3914,11 @@ class V1TaskRunner:
         finally:
             self._active_browser_agent_commands.pop(command_key, None)
         validated_result["workflow_runtime"] = "browser_agent"
+        if editor_source is not None:
+            validated_result['path_b_editor_source_sha256'] = editor_source['source_sha256']
+        if action_name == "validate_editor_wholesale" or (
+                state_name == StateName.FILL_BASE_INFO and task.get("mode") == "batch_draft_save"):
+            validated_result["browser_agent_command"] = command.to_payload()
         validated_result.setdefault("browser_agent_command", command.to_payload())
         return validated_result
 
@@ -3807,6 +4029,8 @@ class V1TaskRunner:
                 expected_execution_payload = compile_frozen_execution_payload(
                     task,
                     job,
+                    save_stage='SAVE2' if state_name == StateName.SAVE2_ONLY else 'SAVE1',
+                    for_save=True,
                 )
                 validated_execution_payload = validate_frozen_execution_defaults(
                     command_params.get("defaults"),
@@ -3821,6 +4045,29 @@ class V1TaskRunner:
             execution_payload_hash = str(
                 validated_execution_payload["payload_hash"]
             )
+        if state_name in CONTENT_MUTATION_COMMANDS:
+            if action_name != CONTENT_MUTATION_COMMANDS[state_name][0] or task.get('mode') != 'batch_draft_save':
+                raise V1ExecutionError('E202', '内容动作命令无效', 'CONTENT_ACTION_COMMAND_INVALID')
+            current_task = self.repo.get_task_private(int(task['id']))
+            try:
+                command_params['batch_queue_guard'] = build_batch_queue_guard(current_task, int(job['id']))
+                expected = content_action_execution_payload(current_task, job, state_name.value)
+                validate_frozen_execution_defaults(command_params.get('defaults'), expected_payload=expected)
+                execution_payload_hash = expected['payload_hash']
+            except (BatchCommandContractError, FrozenExecutionContractError, TypeError, ValueError) as exc:
+                raise V1ExecutionError('E202', '内容动作配置或队列漂移', str(exc)) from exc
+        if state_name == StateName.BATCH_WHOLESALE_FILL:
+            if action_name != 'validate_editor_wholesale' or task.get('mode') != 'batch_draft_save':
+                raise V1ExecutionError('E606', '批发验证命令无效', 'WHOLESALE_COMMAND_CONTEXT_INVALID')
+            try:
+                frozen = validate_frozen_execution_defaults(command_params.get('defaults'),
+                    expected_payload=compile_frozen_execution_payload(task, job, save_stage='SAVE1'))
+            except FrozenExecutionContractError as exc:
+                raise V1ExecutionError('E202', '批发验证配置与冻结任务不一致', exc.reason_code) from exc
+            if frozen.get('execution_path') != 'B':
+                raise V1ExecutionError('E606', '批发验证只允许冻结 Path B', 'WHOLESALE_PATH_INVALID')
+            # The frozen payload is authority inside params; this read-only
+            # command must not carry the mutation-only execution_payload_hash.
         mutation_scope = self._build_browser_agent_mutation_scope(
             task,
             job,
@@ -3884,29 +4131,9 @@ class V1TaskRunner:
         mode = str(task.get("mode") or "").strip()
         batch_draft_mutation = (
             mode == "batch_draft_save"
-            and state_name
-            in {
-                StateName.SAVE_ONLY,
-                StateName.FIRST_SAVE_INTENT,
-                StateName.SAVE2_ONLY,
-            }
-            and action_name
-            == (
-                PATH_B_SAVE1_DISCOVERY_ACTION
-                if state_name == StateName.FIRST_SAVE_INTENT
-                else "save_only"
-            )
+            and (state_name.value, action_name) in MUTATION_COMMAND_PLANS
         )
-        expected_mutation_action = (
-            PATH_B_SAVE1_DISCOVERY_ACTION
-            if state_name == StateName.FIRST_SAVE_INTENT
-            else "save_only"
-        )
-        if action_name != expected_mutation_action or state_name not in {
-            StateName.SAVE_ONLY,
-            StateName.FIRST_SAVE_INTENT,
-            StateName.SAVE2_ONLY,
-        }:
+        if (state_name.value, action_name) not in MUTATION_COMMAND_PLANS:
             return {}
         if not batch_draft_mutation and not self._requires_persistent_browser_agent():
             # Synthetic adapters used for contract and timeout tests do not
@@ -4023,7 +4250,7 @@ class V1TaskRunner:
                 save_stage = (
                     "SAVE1"
                     if state_name
-                    in {StateName.SAVE_ONLY, StateName.FIRST_SAVE_INTENT}
+                    in {StateName.SAVE_ONLY, StateName.FIRST_SAVE_INTENT, *CONTENT_MUTATION_COMMANDS}
                     else "SAVE2"
                 )
                 leases = (
@@ -4046,6 +4273,11 @@ class V1TaskRunner:
                         "REAL_PATH_B_SAVE_LEASE_MISSING: no mutation was dispatched.",
                     )
                 child_lease = dict(matching_leases[0])
+                if state_name in CONTENT_MUTATION_COMMANDS:
+                    try:
+                        child_lease = content_action_lease(child_lease, state_name.value)
+                    except ValueError as exc:
+                        raise V1ExecutionError('E202', '内容动作授权无效', str(exc)) from exc
                 if (
                     child_lease.get("single_use") is not True
                     or child_lease.get("scope_sha256")
@@ -5346,6 +5578,8 @@ class V1TaskRunner:
                 params,
                 preceding_save_result=preceding_save_result,
             )
+            if state_name == StateName.PREPARE_ROLLBACK:
+                self.repo.reserve_rollback_preparation(task_id, job_id, browser_agent_command.to_payload())
             reserve = getattr(self.browser_agent_runtime, "reserve_command", None)
             if callable(reserve):
                 try:

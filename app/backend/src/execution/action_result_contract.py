@@ -6,16 +6,20 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from src.batch_edit.wholesale_filler import WHOLESALE_POSTCONDITIONS
+from src.batch_edit.translator import NATIVE_TRANSLATION_POSTCONDITIONS
 from src.execution.batch_command_contract import (
     BatchCommandContractError,
     validate_frozen_execution_readback as validate_expected_frozen_execution_readback,
     validate_save_verification_context,
 )
 from src.execution.browser_agent_protocol import (
+    CONTENT_MUTATION_COMMANDS,
     MutationCommandContractError,
     mutation_target_hash,
 )
@@ -83,7 +87,7 @@ _PROOF_REF_KIND_BY_STATE = MappingProxyType(
     }
 )
 _NON_RETRYABLE_MUTATION_STATES = frozenset(
-    {"SAVE_ONLY", "SAVE2_ONLY", "FIRST_SAVE_INTENT"}
+    {"SAVE_ONLY", "SAVE2_ONLY", "FIRST_SAVE_INTENT", *CONTENT_MUTATION_COMMANDS}
 )
 _CONTROLLED_PAGE_PATHS = MappingProxyType(
     {
@@ -190,6 +194,13 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                 )
             }
         ),
+        "prepare_rollback": MappingProxyType(
+            {"PREPARE_ROLLBACK": _contract("editor", "preimage_complete", "bindings_restorable", "zero_write_proven")}
+        ),
+        "validate_editor_wholesale": MappingProxyType(
+            {"BATCH_WHOLESALE_FILL": _contract("editor", *WHOLESALE_POSTCONDITIONS,
+                page_by_execution_mode={"batch_draft_save": "editor"})}
+        ),
         "fill_editor_variants": MappingProxyType(
             {
                 "FILL_VARIANTS": _contract(
@@ -201,6 +212,10 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                     "all_required_cells_complete",
                 )
             }
+        ),
+        "translate_editor_content": MappingProxyType(
+            {"BATCH_TRANSLATE_EXECUTE": _contract("editor", *NATIVE_TRANSLATION_POSTCONDITIONS,
+                page_by_execution_mode={"batch_draft_save": "editor"})}
         ),
         "fill_media_assets": MappingProxyType(
             {
@@ -589,13 +604,14 @@ def _validate_batch_category_schema_readback(
     value: Any,
     *,
     expected_execution_payload: Mapping[str, Any],
+    expected_phase: str = "before_ledger_begin_dispatch",
 ) -> dict[str, Any]:
     field = "save_result.pre_dispatch_readback.category_schema_readback"
     readback = _exact_mapping(value, _CATEGORY_SCHEMA_READBACK_KEYS, field)
     if (
         readback.get("schema") != "dxm.editor.category_schema_readback.v1"
         or readback.get("ok") is not True
-        or readback.get("phase") != "before_ledger_begin_dispatch"
+        or readback.get("phase") != expected_phase
         or readback.get("reason") is not None
     ):
         _reject("SAVE success requires an exact current category_schema_readback")
@@ -863,9 +879,19 @@ def _validate_save_success_semantics(
         if (
             pre_dispatch.get("page_kind") != "semi_managed"
             or pre_dispatch.get("category_schema_readback") is not None
-            or pre_dispatch.get("frozen_execution_readback") is not None
         ):
             _reject("SAVE2 must use a semi-managed pre-dispatch readback")
+        if expected_execution_payload.get("save_stage") == "SAVE2":
+            if _required_sha256(pre_dispatch.get("stage_freeze_sha256"), "SAVE2 stage freeze") != _required_sha256(expected_execution_payload.get("stage_freeze_sha256"), "payload stage freeze"):
+                _reject("SAVE2 readback must bind the persisted late freeze")
+            try:
+                validate_expected_frozen_execution_readback(
+                    pre_dispatch.get("frozen_execution_readback"), expected_payload=expected_execution_payload,
+                )
+            except BatchCommandContractError as exc:
+                _reject(f"{exc.reason_code}: {exc}")
+        elif pre_dispatch.get("frozen_execution_readback") is not None:
+            _reject("legacy SAVE2 must not claim a late frozen readback")
     elif execution_mode == "batch_draft_save":
         if not isinstance(expected_execution_payload, Mapping):
             _reject("batch SAVE requires the exact frozen execution payload")
@@ -1375,6 +1401,122 @@ def _validate_unpublished_success_semantics(
         _reject("save_predecessor is reserved for Discovery VERIFY")
 
 
+def derive_frozen_main_fill_facts(
+    action: str, *, before_values: Mapping[str, Any], editor_result: Any,
+    expected_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Project only proven Path B main-page business facts; never invent legacy details."""
+    from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
+
+    readback_key = {
+        'fill_editor_required_defaults': 'base_info_readback',
+        'fill_editor_variants': 'variant_readback',
+        'fill_compliance_defaults': 'compliance_readback',
+    }.get(action)
+    defaults = before_values.get('defaults')
+    hint = defaults.get('_frozen_execution_payload') if isinstance(defaults, Mapping) else None
+    authority = expected_payload if expected_payload is not None else hint
+    if not readback_key or not isinstance(authority, Mapping) or authority.get('execution_path') != 'B':
+        return None
+    contract = next(iter(ACTION_RESULT_CONTRACTS[action].values()))
+    conditions = {key: False for key in contract.required_postconditions}
+    facts = {'postconditions': conditions, 'after_values': {}}
+    try:
+        payload = validate_frozen_execution_defaults(defaults, expected_payload=expected_payload)
+        if (payload.get('schema') != 'dxm.batch_draft_save.execution_payload.v1'
+                or payload.get('save_stage', 'SAVE1') != 'SAVE1'
+                or payload.get('unresolved_fields') != []
+                or not isinstance(editor_result, Mapping) or editor_result.get('ok') is not True
+                or editor_result.get('execution_payload') != payload
+                or editor_result.get('execution_payload_hash') != payload['payload_hash']
+                or editor_result.get('required_readback_complete') is not True):
+            return facts
+        fill = editor_result.get('fill_result')
+        preflight = editor_result.get('preflight_results')
+        frozen_fill = preflight.get('frozen_execution') if isinstance(preflight, Mapping) else None
+        fields = payload['fields']
+        if (not isinstance(fill, Mapping) or fill.get('ok') is not True
+                or fill.get('execution_payload_hash') != payload['payload_hash']
+                or not isinstance(frozen_fill, Mapping)
+                or any(key not in fill or fill[key] != value for key, value in frozen_fill.items())
+                or type(fill.get('field_count')) is not int or fill['field_count'] != len(fields)
+                or editor_result.get('field_count') != fill['field_count']
+                or not isinstance(fill.get('fields'), list) or len(fill['fields']) != len(fields)
+                or editor_result.get('fields') != fill['fields']
+                or type(fill.get('write_attempted')) is not bool
+                or editor_result.get('write_attempted') is not fill['write_attempted']
+                or any(not isinstance(observed, Mapping) or observed.get('ok') is not True
+                    or observed.get('field_key') != field.get('field_key')
+                    or observed.get('ui_binding') != field.get('ui_binding')
+                    or type(observed.get('write_attempted')) is not bool
+                    or (observed['write_attempted'] and not fill['write_attempted'])
+                    for field, observed in zip(fields, fill['fields']))):
+            return facts
+        readback = validate_expected_frozen_execution_readback(
+            editor_result.get('frozen_execution_readback'), expected_payload=payload, expected_phase='after_prefill')
+        schema = _validate_batch_category_schema_readback(
+            editor_result.get('category_schema_readback'), expected_execution_payload=payload,
+            expected_phase='before_any_field_write')
+    except (ValueError, KeyError, TypeError):
+        return facts
+
+    facts['after_values'] = {readback_key: readback}
+    values = {field['field_key']: field['resolved_value'] for field in fields
+              if field['ui_binding'] == f"dxm_editor:{field['field_key']}"}
+    if action == 'fill_editor_required_defaults':
+        conditions['title_readback_exact'] = isinstance(values.get('title'), str)
+        conditions['title_readback_nonempty'] = bool(conditions['title_readback_exact'] and values['title'].strip())
+        target = payload.get('target_category') or {'category_id': payload.get('category_id')}
+        conditions['category_selected_exact'] = isinstance(target, Mapping) and schema['observed_category_id'] == target.get('category_id')
+        # Frozen references and winning sources are not per-reference action
+        # coverage. Freight/service IDs alone cannot prove all templates applied.
+        return facts
+    if action == 'fill_compliance_defaults':
+        conditions['eu_responsible_readback_exact'] = isinstance(values.get('msrEuId'), str) and bool(values['msrEuId'].strip())
+        conditions['manufacturer_readback_exact'] = isinstance(values.get('manufactureId'), str) and bool(values['manufactureId'].strip())
+        # hsCode is a complex, category-dependent control. A matching JSON hash
+        # does not prove its required regions/attributes, or applied template refs.
+        return facts
+
+    rows = values.get('aeopAeProductSKUs')
+    sku_observation = next((field for field in readback['fields'] if field['field_key'] == 'aeopAeProductSKUs'), {})
+    if (not isinstance(rows, list) or not rows or not all(isinstance(row, Mapping) for row in rows)
+            or sku_observation.get('aggregate_kind') != 'sku_rows'
+            or sku_observation.get('match_count') != len(rows)):
+        return facts
+    identities = []
+    for row in rows:
+        properties = row.get('aeopSKUProperty')
+        if (not isinstance(properties, list) or not properties
+                or not all(isinstance(prop, Mapping)
+                    and all(isinstance(prop.get(key), str) and prop[key].strip()
+                            for key in ('skuPropertyId', 'propertyValueId')) for prop in properties)
+                or len({prop['skuPropertyId'] for prop in properties}) != len(properties)):
+            return facts
+        identities.append(tuple(sorted((prop['skuPropertyId'], prop['propertyValueId']) for prop in properties)))
+    if len(set(identities)) != len(rows):
+        return facts
+    conditions['variant_rows_present'] = True
+    codes = [row.get('skuCode') for row in rows]
+    conditions['sku_readback_exact'] = all(isinstance(code, str) and re.fullmatch(r'[A-Za-z0-9-]+', code) for code in codes) and len(set(codes)) == len(rows)
+
+    def decimal_wire(value: Any) -> bool:
+        return isinstance(value, str) and re.fullmatch(r'(?:0|[1-9]\d*)(?:\.\d+)?', value) is not None
+
+    conditions['price_readback_exact'] = all(decimal_wire(row.get('skuPrice')) for row in rows)
+    conditions['stock_readback_exact'] = all(type(row.get('ipmSkuStock')) is int and row['ipmSkuStock'] >= 0 for row in rows)
+    conditions['all_required_cells_complete'] = bool(
+        all(conditions[key] for key in ('variant_rows_present', 'sku_readback_exact', 'price_readback_exact', 'stock_readback_exact'))
+        and all(all(decimal_wire(row.get(key)) for key in ('cargoPrice', 'packageWeight', 'packageLength', 'packageWidth', 'packageHeight'))
+            and Decimal(row['cargoPrice']) <= Decimal(row['skuPrice'])
+            and row.get('originalBox') in ('0', '1')
+            and isinstance(row.get('logisticAttrList'), list) and row['logisticAttrList']
+            and all(isinstance(item, Mapping) and all(isinstance(item.get(key), str) and item[key].strip()
+                for key in ('value', 'text')) for item in row['logisticAttrList']) for row in rows)
+    )
+    return facts
+
+
 def _validate_success_evidence_semantics(
     envelope: Mapping[str, Any],
     *,
@@ -1383,7 +1525,74 @@ def _validate_success_evidence_semantics(
     execution_mode: str | None = None,
     expected_execution_payload: Mapping[str, Any] | None = None,
 ) -> None:
-    if state in {"SAVE_ONLY", "SAVE2_ONLY"}:
+    if state in {'FILL_BASE_INFO', 'FILL_VARIANTS', 'FILL_COMPLIANCE'}:
+        facts = derive_frozen_main_fill_facts(
+            envelope['action'], before_values=envelope['before_values'],
+            editor_result=envelope['evidence']['observations'].get('editor_action_result'),
+            expected_payload=expected_execution_payload)
+        if facts is not None and (facts['postconditions'] != envelope['postconditions']
+                or not all(facts['postconditions'].values()) or facts['after_values'] != envelope['after_values']):
+            _reject('Path B main fill requires exact frozen business facts and independent readback')
+    elif state == 'BATCH_WHOLESALE_FILL':
+        from src.batch_edit.wholesale_filler import validate_editor_wholesale_observation, build_editor_wholesale_receipt
+
+        observations = envelope['evidence']['observations']
+        observation = observations.get('wholesale_observation')
+        before = envelope['before_values']
+        try:
+            command = observation['command']
+            validated = validate_editor_wholesale_observation(
+                observation, defaults=before['defaults'], expected_payload=expected_execution_payload,
+                target_identity=before['target_identity'], command_context={
+                    **command, 'command_action': envelope['action'], 'state': state, 'mode': execution_mode,
+                    'runtime_id': envelope['page_identity']['runtime_id'],
+                    'browser_session_id': envelope['page_identity']['browser_session_id'],
+                })
+            if (validated['page_url'] != envelope['page_identity']['url']
+                    or envelope['after_values'] != {'wholesale_readback': validated['after']}
+                    or envelope['postconditions'] != {key: True for key in WHOLESALE_POSTCONDITIONS}
+                    or observations['mandatory_capability_receipts']['wholesale'] != build_editor_wholesale_receipt(validated)):
+                _reject('wholesale receipt differs from the current zero-write observations')
+        except (ValueError, KeyError, TypeError) as exc:
+            _reject(f'wholesale finalization is unproven: {exc}')
+    elif state == 'BATCH_TRANSLATE_EXECUTE':
+        from src.batch_edit.translator import validate_editor_translation_observation, build_editor_translation_receipt
+
+        observations, before = envelope['evidence']['observations'], envelope['before_values']
+        try:
+            observation = observations['translation_observation']
+            command = observation['command']
+            validated = validate_editor_translation_observation(observation, defaults=before['defaults'],
+                target_identity=before['target_identity'], expected_payload=expected_execution_payload,
+                command_context={**command, 'mode': execution_mode, 'state': state,
+                    'command_action': envelope['action'], 'runtime_id': envelope['page_identity']['runtime_id'],
+                    'browser_session_id': envelope['page_identity']['browser_session_id']})
+            payload = before['defaults']['_frozen_execution_payload']
+            if (validated['page_url'] != envelope['page_identity']['url'] or validated['shop_id'] != before['shop_id']
+                    or envelope['after_values'] != {'translation_readback': validated['after']}
+                    or envelope['postconditions'] != {key: True for key in NATIVE_TRANSLATION_POSTCONDITIONS}
+                    or observations['mandatory_capability_receipts']['translation'] != build_editor_translation_receipt(validated, payload)):
+                _reject('translation result differs from the current provider responses and field readbacks')
+        except (KeyError, TypeError, ValueError) as exc:
+            _reject(f'native translation is unproven: {exc}')
+    elif state == 'PREPARE_ROLLBACK':
+        from src.batch_edit.rollback_manager import validate_rollback_preparation_observation, rollback_preparation_receipt
+
+        observation = envelope['evidence']['observations'].get('rollback_preparation')
+        before = envelope['before_values']
+        try:
+            validated = validate_rollback_preparation_observation(observation,
+                execution_payload=expected_execution_payload,
+                target_identity=before['target_identity'],
+                browser_session_id=envelope['page_identity']['browser_session_id'])
+            if validated['page_url'] != envelope['page_identity']['url']:
+                _reject('rollback preparation page drifted')
+            wrapper = envelope['evidence']['observations']['mandatory_capability_receipts']['rollbackPreparation']
+            if wrapper != rollback_preparation_receipt(validated, wrapper['canonical_receipt']['action_grant_id']):
+                _reject('rollback preparation receipt differs from actual preimages')
+        except (ValueError, KeyError, TypeError) as exc:
+            _reject(f'rollback preparation is unproven: {exc}')
+    elif state in {"SAVE_ONLY", "SAVE2_ONLY"}:
         _validate_save_success_semantics(
             envelope,
             execution_mode=execution_mode,

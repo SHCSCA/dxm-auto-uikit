@@ -2,9 +2,130 @@
 
 # 待裁决清单（BLOCKED）
 
-用户已裁决产品范围和类目迁移权限，当前没有待问的产品选择；以下均是实现、证据或交付门禁。任何一项存在时均不得宣称 `MVP_READY / PROD_READY`。
+用户已裁决完整 Path B 产品范围、精确三商品和统一动漫周边目标类目，并允许本次前端刷新及 L2 白名单修复。以下同时记录实现、证据和交付门禁，任何一项存在时均不得宣称 `MVP_READY / PROD_READY`。
 
-## 2026-09-01 real Path B system-flow 当前裁定
+## 2026-09-08 最新进展：翻译来源已接入持久化，最终输出与保存消费未闭合
+
+- 翻译已加入现有 Worker 来源持久化和 Runner 回执收集，校验真实批发前序、原文件、实际派发 ledger、冻结权威与截图；持久化失败按 UNKNOWN 停止。另修复原生点击回调缺派发确认导致的必然失败，业务成功仍须独立证明。见 [PROGRESS 第 30 节](PROGRESS.md#30-翻译实际来源持久接线与点击返回修复2026-09-08)。
+- 两个新增局部节点首次通过后封存，尚无真实翻译或数据库成功分支现场证据。视频生成/投放及来源、最终完整字段封存与 SAVE1 消费、完整半托管仍未闭合；全英文零请求和原生异步/描述读回语义也未解决。源码接线进展不等于实际三商品保存完成，active steps/capability 继续关闭。
+- 本轮没有业务接口/浏览器调用、模板修改、重启或真实批次，原桌面实例未加载新代码。视频三项共同规则仍待用户答复，不擅用页面默认值。
+
+## 2026-09-08 前轮进展：翻译执行合同已接线，完整结果持久消费未闭合
+
+- 新增原生翻译请求观察、受控语言点击、回包对应字段读回，以及 Worker/Adapter/ActionResult 接线；三个新增局部节点首次通过后封存，见 [PROGRESS 第 29 节](PROGRESS.md#29-原生翻译执行与结果合同接线2026-09-08)。没有调用真实生成/翻译或 SAVE，不能以局部合成检查宣布实际流程通过。
+- 翻译原 Worker 文件、实际 ledger 和前序来源尚未持久绑定；当前 Repository 及 Runner 仍只追加 FILL/批发来源。最终输出冻结与 SAVE1 消费、视频生成/投放和完整半托管仍未闭合，active steps/capability 不释放。全英文零请求及原生异步/HTML 读回完成语义尚未现场验证，不自动当作成功或省略动作。
+- 真实执行的运营规则已在操作与验收手册引用；三项共同视频参数仍待用户答复。继续完成不依赖这些参数的技术工作，不代填页面默认值，也不要求重复批准已明确的范围。
+
+## 2026-09-08 前轮进展：派发接线已补充，视频共同操作规则存在缺项
+
+- 当前公共 API 读回共享 v1.4.0 为 draft；视频配置没有源图选取、转场和音乐规则。运营文档已有完整阶段顺序与真实视频投放要求，但产品图片“前六张”不能自动作为视频规则，页面默认值也不能自动成为授权值。需用户明确尚未规定的共同视频规则；不是重新确认三商品、类目或完整 Path B 授权。
+- 半托管已记录全选实际可用国家的共同意图，实际国家集合在原生门后冻结；不得误报为没有国家选择策略。半托管价格为空仍需追溯共同引用/规则，公共引用摘要没有字段值不代表引用本身无配置。
+- 内容动作命令、动作时权限复核、统一 ledger 及编译器快照摘要一致性修复已落代码；前轮新增隔离节点首次绿后封存，详见 [PROGRESS 第 27 节](PROGRESS.md#27-内容动作派发接线与运营规则核对2026-09-08)。真实 Flow/Adapter 方法、结果封存和完整主阶段/半托管仍未闭合，不能宣称实际视频生成、翻译或任何 SAVE 已完成。
+- 本轮仅公共 GET 核对运行状态与模板，无浏览器动作、重启、模板修改或真实批次；原运行实例没有加载后续代码。继续处理技术缺口与运营规则溯源，不把它们全部转成用户审批问题。
+
+- 后续安全开发已补原生普通翻译控件准备及共同五项范围核对，新增单测首次通过后封存，见 [PROGRESS 第 28 节](PROGRESS.md#28-原生翻译控件准备2026-09-08)。该准备函数尚未接生产 Flow/Adapter，不点击语言行、不证明真实翻译；动作派发、原生服务失败后的继续请求约束、业务结果及完整字段读回仍需完成。视频业务规则待用户回复不是停止其余实现的理由。
+
+## 2026-09-08 前轮进展：主填写与批发来源已持久接线，完整生成结果仍未闭合
+
+- 生产 Runner 现将实际主 FILL / 独立批发命令与 Worker 原请求、原结果文件追加到现有 `job_evidences`。Repository 同事务核对任务当前步、冻结快照行及幂等来源、已消费 scope、字段授权和文件摘要；真实失败结果保持失败，重复状态/命令不再追加，不插入保存回执或 mutation ledger。
+- 成功批发必须引用同 job 的唯一成功主 FILL，并重新读取首写原文件。Runner 内存链和 Repository 共用同一个首写校验，不接受自报摘要替代来源。成功来源还需当前截图文件；本轮隔离检查只证明来源和失败记录行为，不是真实成功动作。
+- **仍未闭合**：视频/翻译实际命令及其完整结果、最终输出封存与 SAVE1 payload/scope/读回消费仍需接通。共同引用实际应用、批发启用原值与完整半托管也没有现场闭环，保存门和生产 capability 继续关闭。
+- 当前公开组件已证实真实翻译触发点是语言行、视频是提交任务→原生轮询→投放；原候选模块的确认按钮及成功判断不适用。已有私有只读报告增加精确非 input 控件采集接线，但尚未在当前运行实例执行；普通翻译的上游自动切换/重试、视频结束按钮不等于业务成功，都还需正式动作结果约束。
+- 四个新增局部节点首次通过后封存，见 [PROGRESS 第 26 节](PROGRESS.md#26-worker-原始来源持久化与首写血缘接线2026-09-08)。仅无凭据读取公开静态脚本，没有真实业务接口/浏览器调用、重启或实际保存；Shadow/Discovery/Formal 未使用。用户授权充分，不需要重复确认相同范围。
+- 提交前扫描扩展到未跟踪文件后，除 tracked diff 的 3 处历史/回放店铺名，还发现继承 `closed_loop_replay_adapter.py` 2 处、`test_path_b_closed_loop.py` 3 处、旧 `run-path-b-template-closed-loop.ps1` 2 处；全部是店铺名，当前精确数字身份无命中。不得整包暂存这些文件；其中旧测试/脚本不在当前修改白名单，保留原状并单独处理提交范围，未提交/推送。原运行实例没有加载本轮源码。
+
+## 2026-09-08 前轮进展：共享输出规则已冻结，真实结果尚未持久消费
+
+- 共享 mapping 的视频/翻译字段归属已进入原冻结摘要；纯结果候选只允许相应自然语言或媒体输出，保留原 snapshot/preimage/input，拒绝 SKU 身份、结构、价格及非归属字段变化。公共模板先验证动作配置形状，不为缺失动作补默认值。
+- scope v3、公共 Prepare 模型/投影及唯一系统脚本现可精确表示“原值 + 输入 + 共同输出规则”，所有商品必须使用同一规则。未签发真实 scope，没有把生成前值冒充最终 expected，也没有生成后重写授权。
+- **仍未闭合**：现有证据表尚未追加绑定实际视频/翻译/批发命令来源，结果候选尚未被 SAVE1 派发/读回/验收消费。三个实际 SAVE 授权入口继续拒绝未持久输出；生产动作、共同引用实际应用和完整半托管链仍未全部接通，不能运行一次性真实批次。
+- 五个新增局部节点通过并封存，详见 [PROGRESS 第 25 节](PROGRESS.md#25-共享动作输出归属结果候选与-scope-规则2026-09-08)。没有 Configure、真实 API/浏览器操作、运行时重启或实际保存；Shadow/Discovery/Formal 未使用。用户范围授权充分，剩余是实现与证据，不是等待再次同意。
+- 交付前仍需核对整个继承 dirty diff：本轮扫描无精确范围数字，但旧回放/历史文本仍有 3 处真实店铺名；保留未提交状态，不把本轮未新增业务值说成全部变更已可推送。
+
+## 2026-09-08 前轮进展：批发独立验证已接线，动态结果与完整动作仍待闭合
+
+- 新增生产 `BATCH_WHOLESALE_FILL → validate_editor_wholesale` 命令映射、真实零写双读、启用/百分比/SKU 业务校验及独立 ActionResult/回执。Worker 核对当前 command，Runner 进一步比对唯一实际首 FILL 来源，拒绝缺字段、其它动作捎带回执、覆盖或复用授权；不是把旧填写结果重新签发。
+- 仅接线尚未加入 active steps：视频→批发→翻译顺序、各自实际动作及来源尚未全通，不提前释放 Path B。已观察的批发控件仍未启用且数字框禁用；没有为绕过它们先勾选、忽略原值或删掉恢复预检。
+- 合法视频/翻译输出目前与原 snapshot/payload/scope expected 值冲突；需要由共享动作政策预先限定输出字段、追加封存真实结果，并贯通编译/派发/保存读回/验收。只修改缓存会隐藏漂移，不能采用；不新增单品配置。
+- 本轮三个新增局部节点通过并封存，具体见 [PROGRESS 第 24 节](PROGRESS.md#24-批发独立验证接线与生成结果冻结冲突2026-09-08)。没有运行真实验证命令、保存、发布或重试；Shadow/Discovery/Formal 均未使用。原 dirty 开发运行时未重启，本轮源码检查不能当作运行实例或商品验收。
+
+## 2026-09-08 前轮进展：视频/翻译入口已定位，完整生产动作仍未闭环
+
+- 已修复真实视频按钮 accessible name 含图标导致的精确匹配失败、视频 modal 内外层重复命中、翻译 popover 被当 modal，以及表单异步加载期间提前比较原值。最后两份实际诊断均观察到唯一浮层、主表单 hash 与 Reader 前后相等；只打开入口，没有生成、翻译确认或保存。
+- 整份诊断仍因未允许请求被拦截和页面错误而 `ok=false`，始终 `capabilityCertified=false / executionAllowed=false`。视频额度/背景音乐/余额请求尚未完成只读接线，页面显示的零额度不能当真实余额不足；不能据入口可见直接开放 capability，也不主动查询原生资格。
+- Adapter 与 ActionResult 已消费完整 frozen readback 及生产身份附加形状；标题、类目和完整 SKU 等后置条件只按实际证据投影。模板 refs、原审计明细和字段最终来源现已进入两阶段执行载荷及 hash；但引用完整应用、复杂合规字段、独立生成/翻译回执和完整半托管仍缺事实。被共同规则覆盖或历史缺失的信息不伪称已应用，旧 Path A 上下文不能替代冻结权威。
+- 详见 [PROGRESS 第 23 节](PROGRESS.md#23-主编辑冻结读回接线与真实动作浮层定位2026-09-08)。共享 v1.4.0 仍为 draft；Shadow/Discovery/Formal 未使用，实际 SAVE/Publish=0。当前仍是 dirty 开发态、仓内 data，未签发当次 scope/Approval；用户授权充分，不重复索取相同授权或单品配置。
+
+## 2026-09-08 前轮进展：原值准备已接线，真实入口观察尚未通过
+
+- 首写前 rollback preparation 已有独立 Runner/BrowserAgent command、实际观察、Repository 持久化及首写重建检查；共享字段引擎新增目标值/恢复值严格预检和同一 JavaScript 原值比较。此项不再仅有内存 helper，但跨类目/复杂控件实际恢复能力仍未验证，生产 capability 未放行。
+- 两次真实公共入口观察均为失败报告：翻译入口实际是 popover，旧 modal 等待超时；视频入口检查失败而未点击。两次观察期间表单仍变化，Reader 前后值全等；没有确认翻译、生成视频或保存。需先修页面就绪和真实入口/浮层识别，不能将控件出现或 hash 存在称为 capability。
+- Formal 不能在已有 SAVE1 后再次调用整个 composite；需复用其不保存的入口叶子，并补同 job SAVE1 predecessor、独立入口授权及被动原生 gate 的真实响应语义。国家/价格/完整 SKU 和复杂半托管控件仍缺实际事实。
+- 详见 [PROGRESS 第 22 节](PROGRESS.md#22-回滚准备生产接线与真实动作入口观察2026-09-08)。共享 v1.4.0 仍为 draft；Shadow/Discovery/Formal 未使用，未实际保存。用户授权充分，不再询问相同授权或商品独立配置。
+
+## 2026-09-08 前轮审查：正式握手、半托管完整性与必经动作仍未闭环
+
+- 用户授权充分，不再等待逐商品配置或相同范围的确认。正式原生门入口与 Discovery 授权/回执不是同一条可替换调用链；现有门摘要又缺独立被动 gate outcome。禁止把页面跳转或 `same_handshake` 直接当成 admitted 后放行。
+- 晚冻结填写的通用结果没有接上 Adapter 原有商品/变体后置条件；当前 9 个合成 Schema 字段也不足以覆盖全部半托管必经项。未观察到的第二页控件、国家和 SKU 行身份仍不猜测。
+- 共享视频/批发/翻译动作政策已进入公共模板与冻结值合同；系统脚本已创建并读回 v1.4.0，仍为 draft，原 4 个店小秘引用继承且无单品配置。独立生产派发、回滚准备与持久回执链仍缺失；旧候选 executor 的假成功分支不可用于放行。
+- 只读控件采集实际得到 665 个控件，但报告因 6 次拦截和页面错误仍为 false，不能签发 capability。填写中断错误地宣称零写、控件类型串字段及库存扣减稳定绑定已有对应修复；本轮新增 5 项纯检查通过，均不构成真实保存成功。
+- 具体审查和本轮检查见 [PROGRESS 第 21 节](PROGRESS.md#21-正式调用链纠偏与统一模板动作配置2026-09-08)。Shadow/Discovery/Formal 仍未消耗；后续继续安全开发与原有公开只读入口核查，不能通过常量 capability 绕过。
+
+## 2026-09-08 前轮记录：冻结时序已获允许，真实预检仍由生产能力阻断
+
+- 用户已允许“共享规则先锁定，原生门后、第二页首写前冻结实际原值”的时序；此项不再待确认。scope v2、追加式第二阶段记录及 SAVE2 执行/读回/派发校验已接线，7 个新增契约检查通过；它们不是实际控件或保存验收。
+- 真实 Electron 已重启并加载后端修改，当前持久会话为 `LOGIN_READER_READY`。系统脚本 Configure 经公共接口创建共享普货模板 v1.3.0，读回 `draft / Path B / after_native_gate`，没有添加单品配置。
+- 新版 Inspect 实际重新读取三商品，公共 preview 仍返回 `MANDATORY_CAPABILITY_UNAVAILABLE_SEMIMANAGED`。五项生产能力的真实 probe/action/readback 及半托管国家/价格、部分引用/资质配置仍未完成，**不能称模板已经可执行**。字段存在于合成 Schema、或新执行方法存在，都不等于实际页面 binding 已确认。
+- 本次没有真实 SAVE/Publish，没有消费 Shadow/Discovery/Formal。当前仍为 dirty 开发态、仓内运行数据，未签发 scope/Approval。应继续补生产绑定和公共配置，不要重复索取已给出的修改/时序授权，不要以常量 capability 或独立商品设置绕过。
+- 实际命令、私有证据文件 size/SHA-256 和封存检查见 [PROGRESS 第 20 节](PROGRESS.md#20-用户允许的两阶段冻结与生产复核2026-09-08)。
+
+## 2026-09-07 前轮记录：公共模板已落库，三商品预检仍未放行
+
+- 系统脚本 `Configure` 已通过公共版本接口创建 `普货模板 · 动漫周边 · Path B` v1.2.0 并逐字段读回相等：12 个公共固定字段、1 条含 8 个字段的全 SKU 规则、4 个真实店小秘模板引用。115 项来源均明确，9 项是模板指定的保留输入规则，`auto=0`；没有商品专用配置或整块复制某件商品的 SKU。
+- `set_each` 在唯一编译器中保留每行身份，仅覆盖模板允许的公共字段。目标类目预检与实际解析共用同一个取值函数；前端编辑/重存也保留此规则。配置能落库不等于能执行：半托管国家/价格规则、必填资质条件及有效服务模板仍有缺口，因此没有把模板标为 ready。
+- 当次系统命令 `Inspect -LocalPlanTemplateId <新版本>` 重新读取精确三商品（SKU 行数 26/28/15），再调用公共 snapshot preview，输出 `planPreflightOk=False reason=MANDATORY_CAPABILITY_UNAVAILABLE_SEMIMANAGED`。无 snapshot/freeze/task/scope/Approval，未消耗 Shadow/Discovery/Formal，未执行 SAVE/Publish。这是实际生产接线阻断，不是要求用户逐商品确认。
+- 更完整的真实只读 DOM 已展示分类、图片和 SKU；`formLoaded=true` 不能抵消 4 个被拦截 POST 和 7 个页面网络异常。资格初始化请求仍没有被放行、直调或重放，不将此报告签发为 capability。
+- 发现并修复“任一引用模板成功即整体成功”的汇总错误：每个显式引用都必须有独立成功结果，失败不再由别的模板或运费重试掩盖。此修复尚未经过真实写入验证；五项完整生产动作及半托管 SAVE2 原值/独立读回仍需接通。
+- 当时定位到两阶段冻结时序冲突：初次 preview/freeze 要求 SAVE2 preimage，但三品半托管实际原值均为 0/9，第二页又只能在 SAVE1/原生门后读取。该时序调整已获用户允许并由上方 2026-09-08 记录取代；没有提前读取第二页或放宽原生门，其它生产执行器缺口仍须实现。
+- 最新证据、范围与检查记录见 [PROGRESS 第 19 节](PROGRESS.md#19-公共普货模板落库与三商品预检2026-09-07)。前端源码/typecheck 与旧 dist 分开陈述；本轮没有执行被禁止的前端构建、全量回归或交付验收，也没有覆盖既有工作树改动。
+
+## 2026-09-07 前轮记录：配置权威已统一，阻断在生产接线而非逐商品确认
+
+- 用户已明确三件商品全部执行同一普货模板及其显式店小秘模板引用，不允许商品专用配置。目标类目与修改范围已授权；不再等待夜灯电池答复或逐商品规则确认。
+- 已删除三段无调用者的固定店铺/类目/模板及“列表第一项”回退辅助代码；不以这些旁路补齐缺失配置。仍需完成正式模板绑定/执行/读回，不将删除死代码当作真实保存通过。
+- 公共版本接口已有 v1.1.0 `draft` 方案，115 项来源均为 `template`，物流意图统一普货。还需补齐公共规则/引用，不能借商品当前值临时补成另一套配置或伪造 ready。店铺模板接口当前能正常同步。
+- 真实公共 preview 仍返回 HTTP 409 / `MANDATORY_CAPABILITY_UNAVAILABLE_SEMIMANAGED`。五项 capability 与完整分区 executor/读回尚未闭合，是实现缺口，不是用户未授权。
+- 新只读编辑页检查正确返回 `ok=false`：标题已加载，分类/图片/SKU 模块未完整展示；观察到 3 个被严格 guard 拦截的 POST（2 个余额读取、1 个页面加载时原生发起的资格请求），不等于 3 次已发送业务写。资格请求没有放行或重放；当前不能从不完整 DOM 签发 capability。现场哈希、端点事实及新检查红绿记录见 [PROGRESS 第 18 节](PROGRESS.md#18-统一模板配置权威与真实编辑页只读检查2026-09-07)。
+- 同一桌面持久会话可读，回放关闭，保存/发布/自动重试仍为零，Shadow/Discovery/Formal 均未开始。原有工作树改动保留；clean 执行身份、Git 外运行数据和当次 scope/Approval 尚未完成。继续应修公共模板与系统链路，不再要求用户为每件商品提供额外配置。
+
+## 2026-09-07 前轮记录：店铺模板读取与 L2 已恢复，Path B 方案草稿已建立
+
+- 已解除：目标类目/本轮修改权限待确认、店铺模板 Adapter 漏接、L2 的精确账号初始化 GET/XHR 拦截。当前真实桌面托管会话 `LOGIN_READER_READY`，店铺模板公共同步接口成功返回，当前店铺有 42 条引用。新 L2 `l2-real-20260907T071636870050Z-c86d5266` 为 `ok=true`、`blocked_request_count=0`，详见 [PROGRESS 第 17 节](PROGRESS.md#17-授权后模板读取刷新和-l2-修复2026-09-07)。
+- 本地已有 `普货方案 · 动漫周边 · Path B` v1.0.0 草稿，115 项映射来自真实类目 Schema。状态保持 `draft`：尚缺第三件夜灯是否含电池及 SKU 物流事实、适用属性/区域资质条件、半托管实际国家和逐商品规则；不把三个不同商品的重量/尺寸/售价覆盖成旧立牌默认值。已向用户询问夜灯电池事实；这不是重新索取修改授权。
+- 生产视频、翻译、批发、半托管和保存前原值准备的 capability 仍未接通真实预检/动作/读回。此为代码缺口，不得用模板草稿、L2 通过或回放收据替代。尚未消耗 Shadow/Discovery/Formal 额度，未执行 SAVE 或发布。
+- 前端源码已将交付检查从工作台加载解耦并串行轮询，新增两项回归由红转绿、typecheck 通过；本轮未运行目标所禁的 frontend build，桌面仍加载原 dist，不宣称该前端修复已完成真实 UI 验收。
+- 当前仍为保留既有修改的 `main@7f5b87b9779274f25dac773e201dfdb9d9a8dc82`，运行数据仍在仓内；真实写前的 clean 身份、Git 外运行数据、精确 scope/Approval 均未就绪。旧记录的权限阻断已由本节取代，不能再次要求用户确认目标类目或白名单权限。
+
+## 2026-09-07 前轮记录：三商品系统读取通过，完整编辑/双保存未开始
+
+- 已解除：真实桌面启动/登录、同店精确三商品及顺序、第三件 SKU 物流属性 null 导致 Reader 拒绝、Windows PowerShell 5 中文 JSON 乱码。最新系统命令输出为 `phase=Inspect status=completed products=3 executionAllowed=false`；新修复的聚焦检查分别 `1 passed` 与 `4 passed`。证据和红绿过程见 [PROGRESS 第 16 节](PROGRESS.md#16-精确三商品系统读取与配置阻断2026-09-07)。
+- 配置尚未闭合：现有 20 个本地方案全为 Path A；本次三商品分属两个当前类目，`single_target_category.v2` 要求一个明确的末级目标。第三件 15 行 SKU 物流属性全部缺失，不能视为已配置普货；各件还有当前必填项或区域资质条件待确认。尚未把旧立牌数值强行套用，也未伪造 ready 模板。
+- 真实接线仍未闭合：五项生产 capability 仍为 `PRODUCTION_*_NOT_BOUND`，分区 executor/独立读回证据仍缺失。Inspect 产物是含真实当前值的私有配置输入，不是 capability、L2、Shadow 或保存证据。
+- 权限边界仍存在：目标文件明确禁止修改 `config/l2_readonly_allowlist.json`，前轮 L2 被 `GET /api/userIn.json` XHR 阻断，本轮没有再运行 L2、修改白名单或绕开门禁。继续需明确允许审阅更新该文件，并确认本次目标类目/分方案方式。
+- 实例仍使用仓内 data dir，HEAD 仍为 `7f5b87b9779274f25dac773e201dfdb9d9a8dc82` 且已有工作树修改保留；真实 scope 前需完成 clean 执行身份与 Git 外运行数据交接。SQLite 只读计数仍是 `scopes=0`、`discoveryAttempts=0`、`discoveryReceipts=0`。本轮没有 Prepare/Shadow/Discovery/Formal，自动派发 SAVE / Publish / 自动重试均为零。
+
+## 2026-09-07 前轮记录：真实登录与 Reader 已恢复，L2/生产接线仍阻断
+
+- 身份：权威仓库 `D:\Desktop\py\dxm-auto-uikit`，`main@7f5b87b9779274f25dac773e201dfdb9d9a8dc82`，既有脏工作树保留。状态仍为 `INTERNAL NON_READY / BLOCKED`。
+- **启动和登录交接已解除**：先停止误开的源码 Web 入口，再按用户纠正使用 `scripts\start-desktop.bat` 启动 Electron 桌面应用。桌面壳已加载当前 `0.3.0` frontend，托管 backend 的 `/health` 为 `ok`；用户在真实可见浏览器完成登录后，工作流活体检查与 `/api/dxm/live-status` 均为 `LOGIN_READER_READY`、`logged_in=true`、`reader_ready=true`。应用已生成会话文件，但本轮未读取 Cookie 或凭据内容。
+- **Reader 真实读取通过**：同一 session-bound API 读取到 7 个店铺，截图中当前店铺名精确匹配 1 个；该店铺草稿第一页返回 100 条且 `source=api`。未输出内部店铺/商品 ID，未打开具体商品编辑页。
+- **L2 仍阻断**：首次 headed L2 因页面导航竞争触发 `Execution context was destroyed`，未形成证据；稳定页面后的唯一重试形成 `draft_box_20260907T024946Z.{json,md,png,html}`，但安全结果为失败。计数为 `write_request_count=0`、`non_read_request_count=0`、`forbidden_keyword_request_count=0`、`websocket_count=0`、`blocked_request_count=3`；3 项均为同一只读 `GET /api/userIn.json` XHR，因不在人工评审白名单而被严格策略阻断。没有继续重跑，也没有修改 L2 安全阈值或白名单。
+- **不是只缺用户登录**：源码中的五项生产能力仍逐项返回 `PRODUCTION_VIDEO_ACTION_NOT_BOUND`、`PRODUCTION_TRANSLATION_ACTION_NOT_BOUND`、`PRODUCTION_WHOLESALE_ACTION_NOT_BOUND`、`PRODUCTION_SEMI_MANAGED_PREFLIGHT_NOT_BOUND`、`PRODUCTION_ROLLBACK_PREIMAGE_PREFLIGHT_NOT_BOUND`。缺真实 DOM、动作和独立读回事实，不能用回放收据补齐，B-01/B-02 继续阻断真实保存。
+- **旧反馈更正**：普通 `.dxm-runtime.lock` 不是回放标志，不删除；健康地址是 `/health`，不是 `/api/health`；Cookie 文件存在/修改时间不能证明登录有效；当前会话由应用内部保存，不要求用户使用扩展导出。不要继续执行 PROGRESS 第 14 节旧截图中的错误步骤，以已更正的第 14.5/15 节为准。
+- 当次只读 readiness 诊断确认 backend session 通过，但 L2 未通过，SQLite 中 `scopes=0`、`discoveryAttempts=0`、`discoveryReceipts=0`。桌面启动器本次自带的 frontend 门禁通过 `34/34` Node、`11/11` browser contract、typecheck 与 Vite build；这些都不是网站执行证据。未签发 scope/Approval、未运行 Discovery/Formal，SAVE / Publish / 自动重试均未发生。
+- **当前目标边界**：目标文件第 20-21 行只允许修改列明路径，并明确禁止修改 `config/l2_readonly_allowlist.json`；同时第 14 行禁止猜测真实商品。因此本轮不能自行把 `GET /api/userIn.json` 加入白名单，也不能代选三商品。后续需用户明确扩展这两个边界，才可完成白名单人工评审、fresh L2 和精确范围流程；其后再做只读 DOM discovery、补齐五项能力/分区真实接线、Prepare/Shadow/Discovery/fresh Formal。保留保存前原值准备，不擅自恢复用户已取消的自动补偿/回滚。
+
+## 2026-09-01 real Path B system-flow 历史裁定
 
 **结论：`INTERNAL NON_READY / BLOCKED`。公开系统流、Discovery 原子边界、Discovery→Formal fresh lineage、逐 SAVE 权威账本与验收重建已提交并推送到 `main@90e8233`；但生产 Path B 的五项 capability 与 14 个 section producer/executor 尚未全部有可复核的真实 UI 事实。当前也没有可用的当次真实 scope/经实时复核的持久会话，因此没有运行 Shadow、Discovery、Formal，没有打开真实商品编辑页；真实 mutation / publish / auto retry 均为 0。**
 

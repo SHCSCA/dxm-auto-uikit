@@ -38,7 +38,7 @@ class ResolvedTemplateReferences:
         self._values = values
         self._refs = tuple(values.clone(ref) for ref in refs)
 
-    def frozen_summary(self) -> list[dict[str, Any]]:
+    def frozen_summary(self, *, include_audit: bool = False) -> list[dict[str, Any]]:
         return [
             {
                 "type": ref["ref_type"],
@@ -49,6 +49,13 @@ class ResolvedTemplateReferences:
                 "source_digest": ref["source_digest"],
                 "resolved_values_hash": ref["resolved_values_hash"],
                 "availability": ref["availability"],
+                **({
+                    "ref_id": ref["id"],
+                    "audit_items_hash": ref["audit_items_hash"],
+                    "audit_item_count": ref["audit_item_count"],
+                    **({"audit_items": self._values.clone(ref["_audit_items"])}
+                       if "_audit_items" in ref else {}),
+                } if include_audit else {}),
             }
             for ref in self._refs
         ]

@@ -352,7 +352,6 @@ export default function App() {
       fetchedLocalPlans,
       fetchedDxmTemplateRefs,
       consoleStatus,
-      finalCheckSummary,
     ] = await Promise.all([
       loadOrFallback<DeliveryWorkspaceResponse | null>(deliveryPath, null),
       loadOrFallback<Store[]>('/api/stores', []),
@@ -367,7 +366,6 @@ export default function App() {
       loadOrFallback<LocalPlanTemplate[]>('/api/local-plan-templates', []),
       loadOrFallback<DxmTemplateRef[]>('/api/dxm-template-refs', []),
       loadOrFallback<AgentConsoleSession | null>('/api/agent-console/status', null),
-      loadOrFallback<FinalDeliveryCheckSummary | null>('/api/delivery/final-check', null),
     ])
     const nextWorkspace = composeWorkspace({
       workspace: deliveryWorkspace,
@@ -390,7 +388,6 @@ export default function App() {
     setDxmTemplateRefs(fetchedDxmTemplateRefs)
     setEditBatchStateAvailable(!editBatchStateFailed)
     setAgentConsole(consoleStatus)
-    setFinalCheck(finalCheckSummary)
     const taskMissing = Boolean(deliveryWorkspace?.requested_task_missing)
       || failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))
     if (taskMissing) {
@@ -430,11 +427,28 @@ export default function App() {
 
   useEffect(() => {
     if (!workspaceHasRunningTask && !workspaceHasRunningBatch && !agentConsole?.active) return
-    const timer = window.setInterval(() => {
-      void refreshWorkspace({ silent: true })
-    }, 1500)
-    return () => window.clearInterval(timer)
+    let cancelled = false
+    const poll = async () => {
+      await refreshWorkspace({ silent: true })
+      if (!cancelled) timer = window.setTimeout(poll, 1500)
+    }
+    let timer = window.setTimeout(poll, 1500)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [agentConsole?.active, refreshWorkspace, workspaceHasRunningBatch, workspaceHasRunningTask])
+
+  useEffect(() => {
+    setFinalCheck(null)
+    if (activeSection !== 'results' && activeSection !== 'settings') return
+    // Delivery evidence scanning must not hold the operational workspace hostage.
+    const controller = new AbortController()
+    void getJson<FinalDeliveryCheckSummary>('/api/delivery/final-check', controller.signal)
+      .then((summary) => { if (!controller.signal.aborted) setFinalCheck(summary) })
+      .catch(() => { if (!controller.signal.aborted) setFinalCheck(null) })
+    return () => controller.abort()
+  }, [activeSection, selectedTaskId, workspaceHasRunningTask, workspaceHasRunningBatch])
 
   const refreshConfigPreview = useCallback(async (taskId: number | null = selectedTask?.id ?? null) => {
     if (!taskId) {

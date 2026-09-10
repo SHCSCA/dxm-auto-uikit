@@ -28,6 +28,10 @@ def normalize_wire_value(
 ) -> Any:
     """Normalize only unambiguous wire encodings declared by frozen Schema."""
 
+    # Preserve missing nested values for configuration; Schema validation
+    # still rejects them before an execution snapshot can be frozen.
+    if value is None:
+        return None
     expected_type = definition.get("type")
     if expected_type == "array":
         if isinstance(value, str) and definition.get("wire_format") == (
@@ -56,7 +60,7 @@ def normalize_wire_value(
         if not isinstance(value, Mapping):
             _reject(
                 "PLAN_FIELD_WIRE_INVALID",
-                f"field {field_key} wire value is not an object",
+                f"field {field_key} wire value is not an object (received {type(value).__name__})",
             )
         properties = definition.get("properties", {})
         normalized: dict[str, Any] = {}

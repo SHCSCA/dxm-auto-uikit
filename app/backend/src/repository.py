@@ -45,6 +45,9 @@ from src.batch_edit.execution_contract import (
     derive_running_item_claim_context,
 )
 from src.batch_edit.batch_contract import BatchContractError, freeze_template_bundle
+from src.batch_edit.frozen_execution_contract import (
+    build_save2_stage_freeze, frozen_scope_field_bindings, load_save2_stage_freezes,
+)
 from src.batch_edit.scope_contract import canonical_sha256
 from src.execution.browser_agent_protocol import (
     BrowserAgentCommand,
@@ -2665,10 +2668,301 @@ class Repository:
             payload = loads(task.pop('payload_json'), {})
             task['payload'] = payload if include_private else self._public_task_payload(payload)
             task['jobs'] = conn.execute("SELECT * FROM jobs WHERE task_id=? ORDER BY id ASC", (task_id,)).fetchall()
+            if include_private:
+                task['_save2_freezes'] = load_save2_stage_freezes(conn, task_id)
             return task
 
     def get_task_private(self, task_id: int):
         return self.get_task(task_id, include_private=True)
+
+    def persist_path_b_editor_source(self, task_id: int, job_id: int, command, action_result):
+        """Append an actual worker outcome, including failure, without changing inputs or claiming SAVE success."""
+        from src.batch_edit.frozen_execution_contract import compile_frozen_execution_payload, validate_frozen_execution_defaults
+        from src.execution.batch_dispatch_authority import snapshot_row_authority_in_transaction
+        from src.execution.browser_agent_worker import load_browser_agent_action_source
+        from src.execution.e3_authority_contract import parse_strict_utc_timestamp
+        from src.real_dxm_write_scope import validate_real_dxm_write_scope
+
+        pairs = {'FILL_BASE_INFO': 'fill_editor_required_defaults', 'BATCH_WHOLESALE_FILL': 'validate_editor_wholesale',
+                 'BATCH_TRANSLATE_EXECUTE': 'translate_editor_content'}
+        parsed = BrowserAgentCommand(**command)
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = self._private_task_from_connection(conn, task_id)
+            job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+            if (not task or task.get('status') != 'running' or task.get('mode') != 'batch_draft_save'
+                    or not job or job.get('status') != 'running' or job.get('current_step_code') != parsed.state
+                    or parsed.task_id != task_id or parsed.job_id != job_id or parsed.execution_mode != 'batch_draft_save'
+                    or parsed.state not in pairs or parsed.action != pairs[parsed.state] or parsed.expected_page != 'editor'):
+                raise ValueError('EDITOR_SOURCE_STATE_INVALID')
+            payload = task['payload']; plan = payload.get('plan_snapshot', {})
+            if plan.get('path') != 'B':
+                raise ValueError('EDITOR_SOURCE_PATH_INVALID')
+            snapshot_authority = snapshot_row_authority_in_transaction(conn, task_id)
+            scope_hash = payload.get('real_dxm_write_authorization', {}).get('scope_sha256')
+            scope_row = conn.execute('SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?', (scope_hash,)).fetchone()
+            if not scope_row or scope_row['status'] != 'consumed' or scope_row['task_id'] != task_id:
+                raise ValueError('EDITOR_SOURCE_SCOPE_NOT_CONSUMED')
+            now_text = now_iso()
+            scope = validate_real_dxm_write_scope(loads(scope_row['scope_json'], {}), now=now_text)
+            now = parse_strict_utc_timestamp(now_text, field='editor source time')
+            if (scope['snapshot'] != {'snapshotId': payload['plan_snapshot_id'], 'snapshotSha256': plan['snapshot_hash'], 'taskId': task_id}
+                    or str(scope['shop']['shopId']) != str(task['store_id'])
+                    or scope['runtime']['browserRuntimeId'] != parsed.runtime_id
+                    or [str(p['productId']) for p in scope['orderedProducts']] != [str(row['product_id']) for row in task['jobs']]
+                    or now > parse_strict_utc_timestamp(parsed.deadline, field='editor command deadline')):
+                raise ValueError('EDITOR_SOURCE_SCOPE_IDENTITY_DRIFT')
+            execution = compile_frozen_execution_payload(task, job)
+            validate_frozen_execution_defaults(parsed.params.get('defaults'), expected_payload=execution)
+            item = next(row for row in plan['item_snapshots'] if str(row['product_id']) == str(job['product_id']))
+            scoped_item = next(row for row in scope['orderedProducts'] if str(row['productId']) == str(job['product_id']))
+            target = canonical_frozen_target_identity(item.get('target_identity'), store_name=scope['shop']['shopName'])
+            if (not target or target['stable_identity'] != item['target_identity']['stable_identity']
+                    or target['stable_identity']['kind'] != 'product_id' or target['stable_identity']['value'] != str(job['product_id'])
+                    or parsed.params.get('target_identity') != target or parsed.params.get('store_name') != scope['shop']['shopName']
+                    or str(item['shop_id']) != str(scope['shop']['shopId'])
+                    or scoped_item['allowedFields'] != frozen_scope_field_bindings(item)):
+                raise ValueError('EDITOR_SOURCE_FROZEN_TARGET_DRIFT')
+            session = scope['runtime']['browserSessionId']
+            artifacts = load_browser_agent_action_source(command, action_result, browser_session_id=session)
+            envelope = validate_action_result_envelope(action_result, expected_state=parsed.state, expected_action=parsed.action,
+                expected_page='editor', execution_mode='batch_draft_save', expected_runtime_id=parsed.runtime_id,
+                expected_browser_session_id=session, expected_execution_payload=execution)
+            records = [loads(row['meta_json'], {}) for row in conn.execute(
+                "SELECT meta_json FROM job_evidences WHERE task_id=? AND job_id=? AND evidence_type='path_b_editor_source' ORDER BY id",
+                (task_id, job_id)).fetchall()]
+            if any(record.get('command', {}).get('state') == parsed.state
+                   or record.get('command', {}).get('command_id') == parsed.command_id for record in records):
+                raise ValueError('EDITOR_SOURCE_ALREADY_RECORDED')
+            translation_dispatch = None
+            if envelope['ok']:
+                before = envelope['before_values']
+                if (before.get('defaults') != parsed.params.get('defaults') or before.get('target_identity') != target
+                        or before.get('store_name') != scope['shop']['shopName']):
+                    raise ValueError('EDITOR_SOURCE_RESULT_INPUT_DRIFT')
+                refs = envelope['evidence']['refs']
+                if not refs:
+                    raise ValueError('EDITOR_SOURCE_SCREENSHOT_REQUIRED')
+                for ref in refs:
+                    captured = parse_strict_utc_timestamp(ref['captured_at'], field='editor screenshot time')
+                    if (not 0 <= (now - captured).total_seconds() <= 30
+                            or validate_evidence_ref({key: ref[key] for key in ('path', 'sha256', 'size')}, screenshot_root=SCREENSHOT_DIR).get('ok') is not True):
+                        raise ValueError('EDITOR_SOURCE_SCREENSHOT_INVALID')
+                if parsed.state == 'BATCH_WHOLESALE_FILL':
+                    parents = [record for record in records if record.get('command', {}).get('state') == 'FILL_BASE_INFO']
+                    if len(parents) != 1:
+                        raise ValueError('WHOLESALE_PERSISTED_FIRST_FILL_REQUIRED')
+                    parent = parents[0]
+                    if (canonical_sha256({key: value for key, value in parent.items() if key != 'source_sha256'}) != parent.get('source_sha256')
+                            or parent.get('snapshot_sha256') != plan['snapshot_hash'] or parent.get('scope_sha256') != scope_hash
+                            or parent.get('execution_payload_hash') != execution['payload_hash']
+                            or parent.get('action_result', {}).get('ok') is not True
+                            or parent.get('artifacts') != load_browser_agent_action_source(parent['command'], parent['action_result'], browser_session_id=session)):
+                        raise ValueError('WHOLESALE_PERSISTED_FIRST_FILL_DRIFT')
+                    from src.batch_edit.wholesale_filler import validate_wholesale_first_fill_source
+                    validate_wholesale_first_fill_source(envelope['evidence']['observations']['wholesale_observation']['writer'],
+                        {'browser_agent_command': parent['command'], 'action_result': parent['action_result']},
+                        command=command, browser_session_id=session)
+                elif parsed.state == 'BATCH_TRANSLATE_EXECUTE':
+                    from src.batch_edit.translator import validate_translation_wholesale_source
+                    from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
+                    from src.execution.batch_dispatch_authority import validate_current_task_against_frozen_authority
+
+                    parents = [record for record in records if record.get('command', {}).get('state') == 'BATCH_WHOLESALE_FILL']
+                    if len(parents) != 1:
+                        raise ValueError('TRANSLATION_PERSISTED_WHOLESALE_REQUIRED')
+                    parent = parents[0]
+                    if (canonical_sha256({key: value for key, value in parent.items() if key != 'source_sha256'}) != parent.get('source_sha256')
+                            or parent.get('snapshot_sha256') != plan['snapshot_hash'] or parent.get('scope_sha256') != scope_hash
+                            or parent.get('execution_payload_hash') != execution['payload_hash']
+                            or parent.get('action_result', {}).get('ok') is not True
+                            or parent.get('artifacts') != load_browser_agent_action_source(parent['command'], parent['action_result'], browser_session_id=session)):
+                        raise ValueError('TRANSLATION_PERSISTED_WHOLESALE_DRIFT')
+                    observed = envelope['evidence']['observations']['translation_observation']
+                    validate_translation_wholesale_source(observed,
+                        {'browser_agent_command': parent['command'], 'action_result': parent['action_result']},
+                        command=command, browser_session_id=session)
+                    rows = conn.execute('SELECT * FROM mutation_dispatch_ledger WHERE command_id=?', (parsed.command_id,)).fetchall()
+                    if len(rows) != 1:
+                        raise ValueError('TRANSLATION_DISPATCH_SOURCE_NOT_UNIQUE')
+                    row = dict(rows[0])
+                    authority = MutationDispatchLedger.validate_translation_source(row, parsed, observed,
+                        snapshot_row_authority_sha256=canonical_sha256(snapshot_authority))
+                    decision = validate_current_task_against_frozen_authority(conn, authority)
+                    if decision.ok is not True:
+                        raise ValueError('TRANSLATION_DISPATCH_AUTHORITY_DRIFT:' + decision.reason_code)
+                    ref = observed['evidence_ref']
+                    if not any({key: item[key] for key in ('path', 'sha256', 'size')} == ref for item in refs):
+                        raise ValueError('TRANSLATION_OBSERVATION_SCREENSHOT_NOT_BOUND')
+                    translation_dispatch = {'row': row, 'row_sha256': canonical_sha256(row),
+                                            'predecessor_source_sha256': parent['source_sha256']}
+            body = {'schema': 'dxm.path_b_editor_source.v1', 'task_id': task_id, 'job_id': job_id,
+                'product_id': job['product_id'], 'snapshot_sha256': plan['snapshot_hash'], 'scope_sha256': scope_hash,
+                'snapshot_row_authority_sha256': canonical_sha256(snapshot_authority),
+                'execution_payload_hash': execution['payload_hash'], 'command': dict(command),
+                'action_result': envelope, 'artifacts': artifacts, 'created_at': now_text}
+            if translation_dispatch is not None:
+                body['translation_dispatch_source'] = translation_dispatch
+            record = {**body, 'source_sha256': canonical_sha256(body)}
+            conn.execute("INSERT INTO job_evidences(task_id,job_id,evidence_type,file_path,meta_json,created_at) VALUES(?,?,'path_b_editor_source',?,?,?)",
+                (task_id, job_id, artifacts['result']['path'], dumps(record), now_text))
+            return record
+
+    def reserve_rollback_preparation(self, task_id: int, job_id: int, command: dict):
+        """Persist the exact read-only BrowserAgent command before its owner thread runs."""
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = self._private_task_from_connection(conn, task_id)
+            job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+            parsed = BrowserAgentCommand(**command)
+            validate_browser_agent_command(parsed)
+            if (not task or task.get('status') != 'running' or task.get('mode') != 'batch_draft_save'
+                    or not job or job.get('status') != 'running' or job.get('current_step_code') != 'PREPARE_ROLLBACK'
+                    or parsed.task_id != task_id or parsed.job_id != job_id or parsed.state != 'PREPARE_ROLLBACK'
+                    or parsed.action != 'prepare_rollback' or parsed.expected_page != 'editor'
+                    or parsed.execution_mode != 'batch_draft_save' or parsed.to_payload() != command):
+                raise ValueError('ROLLBACK_COMMAND_OUTSIDE_PREPARATION')
+            previous = conn.execute("SELECT id FROM job_evidences WHERE task_id=? AND job_id=? AND evidence_type='path_b_rollback_command'",
+                                    (task_id, job_id)).fetchone()
+            if previous:
+                raise ValueError('ROLLBACK_COMMAND_ALREADY_RESERVED')
+            conn.execute("INSERT INTO job_evidences(task_id,job_id,evidence_type,meta_json,created_at) VALUES(?,?,'path_b_rollback_command',?,?)",
+                         (task_id, job_id, dumps(command), now_iso()))
+
+    def persist_rollback_preparation(self, task_id: int, job_id: int, workflow_result: Mapping[str, Any]):
+        from src.batch_edit.rollback_manager import build_rollback_preparation_record
+        from src.batch_edit.frozen_execution_contract import compile_frozen_execution_payload
+        from src.execution.batch_dispatch_authority import snapshot_row_authority_in_transaction
+        from src.execution.e3_authority_contract import parse_strict_utc_timestamp
+        from src.real_dxm_write_scope import validate_real_dxm_write_scope
+
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = self._private_task_from_connection(conn, task_id)
+            job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+            if (not task or task.get('status') != 'running' or not job or job.get('status') != 'running'
+                    or job.get('current_step_code') != 'PREPARE_ROLLBACK'):
+                raise ValueError('ROLLBACK_PERSIST_OUTSIDE_PREPARATION')
+            snapshot_row_authority_in_transaction(conn, task_id)
+            command = workflow_result.get('browser_agent_command')
+            reserved = conn.execute("SELECT meta_json FROM job_evidences WHERE task_id=? AND job_id=? AND evidence_type='path_b_rollback_command'",
+                                    (task_id, job_id)).fetchall()
+            if len(reserved) != 1 or loads(reserved[0]['meta_json'], {}) != command:
+                raise ValueError('ROLLBACK_PERSIST_COMMAND_NOT_RESERVED')
+            envelope = workflow_result['action_result']
+            observation = envelope['evidence']['observations']['rollback_preparation']
+            scope_hash = task['payload']['real_dxm_write_authorization']['scope_sha256']
+            scope_row = conn.execute('SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?', (scope_hash,)).fetchone()
+            if not scope_row or scope_row['status'] != 'consumed' or scope_row['task_id'] != task_id:
+                raise ValueError('ROLLBACK_SCOPE_NOT_CONSUMED')
+            scope = validate_real_dxm_write_scope(loads(scope_row['scope_json'], {}))
+            if (scope['runtime']['browserSessionId'] != observation['browser_session_id']
+                    or scope['runtime']['browserRuntimeId'] != command['runtime_id']):
+                raise ValueError('ROLLBACK_RUNTIME_DRIFT')
+            validate_action_result_envelope(envelope, expected_state='PREPARE_ROLLBACK', expected_action='prepare_rollback',
+                expected_page='editor', execution_mode='batch_draft_save', expected_runtime_id=command['runtime_id'],
+                expected_browser_session_id=observation['browser_session_id'],
+                expected_execution_payload=compile_frozen_execution_payload(task, job))
+            if envelope.get('ok') is not True:
+                raise ValueError('ROLLBACK_OBSERVATION_FAILED')
+            observed_at = parse_strict_utc_timestamp(observation['observed_at'], field='rollback observed_at')
+            now = parse_strict_utc_timestamp(now_iso(), field='now')
+            if (not 0 <= (now - observed_at).total_seconds() <= 30
+                    or now > parse_strict_utc_timestamp(command['deadline'], field='command deadline')):
+                raise ValueError('ROLLBACK_OBSERVATION_NOT_FRESH')
+            if validate_evidence_ref(observation['evidence_ref'], screenshot_root=SCREENSHOT_DIR).get('ok') is not True:
+                raise ValueError('ROLLBACK_EVIDENCE_INVALID')
+            previous = conn.execute("SELECT id FROM job_evidences WHERE task_id=? AND job_id=? AND evidence_type='path_b_rollback_preparation'",
+                                    (task_id, job_id)).fetchone()
+            dispatched = conn.execute("SELECT id FROM mutation_dispatch_ledger WHERE task_id=? AND job_id=? AND status NOT IN ('RESERVED','CANCELLED_BEFORE_DISPATCH')",
+                                      (task_id, job_id)).fetchone()
+            if previous or dispatched:
+                raise ValueError('ROLLBACK_PREPARATION_TOO_LATE_OR_DUPLICATE')
+            record = build_rollback_preparation_record(task, job, command, observation)
+            if envelope['evidence']['observations']['mandatory_capability_receipts']['rollbackPreparation'] != record['capability_receipt']:
+                raise ValueError('ROLLBACK_RECEIPT_COMMAND_MISMATCH')
+            conn.execute("INSERT INTO job_evidences(task_id,job_id,evidence_type,file_path,meta_json,created_at) VALUES(?,?,'path_b_rollback_preparation',?,?,?)",
+                         (task_id, job_id, observation['evidence_ref']['path'], dumps(record), now_iso()))
+            return record
+
+    def require_rollback_preparation_before_write(self, task_id: int, job_id: int, *, browser_session_id: str):
+        from src.batch_edit.rollback_manager import build_rollback_preparation_record
+        from src.execution.batch_dispatch_authority import snapshot_row_authority_in_transaction
+        from src.execution.e3_authority_contract import parse_strict_utc_timestamp
+
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = self._private_task_from_connection(conn, task_id)
+            job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+            if (not task or task.get('status') != 'running' or not job or job.get('status') != 'running'
+                    or job.get('current_step_code') != 'PREPARE_ROLLBACK'):
+                raise ValueError('ROLLBACK_FIRST_WRITE_STATE_INVALID')
+            snapshot_row_authority_in_transaction(conn, task_id)
+            rows = conn.execute("SELECT meta_json FROM job_evidences WHERE task_id=? AND job_id=? AND evidence_type='path_b_rollback_preparation'",
+                                (task_id, job_id)).fetchall()
+            if len(rows) != 1:
+                raise ValueError('ROLLBACK_PREPARATION_REQUIRED')
+            record = loads(rows[0]['meta_json'], {})
+            if build_rollback_preparation_record(task, job, record['command'], record['observation']) != record:
+                raise ValueError('ROLLBACK_PREPARATION_DRIFT')
+            observation = record['observation']
+            now = parse_strict_utc_timestamp(now_iso(), field='now')
+            observed = parse_strict_utc_timestamp(observation['observed_at'], field='rollback observed_at')
+            if (browser_session_id != observation['browser_session_id'] or not 0 <= (now - observed).total_seconds() <= 30
+                    or validate_evidence_ref(observation['evidence_ref'], screenshot_root=SCREENSHOT_DIR).get('ok') is not True):
+                raise ValueError('ROLLBACK_PREIMAGE_NOT_CURRENT')
+            return record
+
+    def freeze_save2_before_first_write(self, task_id: int, job_id: int, *, observation, gate):
+        """Append once, after persisted SAVE1 and native entry; never mutate the parent plan."""
+        from src.real_dxm_write_scope import validate_real_dxm_write_scope
+        from src.execution.e3_authority_contract import parse_strict_utc_timestamp
+
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = self._private_task_from_connection(conn, task_id)
+            job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+            if (not task or task.get('status') != 'running' or task.get('mode') != 'batch_draft_save'
+                    or not job or job.get('status') != 'running' or job.get('current_step_code') != 'SAVE_INTENT_MODAL'):
+                raise ValueError('SAVE2_FREEZE_OUTSIDE_NATIVE_ENTRY')
+            scope_hash = task['payload'].get('real_dxm_write_authorization', {}).get('scope_sha256')
+            scope_row = conn.execute('SELECT * FROM real_dxm_write_scopes WHERE scope_sha256=?', (scope_hash,)).fetchone()
+            if not scope_row or scope_row.get('status') != 'consumed' or scope_row.get('task_id') != task_id:
+                raise ValueError('SAVE2_FREEZE_SCOPE_NOT_CONSUMED')
+            scope = validate_real_dxm_write_scope(loads(scope_row['scope_json'], {}))
+            item = next(row for row in task['payload']['plan_snapshot']['item_snapshots'] if str(row['product_id']) == str(job['product_id']))
+            scoped_item = next(row for row in scope['orderedProducts'] if str(row['productId']) == str(job['product_id']))
+            if scope['schema'] != 'real_dxm_write_scope.v2' or scoped_item['allowedFields'] != frozen_scope_field_bindings(item):
+                raise ValueError('SAVE2_FREEZE_SHARED_SCOPE_RULE_DRIFT')
+            if scope['runtime']['browserSessionId'] != observation.get('browser_session_id'):
+                raise ValueError('SAVE2_FREEZE_SESSION_DRIFT')
+            before = conn.execute("SELECT * FROM canonical_receipts WHERE task_id=? AND job_id=? AND receipt_kind='save_stage' AND save_stage='SAVE1'", (task_id, job_id)).fetchall()
+            if len(before) != 1 or before[0].get('scope_sha256') != scope_hash:
+                raise ValueError('SAVE2_FREEZE_SAVE1_RECEIPT_REQUIRED')
+            save1 = loads(before[0]['receipt_json'], {})
+            rebuilt = self._build_canonical_save_stage_receipt(
+                conn, save1.get('save_receipt', {}), task_id=task_id, job_id=job_id,
+                product_id=job['product_id'], scope_sha256=scope_hash, save_stage='SAVE1',
+            )
+            if rebuilt != save1 or rebuilt['canonical_receipt_sha256'] != before[0]['canonical_receipt_sha256']:
+                raise ValueError('SAVE2_FREEZE_SAVE1_RECEIPT_DRIFT')
+            saved_at = parse_strict_utc_timestamp(save1['save_receipt']['completed_at'], field='SAVE1 completed_at')
+            observed_at = parse_strict_utc_timestamp(observation['observed_at'], field='SAVE2 observed_at')
+            now = parse_strict_utc_timestamp(now_iso(), field='now')
+            if observed_at <= saved_at or not 0 <= (now - observed_at).total_seconds() <= 30:
+                raise ValueError('SAVE2_FREEZE_OBSERVATION_NOT_FRESH')
+            if validate_evidence_ref(observation.get('evidence_ref'), screenshot_root=SCREENSHOT_DIR).get('ok') is not True:
+                raise ValueError('SAVE2_FREEZE_EVIDENCE_INVALID')
+            freezes = load_save2_stage_freezes(conn, task_id)
+            if str(job_id) in freezes:
+                raise ValueError('SAVE2_STAGE_ALREADY_FROZEN')
+            record = build_save2_stage_freeze(task, job, observation=observation, gate=gate,
+                                            save1_receipt_sha256=before[0]['canonical_receipt_sha256'])
+            conn.execute(
+                "INSERT INTO job_evidences(task_id,job_id,evidence_type,file_path,meta_json,created_at) VALUES(?,?,'path_b_save2_freeze',?,?,?)",
+                (task_id, job_id, observation['evidence_ref']['path'], dumps(record), now_iso()),
+            )
+            return record
 
     def create_task(self, data: dict[str, Any]):
         now = now_iso()
@@ -5630,6 +5924,7 @@ class Repository:
                 (task_id,),
             ).fetchall()
         ]
+        task["_save2_freezes"] = load_save2_stage_freezes(conn, task_id)
         return task
 
     @staticmethod

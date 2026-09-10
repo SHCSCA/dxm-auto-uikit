@@ -33,6 +33,7 @@ class StateName(StrEnum):
     ITEM_LOCKED = "ITEM_LOCKED"
     OPEN_EDIT_PAGE = "OPEN_EDIT_PAGE"
     VERIFY_EDIT_OWNERSHIP = "VERIFY_EDIT_OWNERSHIP"
+    PREPARE_ROLLBACK = "PREPARE_ROLLBACK"
     FILL_BASE_INFO = "FILL_BASE_INFO"
     FILL_VARIANTS = "FILL_VARIANTS"
     FILL_MEDIA = "FILL_MEDIA"
@@ -322,8 +323,8 @@ def build_v1_state_specs() -> dict[StateName, StateNodeSpec]:
         ),
         StateName.BATCH_WHOLESALE_FILL: StateNodeSpec(
             state_name=StateName.BATCH_WHOLESALE_FILL,
-            preconditions=("batch products in edit context",),
-            actions=("fill wholesale price tiers for batch products",),
+            preconditions=("frozen Path B main fill proven for the exact current product",),
+            actions=("validate wholesale controls and SKU relationships without writing",),
             failure_code="E606",
         ),
         StateName.BATCH_TRANSLATE_CHECK: StateNodeSpec(

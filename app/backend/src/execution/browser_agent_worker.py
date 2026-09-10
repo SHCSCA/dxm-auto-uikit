@@ -27,7 +27,10 @@ from src.execution.action_result_contract import (
     validate_action_result_envelope,
 )
 from src.execution.browser_agent_protocol import (
+    CONTENT_MUTATION_COMMANDS,
     BrowserAgentCommand,
+    browser_agent_command_sha256,
+    validate_browser_agent_command,
     canonical_frozen_target_identity,
     canonical_mutation_target_payload,
     command_post_dispatch_page,
@@ -60,6 +63,7 @@ _PROOF_EVIDENCE_KIND_BY_STATE = MappingProxyType(
 )
 _MUTATION_ACTION_SEQUENCE_BY_STATE = MappingProxyType(
     {
+        **{state: MappingProxyType({mutation: 1}) for state, (_, mutation) in CONTENT_MUTATION_COMMANDS.items()},
         "SAVE_ONLY": MappingProxyType({"save_only_click": 1}),
         "SAVE2_ONLY": MappingProxyType({"save_only_click": 1}),
         "FIRST_SAVE_INTENT": MappingProxyType({"first_save_intent": 1}),
@@ -75,8 +79,11 @@ _BATCH_VERIFY_STATES = frozenset(
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
     {
+        *(action for action, _ in CONTENT_MUTATION_COMMANDS.values()),
         "open_editor",
         "verify_edit_ownership",
+        "prepare_rollback",
+        "validate_editor_wholesale",
         "fill_editor_required_defaults",
         "fill_editor_variants",
         "fill_media_assets",
@@ -1322,7 +1329,7 @@ class BrowserAgentRuntime:
                 },
             )
             if isinstance(result, dict) and result.get("ok") is not True:
-                if _is_batch_save_command(command) and not _mark_batch_save_unknown(
+                if (_is_batch_save_command(command) or command.state in CONTENT_MUTATION_COMMANDS) and not _mark_batch_save_unknown(
                     self._mutation_ledger,
                     command,
                     phase="post_save_action_result",
@@ -1334,7 +1341,7 @@ class BrowserAgentRuntime:
                 updater(self._build_hud(command, status="success"))
             return result
         except Exception as exc:
-            if _is_batch_save_command(command):
+            if _is_batch_save_command(command) or command.state in CONTENT_MUTATION_COMMANDS:
                 try:
                     _mark_batch_save_unknown(
                         self._mutation_ledger,
@@ -1409,6 +1416,31 @@ class BrowserAgentRuntime:
                 _raise_action_result_contract_failure(
                     "successful action result target_identity/store_name do not match the command"
                 )
+        observations = contract_facts.get("evidence_observations", {})
+        capabilities = observations.get("mandatory_capability_receipts", {}) if isinstance(observations, Mapping) else {}
+        has_wholesale = isinstance(capabilities, Mapping) and "wholesale" in capabilities
+        if command.action == "validate_editor_wholesale" or has_wholesale:
+            if (command.action != "validate_editor_wholesale" or command.state != "BATCH_WHOLESALE_FILL"
+                    or command.execution_mode != "batch_draft_save"):
+                _raise_action_result_contract_failure("wholesale receipt requires its independent production command")
+            if raw.get("ok") is True:
+                wrapper = capabilities.get("wholesale") if isinstance(capabilities, Mapping) else None
+                receipt = wrapper.get("canonical_receipt") if isinstance(wrapper, Mapping) else None
+                observed = observations.get("wholesale_observation", {})
+                observed_command = observed.get("command") if isinstance(observed, Mapping) else None
+                expected_command = {
+                    "command_id": command.command_id, "action": command.action, "state": command.state,
+                    "task_id": command.task_id, "job_id": command.job_id, "runtime_id": command.runtime_id,
+                    "browser_session_id": context.browser_session_id,
+                }
+                before = contract_facts.get("before_values", {})
+                if (not isinstance(receipt, Mapping) or receipt.get("action_grant_id") != command.command_id
+                        or set(capabilities) != {"wholesale"} or observed_command != expected_command
+                        or before.get("shop_id") != command.params.get("shop_id")
+                        or before.get("defaults") != command.params.get("defaults")):
+                    _raise_action_result_contract_failure("wholesale observation or grant does not match the actual command")
+            elif has_wholesale:
+                _raise_action_result_contract_failure("failed wholesale validation cannot supply a capability receipt")
         if (
             command.execution_mode == "batch_draft_save"
             and command.state in _BATCH_VERIFY_STATES
@@ -2030,6 +2062,7 @@ class BrowserAgentRuntime:
             command.execution_mode != "batch_draft_save"
             or command.state
             not in {
+                *CONTENT_MUTATION_COMMANDS,
                 "SAVE_ONLY",
                 "SAVE2_ONLY",
                 "FIRST_SAVE_INTENT",
@@ -2572,6 +2605,14 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
             target_source_urls=_optional_str_list(params.get("target_source_urls")),
             **target_identity_kwargs,
         )
+    if action == 'prepare_rollback':
+        return adapter.prepare_rollback(defaults=params.get('defaults'),
+            product_query=_optional_str(params.get('product_query')), store_name=_optional_str(params.get('store_name')),
+            shop_id=params.get('shop_id'), **target_identity_kwargs)
+    if action in {'validate_editor_wholesale', 'translate_editor_content'}:
+        return getattr(adapter, action)(defaults=params.get('defaults'),
+            product_query=_optional_str(params.get('product_query')), store_name=_optional_str(params.get('store_name')),
+            shop_id=params.get('shop_id'), **target_identity_kwargs)
     if action in {
         "fill_editor_required_defaults",
         "fill_editor_variants",
@@ -2818,6 +2859,7 @@ def _is_phase_specific_path_b_command(command: BrowserAgentCommand) -> bool:
         and (
             command.state
             in {
+                *CONTENT_MUTATION_COMMANDS,
                 "SAVE2_ONLY",
                 "FIRST_SAVE_INTENT",
                 "VERIFY_SAVE1_NOT_PUBLISHED",
@@ -2859,7 +2901,8 @@ def _mark_batch_save_unknown(
         return False
     decision = marker(
         command,
-        _mutation_action_for_batch_save(command),
+        (CONTENT_MUTATION_COMMANDS[command.state][1] if command.state in CONTENT_MUTATION_COMMANDS
+         else _mutation_action_for_batch_save(command)),
         {
             "phase": phase,
             "reason_code": _stable_post_save_reason_code(failure),
@@ -2941,24 +2984,69 @@ def _optional_str_list(value: Any) -> list[str] | None:
     return result or None
 
 
-def _prepare_action_artifacts(command: BrowserAgentCommand, *, command_id: str | None = None) -> dict[str, Any]:
+def _action_artifact_paths(command: BrowserAgentCommand, *, command_id: str) -> dict[str, Any]:
     worker_dir = DATA_DIR / "workflow_worker"
-    worker_dir.mkdir(parents=True, exist_ok=True)
     safe_state = _safe_file_part(command.state or command.action or "UNKNOWN")
-    suffix = str(command_id or uuid.uuid4().hex[:12])
+    suffix = str(command_id)
     task_id = _safe_file_part(command.task_id if command.task_id is not None else "none")
     job_id = _safe_file_part(command.job_id if command.job_id is not None else "none")
     stem = f"task_{task_id}_job_{job_id}_{safe_state}_{suffix}"
     request_file = worker_dir / f"{stem}.request.json"
     result_file = worker_dir / f"{stem}.result.json"
     trace_file = worker_dir / f"{stem}.trace.jsonl"
-    request_file.write_text(json.dumps(command.to_payload(), ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return {
         "command_id": suffix,
         "request_file": request_file,
         "result_file": result_file,
         "trace_file": trace_file,
     }
+
+
+def _prepare_action_artifacts(command: BrowserAgentCommand, *, command_id: str | None = None) -> dict[str, Any]:
+    artifacts = _action_artifact_paths(command, command_id=command_id or uuid.uuid4().hex[:12])
+    artifacts['request_file'].parent.mkdir(parents=True, exist_ok=True)
+    artifacts['request_file'].write_text(json.dumps(command.to_payload(), ensure_ascii=False, indent=2, default=str), encoding='utf-8')
+    return artifacts
+
+
+def load_browser_agent_action_source(command: Mapping[str, Any], action_result: Mapping[str, Any], *, browser_session_id: str) -> dict[str, Any]:
+    """Read the owning worker's existing files; never create or re-sign evidence.
+
+    A valid source can describe failure. It is not a success receipt or a write
+    grant; the repository must also bind it to the current task/snapshot/scope.
+    """
+    parsed = BrowserAgentCommand(**command)
+    validate_browser_agent_command(parsed)
+    if (parsed.to_payload() != command or re.fullmatch(r'[0-9a-f]{32}', parsed.command_id) is None
+            or not isinstance(browser_session_id, str) or not browser_session_id.strip()):
+        raise ValueError('BROWSER_ACTION_SOURCE_COMMAND_INVALID')
+    paths = _action_artifact_paths(parsed, command_id=parsed.command_id)
+    documents, refs = {}, {}
+    try:
+        root = (DATA_DIR / 'workflow_worker').resolve(strict=True)
+        for name in ('request', 'result'):
+            path = paths[name+'_file'].resolve(strict=True)
+            path.relative_to(root)
+            raw = path.read_bytes()
+            documents[name] = json.loads(raw.decode('utf-8'))
+            refs[name] = {'path': str(path), 'sha256': hashlib.sha256(raw).hexdigest().upper(), 'size': len(raw)}
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise ValueError('BROWSER_ACTION_SOURCE_FILE_UNAVAILABLE') from exc
+    if documents['request'] != command:
+        raise ValueError('BROWSER_ACTION_SOURCE_REQUEST_DRIFT')
+    result = documents['result']
+    expected_transport = {'command_id': parsed.command_id, 'idempotency_key': parsed.idempotency_key,
+        'runtime_id': parsed.runtime_id, 'workflow_trace_file': str(paths['trace_file']),
+        'browser_agent_request_file': str(paths['request_file']), 'browser_agent_result_file': str(paths['result_file'])}
+    if (not isinstance(result, Mapping) or set(result) != {'ok', 'result', 'transport'}
+            or result['ok'] is not True or result['result'] != action_result or result['transport'] != expected_transport):
+        raise ValueError('BROWSER_ACTION_SOURCE_RESULT_DRIFT')
+    validate_action_result_envelope(action_result, expected_state=parsed.state, expected_action=parsed.action,
+        expected_page=command_post_dispatch_page(parsed), execution_mode=parsed.execution_mode,
+        expected_runtime_id=parsed.runtime_id, expected_browser_session_id=browser_session_id,
+        expected_execution_payload=(parsed.params.get('defaults', {}).get('_frozen_execution_payload')
+                                    if isinstance(parsed.params.get('defaults'), Mapping) else None))
+    return {'schema': 'dxm.browser_agent_action_source.v1', 'command_sha256': browser_agent_command_sha256(parsed), **refs}
 
 
 def _mode_for_command(command: BrowserAgentCommand) -> str:

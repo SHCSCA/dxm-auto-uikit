@@ -43,10 +43,16 @@ runtime_identity = runtime_bootstrap_state.runtime_identity
 
 from src.db import init_db
 from src.execution.dxm_live import DxmLiveClient
+from src.execution.closed_loop_replay_adapter import (
+    ClosedLoopReplayAdapter,
+    closed_loop_replay_enabled,
+    is_closed_loop_replay_adapter,
+)
 from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import DxmLoginFlow
 from src.execution.browser_agent_worker import BrowserAgentRuntime
 from src.execution.browser_agent_protocol import (
+    CONTENT_MUTATION_COMMANDS,
     MutationCommandContractError,
     canonical_frozen_target_identity,
     canonical_mutation_target_payload,
@@ -62,7 +68,7 @@ from src.execution.batch_command_contract import (
     validate_path_b_save1_discovery_dispatch,
     validate_path_b_formal_lineage,
 )
-from src.execution.batch_dispatch_authority import LiveDispatchFacts
+from src.execution.batch_dispatch_authority import LiveDispatchFacts, content_action_lease, content_action_execution_payload
 from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
 from src.execution.controlled_mutation_dispatch import ControlledMutationDispatch
 from src.execution.playwright_engine import PlaywrightEngine
@@ -84,6 +90,7 @@ from src.models import (
     DraftBoxScopeSnapshotCreate,
     DxmTemplateShopSyncRequest,
     DxmTemplateRefSyncRequest,
+    DxmEditorReadonlyInspectionRequest,
     EditBatchApproveAndStartRequest,
     EditBatchCreate,
     EditBatchBundleComposeRequest,
@@ -125,6 +132,8 @@ from src.batch_edit.plan_snapshot_compiler import (
     is_plan_execution_path_released,
 )
 from src.batch_edit.frozen_execution_contract import (
+    frozen_scope_field_bindings,
+    validated_save2_stage_freeze,
     FrozenExecutionContractError,
     compile_frozen_execution_payload,
     validate_frozen_execution_defaults,
@@ -216,7 +225,11 @@ live_client = DxmLiveClient()
 login_flow = DxmLoginFlow(live_client)
 login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')
 login_flow_api_lock = Lock()
-workflow_adapter = DxmWorkflowAdapter(login_flow)
+workflow_adapter = (
+    ClosedLoopReplayAdapter()
+    if closed_loop_replay_enabled()
+    else DxmWorkflowAdapter(login_flow)
+)
 
 
 def _mutation_dispatch_live_facts() -> LiveDispatchFacts:
@@ -272,6 +285,7 @@ def _verify_batch_draft_save_command_authorization(
     except (MutationCommandContractError, TypeError, ValueError):
         return _reject_batch_command_authorization('AUTH_COMMAND_CONTRACT_INVALID')
     command_contract = {
+        **{state: (action, 'editor', mutation) for state, (action, mutation) in CONTENT_MUTATION_COMMANDS.items()},
         'SAVE_ONLY': ('save_only', 'editor', 'save_only_click'),
         'SAVE2_ONLY': ('save_only', 'semi_managed', 'save_only_click'),
         PATH_B_SAVE1_DISCOVERY_STATE: (
@@ -363,7 +377,10 @@ def _verify_batch_draft_save_command_authorization(
             'AUTH_COMMAND_QUEUE_STATE_MISMATCH'
         )
     try:
-        expected_execution_payload = compile_frozen_execution_payload(task, job)
+        if command.state in CONTENT_MUTATION_COMMANDS:
+            expected_execution_payload = content_action_execution_payload(task, job, command.state)
+        else:
+            expected_execution_payload = compile_frozen_execution_payload(task, job, save_stage='SAVE2' if command.state == 'SAVE2_ONLY' else 'SAVE1', for_save=True)
         actual_execution_payload = validate_frozen_execution_defaults(
             command.params.get('defaults'),
             expected_payload=expected_execution_payload,
@@ -409,7 +426,7 @@ def _verify_batch_draft_save_command_authorization(
         )
         save_stage = (
             'SAVE1'
-            if command.state in {'SAVE_ONLY', 'FIRST_SAVE_INTENT'}
+            if command.state in {'SAVE_ONLY', 'FIRST_SAVE_INTENT', *CONTENT_MUTATION_COMMANDS}
             else 'SAVE2'
         )
         leases = (
@@ -429,8 +446,14 @@ def _verify_batch_draft_save_command_authorization(
             return _reject_batch_command_authorization(
                 'AUTH_COMMAND_AUTHORIZATION_MISMATCH'
             )
-        expected_lease_id = str(matching_leases[0].get('lease_id') or '')
-        expected_lease_fingerprint = real_scope_sha256(dict(matching_leases[0]))
+        selected_lease = matching_leases[0]
+        if command.state in CONTENT_MUTATION_COMMANDS:
+            try:
+                selected_lease = content_action_lease(selected_lease, command.state)
+            except ValueError:
+                return _reject_batch_command_authorization('AUTH_CONTENT_ACTION_LEASE_INVALID')
+        expected_lease_id = str(selected_lease.get('lease_id') or '')
+        expected_lease_fingerprint = real_scope_sha256(dict(selected_lease))
         if not hmac.compare_digest(
             str(command.authorization_lease_fingerprint or '').casefold(),
             expected_lease_fingerprint.casefold(),
@@ -957,6 +980,25 @@ def dxm_draft_reader_products(
         ) from exc
 
 
+@app.post('/api/dxm/draft-reader/editor-inspection')
+def dxm_editor_readonly_inspection(payload: DxmEditorReadonlyInspectionRequest):
+    from src.execution.dxm_login_flow import DXM_E2_PLAN_READ_ALLOWLIST
+    from src.execution.editor_readonly_inspection import make_editor_readonly_guard
+
+    _assert_batch_browser_available()
+    paths = _l2_readonly_probe_paths()
+    guard = make_editor_readonly_guard(paths['script'], paths['allowlist'], DXM_E2_PLAN_READ_ALLOWLIST)
+    try:
+        return _run_login_flow(
+            workflow_adapter.inspect_editor_readonly,
+            **payload.model_dump(), guard=guard, fail_if_busy=True,
+        )
+    except DxmSessionBusyError as exc:
+        raise _dxm_session_busy_http_exception() from exc
+    except (DxmDraftReaderError, DxmPlanReaderError) as exc:
+        raise HTTPException(status_code=409, detail={'reason_code': exc.reason_code, 'message': str(exc)}) from exc
+
+
 def _dxm_category_query_exception_mapping(exc: Exception) -> HTTPException:
     if isinstance(exc, DxmSessionBusyError):
         return _dxm_session_busy_http_exception()
@@ -1267,7 +1309,10 @@ def _editor_source_section(path: Any) -> str:
 
 
 @app.post('/api/dxm-template-refs/sync', status_code=201)
-def sync_dxm_template_refs(payload: DxmTemplateRefSyncRequest):
+def sync_dxm_template_refs(
+    payload: DxmTemplateRefSyncRequest,
+    include_current_values: bool = False,
+):
     sync_started = time.perf_counter()
     sync_correlation_id = f'dxm-template-sync-{uuid.uuid4().hex}'
     sync_input = {
@@ -1362,6 +1407,9 @@ def sync_dxm_template_refs(payload: DxmTemplateRefSyncRequest):
             "category_schemas": read_result["category_schemas"],
             "editor_models": editor_models,
             "category_capabilities": read_result.get("category_capabilities", {}),
+            **({
+                "representative_products": read_result["representative_products"],
+            } if include_current_values else {}),
             "sync_status": sync_status,
             "template_record_count": template_record_count,
             "template_ref_count": len(refs),
@@ -1673,6 +1721,16 @@ def _scope_prepare_snapshot_projection(snapshot: Mapping[str, Any]) -> dict[str,
     projected_products: list[dict[str, Any]] = []
     for item in snapshot.get('item_snapshots') or []:
         if not isinstance(item, Mapping):
+            continue
+        if item.get('deferred_save2') is not None or item.get('content_finalize_policy') is not None:
+            projected_fields = [
+                {**field, 'preimageAvailable': 'preimageSha256' in field}
+                for field in frozen_scope_field_bindings(item)
+            ]
+            projected_products.append({
+                'productId': int(item['product_id']), 'fieldHashes': projected_fields,
+                'fieldHashesSha256': real_scope_sha256(projected_fields),
+            })
             continue
         current_values = item.get('current_value_snapshot')
         current_values = current_values if isinstance(current_values, Mapping) else {}
@@ -2359,12 +2417,7 @@ def derive_and_prepare_real_dxm_path_b_scope(
             if any(token in field_name.casefold() for token in ('publish', '发布')):
                 _scope_rejected('PUBLISH_FIELD_FORBIDDEN', '字段授权不得包含发布入口。')
             stage_counts[binding.saveStage] += 1
-            field_bindings.append({
-                'field': field_name,
-                'saveStage': binding.saveStage,
-                'preimageSha256': binding.preimageSha256,
-                'expectedSha256': binding.expectedSha256,
-            })
+            field_bindings.append(binding.model_dump(exclude_none=True))
         if any(count < 1 for count in stage_counts.values()):
             _scope_rejected(
                 'SAVE_ALLOWED_FIELDS_REQUIRED',
@@ -2500,7 +2553,8 @@ def derive_and_prepare_real_dxm_path_b_scope(
     issued_at = _authorization_now()
     try:
         candidate = prepare_real_dxm_write_scope({
-            'schema': 'real_dxm_write_scope.v1',
+            'schema': ('real_dxm_write_scope.v3' if any(field.get('freezeAt') == 'after_content_finalize' for product in ordered_products for field in product['allowedFields'])
+                       else 'real_dxm_write_scope.v2' if any('freezeAt' in field for product in ordered_products for field in product['allowedFields']) else 'real_dxm_write_scope.v1'),
             'stage': 'execute',
             'path': 'B',
             'issuedAt': issued_at,
@@ -3373,6 +3427,15 @@ def get_real_path_b_acceptance_export(task_id: int):
                 for item in product_scope.get('allowedFields', [])
                 if isinstance(item, Mapping) and item.get('saveStage') == stage
             }
+            if stage == 'SAVE2' and any('freezeAt' in binding for binding in governed.values()):
+                try:
+                    job = next(row for row in task['jobs'] if row['id'] == job_id)
+                    seal = validated_save2_stage_freeze(task, job)
+                    frozen_item = next(row for row in task['payload']['plan_snapshot']['item_snapshots'] if str(row['product_id']) == str(product_id))
+                    governed = {field['field']: field for field in frozen_scope_field_bindings(frozen_item, stage_freeze=seal) if field['saveStage'] == 'SAVE2'}
+                except (FrozenExecutionContractError, KeyError, StopIteration, ValueError):
+                    receipt_row_issues.append('SAVE2_STAGE_FREEZE_INVALID')
+                    continue
             readbacks = [
                 item
                 for item in raw_save.get('field_readbacks', [])
@@ -4132,7 +4195,11 @@ async def approve_and_start_task_for_real_dxm(
                 'message': '原子批准并开始当前仅供 batch_draft_save 使用。',
             },
         )
-    l2_gate = l2_real_probe_gate()
+    l2_gate = (
+        {'status': 'passed', 'closed_loop_replay': True}
+        if _closed_loop_replay_active()
+        else l2_real_probe_gate()
+    )
     if l2_gate.get('status') != 'passed':
         raise HTTPException(
             status_code=403,
@@ -4140,7 +4207,28 @@ async def approve_and_start_task_for_real_dxm(
         )
     task_path = _task_plan_path(task)
     real_authorization: dict[str, Any] | None = None
-    if task_path == 'B':
+    if task_path == 'B' and _closed_loop_replay_active():
+        _assert_closed_loop_shop_lock(task)
+        authorization_context = _build_task_authorization_context(
+            task,
+            approved_by=payload.approved_by.strip(),
+            l2_gate={'status': 'passed', 'closed_loop_replay': True},
+        )
+        issued_at = _authorization_now()
+        consumed_at = issued_at
+        expires_at = issued_at + timedelta(seconds=AUTHORIZATION_LEASE_TTL_SECONDS)
+        result = repo.approve_and_start_task_with_authorization(
+            task_id,
+            token=secrets.token_urlsafe(24),
+            confirmation=required_confirmation,
+            approved_by=payload.approved_by.strip(),
+            authorization_context=authorization_context,
+            lease_id=uuid.uuid4().hex,
+            issued_at=issued_at.isoformat(),
+            expires_at=expires_at.isoformat(),
+            consumed_at=consumed_at.isoformat(),
+        )
+    elif task_path == 'B':
         if (
             not isinstance(payload.real_dxm_write_scope, Mapping)
             or not isinstance(payload.real_dxm_write_approval, Mapping)
@@ -6293,11 +6381,33 @@ def _l2_authorization_fingerprint(l2_gate: dict[str, Any]) -> str:
 
 
 def _current_browser_session_id() -> str:
+    if _closed_loop_replay_active():
+        session_id = str(workflow_adapter.browser_session_id() or '').strip()
+        if session_id:
+            return session_id
     status = browser_agent_runtime.status()
     session_id = str(status.get('sessionId') or '').strip() if isinstance(status, dict) else ''
     if not session_id:
         raise HTTPException(status_code=409, detail='AUTH_BROWSER_SESSION_MISSING: browser authorization session is unavailable')
     return session_id
+
+
+def _assert_closed_loop_shop_lock(task: Mapping[str, Any]) -> None:
+    from src.execution.closed_loop_replay_adapter import SHOP_ID, SHOP_NAME
+
+    payload = task.get('payload') if isinstance(task.get('payload'), Mapping) else {}
+    plan = payload.get('plan_snapshot') if isinstance(payload.get('plan_snapshot'), Mapping) else {}
+    session = plan.get('session_context') if isinstance(plan.get('session_context'), Mapping) else {}
+    shop_name = str(session.get('shop_name') or '').strip()
+    shop_scope = str(plan.get('shop_scope') or task.get('store_id') or '').strip()
+    if shop_name != SHOP_NAME or shop_scope != SHOP_ID:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'reason_code': 'CLOSED_LOOP_SHOP_FORBIDDEN',
+                'message': '隔离闭环只允许 Dang Kang。',
+            },
+        )
 
 
 def _build_task_stage_facts(task: dict[str, Any]) -> dict[str, Any]:
@@ -6316,7 +6426,19 @@ def _build_task_stage_facts(task: dict[str, Any]) -> dict[str, Any]:
                     or ((payload.get('plan_snapshot') or {}).get('snapshot_hash') if isinstance(payload.get('plan_snapshot'), dict) else '')
                     or ''
                 ),
-                path=str(payload.get('path') or ((payload.get('plan_snapshot') or {}).get('path') if isinstance(payload.get('plan_snapshot'), dict) else 'A') or 'A'),
+                path=(
+                    'A'
+                    if _closed_loop_replay_active()
+                    else str(
+                        payload.get('path')
+                        or (
+                            (payload.get('plan_snapshot') or {}).get('path')
+                            if isinstance(payload.get('plan_snapshot'), dict)
+                            else 'A'
+                        )
+                        or 'A'
+                    )
+                ),
                 real_authorization=(
                     payload.get('real_dxm_write_authorization')
                     if isinstance(payload.get('real_dxm_write_authorization'), Mapping)
@@ -6397,6 +6519,7 @@ def _verify_runner_authorization(task_id: int, mode: str, state: str) -> dict[st
             'SAVE_ONLY',
             PATH_B_SAVE1_DISCOVERY_STATE,
             'SAVE2_ONLY',
+            *CONTENT_MUTATION_COMMANDS,
         },
     }.get(mode)
     if allowed_states is None or state not in allowed_states:
@@ -6409,7 +6532,11 @@ def _verify_runner_authorization(task_id: int, mode: str, state: str) -> dict[st
     approved_by = str(approval.get('approved_by') or '').strip()
     if not approved_by:
         return {'ok': False, 'reason_code': 'AUTH_APPROVER_MISSING'}
-    l2_gate = l2_real_probe_gate()
+    l2_gate = (
+        {'status': 'passed', 'closed_loop_replay': True}
+        if _closed_loop_replay_active()
+        else l2_real_probe_gate()
+    )
     if l2_gate.get('status') != 'passed':
         return {'ok': False, 'reason_code': 'AUTH_L2_GATE_NOT_PASSED'}
     try:
@@ -6489,6 +6616,14 @@ def _validate_scope_field_hashes_against_frozen_task(
         frozen_item = item_by_product.get(product_id)
         if not isinstance(frozen_item, Mapping):
             _scope_rejected('FROZEN_PRODUCT_NOT_FOUND', '字段哈希授权找不到冻结商品。')
+        if frozen_item.get('deferred_save2') is not None or frozen_item.get('content_finalize_policy') is not None:
+            try:
+                expected = frozen_scope_field_bindings(frozen_item)
+            except FrozenExecutionContractError as exc:
+                _scope_rejected(exc.reason_code, str(exc))
+            if product_scope.get('allowedFields') != expected:
+                _scope_rejected('FIELD_HASH_BINDING_DRIFT', '授权必须精确绑定共享模板的分阶段规则及第一阶段值。')
+            continue
         current_values = frozen_item.get('current_value_snapshot')
         current_values = current_values if isinstance(current_values, Mapping) else {}
         resolution = frozen_item.get('resolution_result')
@@ -6807,7 +6942,9 @@ def _assert_task_can_receive_manual_approval(
     if task.get('status') != 'draft':
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
     if mode == 'batch_draft_save':
-        if _task_plan_path(task) == 'B':
+        if _task_plan_path(task) == 'B' and _closed_loop_replay_active():
+            _assert_closed_loop_shop_lock(task)
+        elif _task_plan_path(task) == 'B':
             formal_lineage_requested = bool(
                 allow_exact_formal_path_b
                 and request.predecessor_scope_sha256
@@ -6880,12 +7017,13 @@ def _assert_task_can_receive_manual_approval(
         raise HTTPException(status_code=400, detail='approved_by is required')
     if request.confirmation != required_confirmation:
         raise HTTPException(status_code=400, detail=f'confirmation must be {required_confirmation}')
-    l2_gate = l2_real_probe_gate()
-    if l2_gate.get('status') != 'passed':
-        raise HTTPException(
-            status_code=403,
-            detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
-        )
+    if not _closed_loop_replay_active():
+        l2_gate = l2_real_probe_gate()
+        if l2_gate.get('status') != 'passed':
+            raise HTTPException(
+                status_code=403,
+                detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
+            )
     return required_confirmation
 
 
@@ -7065,7 +7203,7 @@ def _assert_batch_draft_save_task_scope(task: dict[str, Any]) -> None:
     if (
         not is_plan_execution_path_released(payload_path)
         or not is_plan_execution_path_released(snapshot_path)
-    ):
+    ) and not _closed_loop_replay_active():
         raise HTTPException(
             status_code=403,
             detail={
@@ -7276,12 +7414,12 @@ def _assert_semi_managed_detect_allowed(detect_result: dict) -> None:
         if error_type == "product_missing":
             raise BatchPauseError(
                 reason=f"店小秘返回：仿品检测未通过 - {error_message}",
-                rollback_required=True,
+                rollback_required=False,  # 回滚功能已禁用：操作中断时不自动恢复
             )
         else:
             raise BatchPauseError(
                 reason=f"半托管检测失败：{error_message}",
-                rollback_required=True,
+                rollback_required=False,  # 回滚功能已禁用：操作中断时不自动恢复
             )
 
 
@@ -7302,7 +7440,7 @@ def _assert_video_generation_failure_handled(
         # 程序问题失败必须暂停
         raise BatchPauseError(
             reason=f"视频生成失败（{error_type}）：{error_message}",
-            rollback_required=True,
+            rollback_required=False,  # 回滚功能已禁用：操作中断时不自动恢复
         )
 
 
@@ -7319,12 +7457,14 @@ def _assert_batch_rollback_completed(
     rollback_result: dict,
     reason: str,
 ) -> None:
-    """回滚完成门禁"""
-    if not rollback_result.get("success", True):
-        raise BatchRollbackCompleteError(
-            reason=f"回滚未完成：{rollback_result.get('error_message', '未知错误')}。原暂停原因：{reason}",
-            field_changes=rollback_result.get("field_changes", []),
-        )
+    """回滚完成门禁（已禁用操作性回滚，此函数保留用于审计追踪）。
+
+    注意：操作性回滚功能已移除。当执行中断时，不再自动恢复到之前状态。
+    若需要恢复，应由人工操作员手动处理。
+    """
+    # 回滚功能已禁用：操作中断时不自动恢复
+    # 此函数保留用于可能的审计追踪目的
+    pass
 
 
 def _task_store_name(task: dict) -> str:
@@ -7401,8 +7541,12 @@ def _workflow_navigation_failure_state(target: str, raw_error: str | None = None
     }
 
 
+def _closed_loop_replay_active() -> bool:
+    return is_closed_loop_replay_adapter(workflow_adapter)
+
+
 def _workflow_adapter():
-    return DxmWorkflowAdapter(login_flow)
+    return workflow_adapter
 
 
 def build_login_state(data: dict):

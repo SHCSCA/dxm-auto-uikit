@@ -15,6 +15,7 @@ from src.execution.action_result_contract import (
     validate_action_result_envelope,
 )
 from src.execution.batch_dispatch_authority import (
+    content_action_lease,
     DispatchAuthorityError,
     LiveDispatchFacts,
     save_verification_facts_from_frozen_authority,
@@ -24,6 +25,7 @@ from src.execution.batch_dispatch_authority import (
     validate_in_transaction as validate_dispatch_authority_in_transaction,
 )
 from src.execution.browser_agent_protocol import (
+    CONTENT_MUTATION_COMMANDS,
     BrowserAgentCommand,
     MutationCommandContractError,
     browser_agent_command_sha256,
@@ -82,6 +84,13 @@ def _is_batch_save_command(command: BrowserAgentCommand) -> bool:
         and command.action == _BATCH_SAVE_ACTION[command.state]
         and command.expected_page == _BATCH_SAVE_EXPECTED_PAGE[command.state]
     )
+
+
+def _is_batch_controlled_command(command: BrowserAgentCommand) -> bool:
+    return _is_batch_save_command(command) or (
+        command.execution_mode == 'batch_draft_save' and command.expected_page == 'editor'
+        and command.state in CONTENT_MUTATION_COMMANDS
+        and command.action == CONTENT_MUTATION_COMMANDS[command.state][0])
 
 
 def _is_batch_save_verification(command: BrowserAgentCommand) -> bool:
@@ -344,6 +353,34 @@ class MutationDispatchLedger:
         }
 
     @staticmethod
+    def validate_translation_source(row, command, observation, *, snapshot_row_authority_sha256):
+        """Read-only binding of a translation result to its actual dispatched ledger row."""
+        action = 'translate_language_click'
+        if command.state != 'BATCH_TRANSLATE_EXECUTE' or command.action != 'translate_editor_content':
+            raise ValueError('TRANSLATION_LEDGER_COMMAND_INVALID')
+        expected = MutationDispatchLedger._binding(command, action, mutation_ordinal_for_command(command, action))
+        if (not isinstance(row, dict) or any(row.get(key) != value for key, value in expected.items())
+                or row.get('status') != 'DISPATCHED' or row.get('unknown_at') is not None
+                or row.get('command_json') != _canonical_json(command.to_payload())
+                or row.get('command_sha256') != browser_agent_command_sha256(command)
+                or row.get('snapshot_row_authority_sha256') != snapshot_row_authority_sha256
+                or row.get('page_kind') != 'editor' or row.get('page_url') != observation.get('page_url')
+                or row.get('browser_session_id') != observation.get('command', {}).get('browser_session_id')
+                or row.get('mutation_id') != observation.get('mutation_authorization', {}).get('mutation_id')
+                or row.get('save_action_result_json') is not None or row.get('save_success_recorded_at') is not None):
+            raise ValueError('TRANSLATION_LEDGER_SOURCE_DRIFT')
+        authority = loads(row.get('save_authority_json'), {})
+        if (not authority or row.get('save_authority_sha256') != _canonical_sha256(authority)
+                or authority.get('command', {}).get('payload') != command.to_payload()
+                or authority.get('execution', {}).get('payload') != command.params.get('defaults', {}).get('_frozen_execution_payload')):
+            raise ValueError('TRANSLATION_LEDGER_AUTHORITY_DRIFT')
+        times = [parse_strict_utc_timestamp(value, field='translation ledger time') for value in (
+            observation['started_at'], row.get('dispatch_started_at'), row.get('dispatched_at'), observation['completed_at'])]
+        if times != sorted(times):
+            raise ValueError('TRANSLATION_LEDGER_TIME_DRIFT')
+        return authority
+
+    @staticmethod
     def _binding_matches(row: dict[str, Any], expected: dict[str, Any]) -> bool:
         # command_id/runtime_id belong to one process attempt, not to the
         # durable mutation identity. A restarted BrowserAgent must still see
@@ -402,7 +439,7 @@ class MutationDispatchLedger:
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             snapshot_row_authority_sha256 = None
-            if _is_batch_save_command(command):
+            if _is_batch_controlled_command(command):
                 try:
                     snapshot_row_authority_sha256 = (
                         snapshot_row_authority_fingerprint_in_transaction(
@@ -937,7 +974,7 @@ class MutationDispatchLedger:
         conn: Any,
         command: BrowserAgentCommand,
     ) -> MutationLedgerDecision | None:
-        if not _is_batch_save_command(command):
+        if not _is_batch_controlled_command(command):
             return None
         task = conn.execute(
             "SELECT * FROM tasks WHERE id=?",
@@ -973,7 +1010,7 @@ class MutationDispatchLedger:
     ) -> MutationLedgerDecision | None:
         """Re-read parent approval and the exact phase lease in the dispatch CAS."""
 
-        if not _is_batch_save_command(command):
+        if not _is_batch_controlled_command(command):
             return None
         task = conn.execute(
             "SELECT payload_json FROM tasks WHERE id=?",
@@ -1019,6 +1056,8 @@ class MutationDispatchLedger:
         except ValueError:
             return MutationLedgerDecision(False, "AUTH_LEASE_AUTHORITY_MISMATCH")
         path = str(payload.get("path") or "")
+        if command.state in CONTENT_MUTATION_COMMANDS and path != 'B':
+            return MutationLedgerDecision(False, 'AUTH_CONTENT_ACTION_PATH_INVALID')
         if path == "A":
             if str(approval.get("lease_id") or "") != str(
                 command.authorization_lease_id or ""
@@ -1063,7 +1102,7 @@ class MutationDispatchLedger:
             return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_INVALID")
         expected_stage = (
             "SAVE1"
-            if command.state in {"SAVE_ONLY", "FIRST_SAVE_INTENT"}
+            if command.state in {"SAVE_ONLY", "FIRST_SAVE_INTENT", *CONTENT_MUTATION_COMMANDS}
             else "SAVE2"
         )
         required_keys = {
@@ -1136,6 +1175,11 @@ class MutationDispatchLedger:
         if len(matches) != 1:
             return MutationLedgerDecision(False, "AUTH_REAL_SAVE_LEASE_MISMATCH")
         child_lease = matches[0]
+        if command.state in CONTENT_MUTATION_COMMANDS:
+            try:
+                child_lease = content_action_lease(child_lease, command.state)
+            except ValueError:
+                return MutationLedgerDecision(False, 'AUTH_CONTENT_ACTION_LEASE_INVALID')
         scope_sha256 = str(real_authorization.get("scope_sha256") or "")
         approval_sha256 = str(real_authorization.get("approval_sha256") or "")
         approval_nonce_sha256 = str(
@@ -1246,7 +1290,7 @@ class MutationDispatchLedger:
                     dict(row),
                 )
 
-            if _is_batch_save_command(command):
+            if _is_batch_controlled_command(command):
                 try:
                     current_snapshot_row_authority_sha256 = (
                         snapshot_row_authority_fingerprint_in_transaction(
@@ -1283,7 +1327,7 @@ class MutationDispatchLedger:
 
             save_authority_json = None
             save_authority_sha256 = None
-            if _is_batch_save_command(command):
+            if _is_batch_controlled_command(command):
                 provider = self._live_facts_provider
                 if not callable(provider):
                     return MutationLedgerDecision(
@@ -1363,7 +1407,7 @@ class MutationDispatchLedger:
             if final_lease_rejection is not None:
                 return final_lease_rejection
 
-            if _is_batch_save_command(command):
+            if _is_batch_controlled_command(command):
                 try:
                     final_snapshot_row_authority_sha256 = (
                         snapshot_row_authority_fingerprint_in_transaction(
@@ -1623,7 +1667,7 @@ class MutationDispatchLedger:
                 # mutation authority. Re-observing its terminal row is never
                 # reported as a fresh success to the caller.
                 if (
-                    command.state in {"SAVE2_ONLY", "FIRST_SAVE_INTENT"}
+                    command.state in {"SAVE2_ONLY", "FIRST_SAVE_INTENT", *CONTENT_MUTATION_COMMANDS}
                     or (
                         command.state == "SAVE_ONLY"
                         and len(str(command.authorization_lease_id or "")) == 64
@@ -1706,8 +1750,8 @@ class MutationDispatchLedger:
                 return MutationLedgerDecision(True, "OK", dict(row), idempotent=True)
             unproven_batch_save = (
                 status == "DISPATCHED"
-                and _is_batch_save_command(command)
-                and _dispatched_batch_save_proof_failure(dict(row)) is not None
+                and (_is_batch_save_command(command) and _dispatched_batch_save_proof_failure(dict(row)) is not None
+                     or command.state in CONTENT_MUTATION_COMMANDS)
             )
             if status != "DISPATCHING" and not unproven_batch_save:
                 return MutationLedgerDecision(False, self._terminal_reason(status), dict(row))
@@ -1729,6 +1773,9 @@ class MutationDispatchLedger:
                                    command_state='FIRST_SAVE_INTENT'
                                    AND command_action='first_save_intent'
                                )
+                               OR (command_state='BATCH_VIDEO_SUBMIT' AND command_action='submit_editor_video')
+                               OR (command_state='BATCH_VIDEO_PLACE' AND command_action='place_editor_video')
+                               OR (command_state='BATCH_TRANSLATE_EXECUTE' AND command_action='translate_editor_content')
                            )
                        )
                    )
@@ -1784,12 +1831,16 @@ class MutationDispatchLedger:
                            command_state='FIRST_SAVE_INTENT'
                            AND command_action='first_save_intent'
                        )
+                       OR (command_state='BATCH_VIDEO_SUBMIT' AND command_action='submit_editor_video')
+                       OR (command_state='BATCH_VIDEO_PLACE' AND command_action='place_editor_video')
+                       OR (command_state='BATCH_TRANSLATE_EXECUTE' AND command_action='translate_editor_content')
                    )
                 """,
             ).fetchall()
             for raw_row in dispatched_rows:
                 row = dict(raw_row)
-                reason_code = _dispatched_batch_save_proof_failure(row)
+                reason_code = ('CONTENT_ACTION_INTERRUPTED_AFTER_DISPATCH'
+                    if row['command_state'] in CONTENT_MUTATION_COMMANDS else _dispatched_batch_save_proof_failure(row))
                 if reason_code is None:
                     continue
                 outcome = _canonical_json(

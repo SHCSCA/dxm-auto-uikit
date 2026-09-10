@@ -1,12 +1,128 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
+from src.batch_edit.scope_contract import canonical_sha256
 from src.utils import now_iso
+
+
+def validate_rollback_preparation_observation(
+    observation, *, execution_payload, target_identity, browser_session_id,
+):
+    """Validate observed preimages, never infer missing values or writable controls."""
+    from src.execution.e3_authority_contract import parse_strict_utc_timestamp
+
+    keys = {'schema', 'product_id', 'shop_id', 'browser_session_id', 'target_identity_sha256',
+            'page_url', 'category_id', 'category_schema_hash', 'execution_payload_hash',
+            'observed_at', 'write_attempted', 'values', 'evidence_ref'}
+    if not isinstance(observation, Mapping) or set(observation) != keys:
+        raise ValueError('ROLLBACK_OBSERVATION_INVALID')
+    page = urlsplit(observation['page_url'])
+    if (observation['schema'] != 'dxm.rollback-preimage-observation.v1'
+            or observation['write_attempted'] is not False or not browser_session_id
+            or observation['browser_session_id'] != browser_session_id
+            or observation['product_id'] != execution_payload['product_id']
+            or observation['target_identity_sha256'] != canonical_sha256(target_identity)
+            or observation['execution_payload_hash'] != execution_payload['payload_hash']
+            or canonical_sha256({k: v for k, v in execution_payload.items() if k != 'payload_hash'}) != execution_payload['payload_hash']
+            or observation['category_id'] != execution_payload['category_id']
+            or observation['category_schema_hash'] != execution_payload['category_schema_hash']
+            or page.scheme != 'https' or page.netloc != 'www.dianxiaomi.com'
+            or page.path != '/web/smt/edit' or page.fragment
+            or parse_qs(page.query).get('id') != [observation['product_id']]):
+        raise ValueError('ROLLBACK_OBSERVATION_IDENTITY_DRIFT')
+    parse_strict_utc_timestamp(observation['observed_at'], field='rollback observed_at')
+    values = observation['values']
+    fields = execution_payload['fields']
+    if (not isinstance(values, list) or not values or len(values) != len(fields)
+            or execution_payload.get('save_stage') == 'SAVE2'):
+        raise ValueError('ROLLBACK_PREIMAGE_COVERAGE_INVALID')
+    seen = set()
+    for observed, frozen in zip(values, fields):
+        if (not isinstance(observed, Mapping)
+                or set(observed) != {'field_key', 'value', 'ui_binding', 'unique', 'visible', 'writable'}
+                or observed['field_key'] != frozen['field_key'] or observed['field_key'] in seen
+                or observed['ui_binding'] != frozen['ui_binding']
+                or any(observed[key] is not True for key in ('unique', 'visible', 'writable'))):
+            raise ValueError('ROLLBACK_BINDING_NOT_RESTORABLE')
+        seen.add(observed['field_key'])
+    ref = observation['evidence_ref']
+    if (not isinstance(ref, Mapping) or set(ref) != {'path', 'sha256', 'size'}
+            or not isinstance(ref['path'], str) or not ref['path']
+            or not isinstance(ref['size'], int) or isinstance(ref['size'], bool) or ref['size'] <= 0
+            or not isinstance(ref['sha256'], str) or len(ref['sha256']) != 64
+            or any(c not in '0123456789abcdefABCDEF' for c in ref['sha256'])):
+        raise ValueError('ROLLBACK_EVIDENCE_INVALID')
+    canonical_sha256(observation)
+    return deepcopy(dict(observation))
+
+
+def rollback_preparation_receipt(observation, command_id):
+    from src.execution.canonical_receipt import ContentFinalizeReceipt, FieldReadback, ReceiptPhase
+
+    receipt = ContentFinalizeReceipt(
+        phase=ReceiptPhase.ROLLBACK_PREPARATION, action_grant_id=command_id, result_ok=True,
+        started_at=observation['observed_at'], completed_at=observation['observed_at'],
+        field_readbacks=[FieldReadback(field_key=row['field_key'], field_label=row['field_key'],
+            source='visible_production_runtime', before_value=deepcopy(row['value']), after_value=deepcopy(row['value']),
+            readback_proven=True, timestamp=observation['observed_at']) for row in observation['values']],
+    )
+    digest = receipt.finalize()
+    return {'canonical_receipt': {**receipt.to_dict(), 'preimage_sha256': canonical_sha256(observation)},
+            'receipt_sha256': digest}
+
+
+def build_rollback_preparation_record(task, job, command_payload, observation):
+    """Rebuild one command-bound preparation; persistence is owned by Repository."""
+    from src.batch_edit.frozen_execution_contract import compile_frozen_execution_payload, validate_frozen_execution_defaults
+    from src.execution.browser_agent_protocol import BrowserAgentCommand, validate_browser_agent_command
+
+    command = BrowserAgentCommand(**command_payload)
+    validate_browser_agent_command(command)
+    plan = task['payload']['plan_snapshot']
+    matching = [item for item in plan['item_snapshots'] if str(item['product_id']) == str(job['product_id'])]
+    if (len(matching) != 1 or plan.get('path') != 'B' or task.get('mode') != 'batch_draft_save'
+            or command.to_payload() != command_payload or command.state != 'PREPARE_ROLLBACK'
+            or command.action != 'prepare_rollback' or command.expected_page != 'editor'
+            or command.execution_mode != 'batch_draft_save' or command.task_id != task['id']
+            or command.job_id != job['id'] or not command.command_id or not command.runtime_id):
+        raise ValueError('ROLLBACK_COMMAND_BINDING_INVALID')
+    item = matching[0]
+    execution = compile_frozen_execution_payload(task, job)
+    validate_frozen_execution_defaults(command.params.get('defaults'), expected_payload=execution)
+    if (command.params.get('target_identity') != item['target_identity']
+            or command.params.get('shop_id') != str(item['shop_id'])
+            or observation['shop_id'] != str(item['shop_id'])):
+        raise ValueError('ROLLBACK_TARGET_DRIFT')
+    observed = validate_rollback_preparation_observation(observation, execution_payload=execution,
+        target_identity=item['target_identity'], browser_session_id=observation['browser_session_id'])
+    governed = item.get('real_write_stage_facts', {}).get('SAVE1', [])
+    if len(governed) != len(observed['values']):
+        raise ValueError('ROLLBACK_PREIMAGE_AUTHORITY_MISSING')
+    by_key = {entry['field_key']: entry for entry in governed}
+    if len(by_key) != len(governed):
+        raise ValueError('ROLLBACK_PREIMAGE_AUTHORITY_INVALID')
+    for value in observed['values']:
+        fact = by_key.get(value['field_key'], {})
+        if fact.get('ui_binding') != value['ui_binding'] or fact.get('preimage_sha256') != canonical_sha256(value['value']):
+            raise ValueError('ROLLBACK_PREIMAGE_DRIFT')
+    restore = [{'operation': 'restore_field', 'field_key': row['field_key'],
+                'ui_binding': row['ui_binding'], 'value': deepcopy(row['value'])}
+               for row in reversed(observed['values'])]
+    body = {'schema': 'dxm.rollback-preparation.v1', 'task_id': task['id'], 'job_id': job['id'],
+            'product_id': str(job['product_id']), 'snapshot_sha256': plan['snapshot_hash'],
+            'scope_sha256': task['payload']['real_dxm_write_authorization']['scope_sha256'],
+            'command': deepcopy(command_payload), 'observation': observed, 'restore_plan': restore,
+            'restore_policy': 'manual_before_external_mutation_only',
+            'capability_receipt': rollback_preparation_receipt(observed, command.command_id)}
+    return {**body, 'record_sha256': canonical_sha256(body)}
 
 
 @dataclass

@@ -38,8 +38,8 @@ export async function withDxmSessionBusyRetry<T>(
   throw lastError instanceof Error ? lastError : new Error('店小秘只读请求失败，请稍后重试。')
 }
 
-export async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`)
+export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { signal })
   if (!response.ok) throw await responseError(response, `GET ${path} failed`)
   return response.json()
 }
