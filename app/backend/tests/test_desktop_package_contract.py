@@ -813,7 +813,8 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "*.pyc" in source
     assert "__pycache__" in source
     assert "Packaged runtime generated Python bytecode cache" in source
-    assert "taskkill" in source
+    assert "taskkill" not in source and "Get-Process" not in source
+    assert "Stop-DesktopSmokeProcess -Process $Process" in source
     assert "PortableMinTempFreeMB" in source
     assert "Assert-PortableTempSpace" in source
     assert "Portable TEMP space OK" in source

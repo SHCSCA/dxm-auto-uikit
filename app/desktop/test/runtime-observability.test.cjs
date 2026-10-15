@@ -68,6 +68,32 @@ test('unknown truncated or multiply escaped secret formats fail closed', () => {
   }
 })
 
+test('redaction marker prefixes never authorize a secret suffix', () => {
+  for (const message of ['password=[REDACTED]private-tail', 'password="[REDACTED]private-tail',
+    "password='[REDACTED]private-tail", 'password="[REDACTED]private-tail"', 'passphrase=private-tail',
+    'password=[REDACTED]private-tail {"status":"safe"} private-tail']) {
+    assert.equal(redactText(message).includes('private-tail'), false)
+  }
+})
+
+test('secret headers in JSON strings preserve structural boundaries and following safe fields', () => {
+  for (const header of ['Cookie: first=private-tail', 'Set-Cookie: first=private-tail',
+    'Authorization: Bearer private-tail', 'passphrase=private-tail']) {
+    const raw = JSON.stringify({ message: header, status: 'preserved', nested: { safe: 3 } })
+    const sanitized = redactText(raw)
+    const parsed = JSON.parse(sanitized)
+    assert.equal(sanitized.includes('private-tail'), false)
+    assert.equal(parsed.message.endsWith('[REDACTED]'), true)
+    assert.equal(parsed.status, 'preserved')
+    assert.deepEqual(parsed.nested, { safe: 3 })
+    const embedded = redactText('before ' + raw + ' after')
+    assert.equal(embedded.startsWith('before '), true)
+    assert.equal(embedded.endsWith(' after'), true)
+    assert.deepEqual(JSON.parse(embedded.slice(7, -6)), parsed)
+    assert.deepEqual(JSON.parse(JSON.parse(redactText(JSON.stringify(raw)))), parsed)
+  }
+})
+
 test('nonsecret escaped JSON and surrounding context stay readable', () => {
   const safe = { path: 'C:\\runtime\\safe', note: 'a "quoted"\nline', status: 'saved' }
   assert.deepEqual(JSON.parse(redactText(JSON.stringify(safe))), safe)

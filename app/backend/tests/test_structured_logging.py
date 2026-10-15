@@ -47,6 +47,30 @@ def test_unknown_or_truncated_secret_formats_fail_closed(message):
     assert "private-tail" not in redact_text(message)
 
 
+@pytest.mark.parametrize("message", ['password=[REDACTED]private-tail',
+    'password="[REDACTED]private-tail', "password='[REDACTED]private-tail",
+    'password="[REDACTED]private-tail"', 'passphrase=private-tail',
+    'password=[REDACTED]private-tail {"status":"safe"} private-tail'])
+def test_redaction_marker_prefix_never_authorizes_a_secret_suffix(message):
+    assert "private-tail" not in redact_text(message)
+
+
+@pytest.mark.parametrize("header", ["Cookie: first=private-tail", "Set-Cookie: first=private-tail",
+    "Authorization: Bearer private-tail", "passphrase=private-tail"])
+def test_secret_headers_inside_json_strings_keep_json_and_later_safe_fields(header):
+    raw = json.dumps({"message": header, "status": "preserved", "nested": {"safe": 3}})
+    sanitized = redact_text(raw)
+    parsed = json.loads(sanitized)
+    assert "private-tail" not in sanitized
+    assert parsed["message"].endswith("[REDACTED]")
+    assert parsed["status"] == "preserved" and parsed["nested"] == {"safe": 3}
+    embedded = redact_text("before " + raw + " after")
+    assert embedded.startswith("before ") and embedded.endswith(" after")
+    assert json.loads(embedded[len("before "):-len(" after")]) == parsed
+    encoded = redact_text(json.dumps(raw))
+    assert json.loads(json.loads(encoded)) == parsed
+
+
 def test_nonsecret_escaped_json_and_embedded_context_remain_readable():
     safe = {"path": r"C:\\runtime\\safe", "note": 'a "quoted"\nline', "status": "saved"}
     assert json.loads(redact_text(json.dumps(safe))) == safe

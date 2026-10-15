@@ -19,6 +19,7 @@ trap {
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 . (Join-Path $PSScriptRoot 'lib\desktop-smoke-log.ps1')
 . (Join-Path $PSScriptRoot 'lib\packaged-runtime-identity.ps1')
+. (Join-Path $PSScriptRoot 'lib\desktop-smoke-process.ps1')
 
 function Resolve-SmokeArtifactPath {
   param(
@@ -359,11 +360,7 @@ function Assert-PackagedBackendResourceStatus {
     Assert-PackagedRuntimeDependencyOk -Dependencies $Status.dependencies -Name 'l2_readonly_probe_allowlist' -ResourceRoot $ResourceRoot
     $Succeeded = $true
   } finally {
-    if ($Process -and !$Process.HasExited) {
-      try {
-        $Process.Kill()
-      } catch {}
-    }
+    Stop-DesktopSmokeProcess -Process $Process -Label 'packaged-backend-probe'
     if ($Succeeded -and (Test-Path $RuntimeDataDir)) {
       Remove-Item -LiteralPath $RuntimeDataDir -Recurse -Force
     }
@@ -374,11 +371,9 @@ Assert-PackagedRuntimeClean -ExePath $ExePath
 Assert-PackagedBackendResourceStatus -ExePath $ExePath -TimeoutSeconds $WaitSeconds
 Write-Host 'Packaged backend resource status passed.'
 
-$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-capture=$CapturePath", "--qa-credential-smoke=$CredentialSmokePath", "--qa-user-data-dir=$SmokeUserDataDir") -PassThru
+$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-capture=$CapturePath", "--qa-credential-smoke=$CredentialSmokePath", "--qa-user-data-dir=$SmokeUserDataDir") -WindowStyle Hidden -PassThru
 if (!$Process.WaitForExit($WaitSeconds * 1000)) {
-  try {
-    Stop-Process -Id $Process.Id -Force
-  } catch {}
+  Stop-DesktopSmokeProcess -Process $Process -Label 'packaged-capture-timeout'
   throw "Packaged smoke timed out after $WaitSeconds seconds"
 }
 if ($Process.ExitCode -ne 0) {
@@ -393,27 +388,15 @@ $ExistingLog = Get-DesktopSmokeLog -UserDataDir $SmokeUserDataDir
 Assert-DesktopSmokeLog -ExistingLog $ExistingLog -ExpectedPythonRoot (Split-Path $ExePath) -Label 'Packaged smoke'
 Assert-PackagedRuntimeClean -ExePath $ExePath
 
-try {
-  if (!$Process.HasExited) {
-    Stop-Process -Id $Process.Id -Force
-  }
-} catch {}
-
-Get-Process | Where-Object { $_.Path -like '*desktop-build*DXM-Agent-Console.exe' } | ForEach-Object {
-  try {
-    taskkill /PID $_.Id /T /F | Out-Null
-  } catch {}
-}
+Stop-DesktopSmokeProcess -Process $Process -Label 'packaged-capture-complete'
 
 Write-Host "Packaged smoke passed. Log: $ExistingLog"
 Write-Host "QA capture: $CapturePath"
 Write-Host "Credential smoke passed. Result: $CredentialSmokePath"
 
-$VisibleProcess = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-visible-smoke=$VisibleSmokePath", "--qa-user-data-dir=$VisibleSmokeUserDataDir") -PassThru
+$VisibleProcess = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-visible-smoke=$VisibleSmokePath", "--qa-user-data-dir=$VisibleSmokeUserDataDir") -WindowStyle Hidden -PassThru
 if (!$VisibleProcess.WaitForExit($WaitSeconds * 1000)) {
-  try {
-    Stop-Process -Id $VisibleProcess.Id -Force
-  } catch {}
+  Stop-DesktopSmokeProcess -Process $VisibleProcess -Label 'visible-smoke-timeout'
   throw "Visible window smoke timed out after $WaitSeconds seconds"
 }
 if ($VisibleProcess.ExitCode -ne 0) {
@@ -430,9 +413,7 @@ if ($CheckPortable -and (Test-Path $PortableExePath)) {
   Assert-PortableTempSpace -RequiredMB $PortableMinTempFreeMB
   $PortableProcess = Start-Process -FilePath $PortableExePath -ArgumentList @("--qa-capture=$PortableCapturePath", "--qa-user-data-dir=$PortableSmokeUserDataDir") -WindowStyle Hidden -PassThru
   if (!(Wait-ForFile -Path $PortableCapturePath -TimeoutSeconds $WaitSeconds)) {
-    try {
-      Stop-Process -Id $PortableProcess.Id -Force
-    } catch {}
+    Stop-DesktopSmokeProcess -Process $PortableProcess -Label 'portable-capture-timeout'
     throw "Portable QA capture was not created: $PortableCapturePath"
   }
   $PortableExited = $PortableProcess.WaitForExit(5000)
@@ -440,9 +421,7 @@ if ($CheckPortable -and (Test-Path $PortableExePath)) {
     throw "Portable smoke failed: exit code $($PortableProcess.ExitCode)"
   }
   if (!$PortableExited) {
-    try {
-      Stop-Process -Id $PortableProcess.Id -Force
-    } catch {}
+    Stop-DesktopSmokeProcess -Process $PortableProcess -Label 'portable-capture-complete'
   }
   $PortableLog = Get-DesktopSmokeLog -UserDataDir $PortableSmokeUserDataDir
   Assert-DesktopSmokeLog -ExistingLog $PortableLog -ExpectedPythonRoot $null -Label 'Portable smoke'

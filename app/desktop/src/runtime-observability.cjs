@@ -1,25 +1,22 @@
-const SECRET_KEY = /password|passwd|passphrase|cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid/i
+const SECRET_NAMES = 'password|passwd|passphrase|cookie|set-cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid'
+const SECRET_KEY = new RegExp(SECRET_NAMES, 'i')
+const SECRET_PREFIX = new RegExp(`\\b(${SECRET_NAMES})((?:\\\\*["'])?\\s*[:=]\\s*)`, 'i')
 const RAW_KEY = /^(html|raw_html|raw_response|raw_body|page_source)$/i
 
 function redactText(value, depth = 0) {
   if (depth > 12) return '[DEPTH_LIMIT]'
-  let structured = redactEmbeddedJson(String(value), depth)
-  const prefix = /\b(password|passwd|cookie|set-cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid)((?:\\*["'])?\s*[:=]\s*)/gi
-  for (const match of structured.matchAll(prefix)) {
-    const end = match.index + match[0].length
-    if (!structured.slice(end).replace(/^[\\"']+/, '').startsWith('[REDACTED]')) {
-      structured = structured.slice(0, end) + '[REDACTED]'
-      break
-    }
-  }
-  return structured
-    .replace(/\b(cookie|set-cookie|authorization)(\s*[:=]\s*)[^\r\n]+/gi,
-      (_match, key, separator) => `${key}${separator}[REDACTED]`)
-    .replace(/\b(password|passwd|cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid)(["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/gis,
-      (_match, key, separator, quoted) => `${key}${separator}${quoted[0]}[REDACTED]${quoted[0]}`)
+  return redactEmbeddedJson(String(value), depth)
+}
+
+function redactPlainText(text) {
+  const match = SECRET_PREFIX.exec(text)
+  // 标记前缀不证明尾部安全；边界不可信时停止输出后续片段。
+  const value = match ? text.slice(0, match.index + match[0].length) + '[REDACTED]' : text
+  const sanitized = value
     .replace(/\bBearer\s+[^\s,;"']+/gi, 'Bearer [REDACTED]')
     .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '[REDACTED]')
     .replace(/(https?:\/\/[^\s?#"']+)\?[^\s"']+/gi, '$1?[REDACTED]')
+  return { text: sanitized, truncated: Boolean(match) }
 }
 
 function jsonValueEnd(text, start) {
@@ -56,14 +53,20 @@ function redactEmbeddedJson(text, depth) {
     if (end === null) continue
     try {
       const parsed = JSON.parse(text.slice(index, end))
-      parts.push(text.slice(cursor, index), JSON.stringify(redactValue(parsed, depth + 1)))
+      if (typeof parsed === 'string' && !'{["'.includes(parsed.trimStart()[0])
+        && (text.slice(0, index).trim() || text.slice(end).trim())) continue
+      const plain = redactPlainText(text.slice(cursor, index))
+      parts.push(plain.text)
+      if (plain.truncated) return parts.join('')
+      // JSON 值完成脱敏后直接输出，文本正则不能跨越其结构边界。
+      parts.push(JSON.stringify(redactValue(parsed, depth + 1)))
       cursor = end
       index = end - 1
     } catch {
       // 不是有效 JSON 时交给下方保守秘密扫描，不保留未闭合秘密的尾部。
     }
   }
-  parts.push(text.slice(cursor))
+  parts.push(redactPlainText(text.slice(cursor)).text)
   return parts.join('')
 }
 

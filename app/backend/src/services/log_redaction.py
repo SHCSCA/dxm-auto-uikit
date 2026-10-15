@@ -7,16 +7,12 @@ from typing import Any
 
 
 REDACTED = "[REDACTED]"
-_SECRET_KEY = re.compile(r"password|passwd|passphrase|cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid", re.I)
+_SECRET_NAMES = r"password|passwd|passphrase|cookie|set-cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid"
+_SECRET_KEY = re.compile(_SECRET_NAMES, re.I)
 _RAW_KEY = re.compile(r"^(html|raw_html|raw_response|raw_body|page_source)$", re.I)
 _AUTH = re.compile(r"\bBearer\s+[^\s,;\"']+", re.I)
-_HEADERS = re.compile(r"\b(cookie|set-cookie|authorization)(\s*[:=]\s*)[^\r\n]+", re.I)
-_QUOTED_SECRET = re.compile(
-    r"\b(password|passwd|cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid)"
-    r"([\"']?\s*[:=]\s*)(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')", re.I | re.S,
-)
 _SECRET_PREFIX = re.compile(
-    r"\b(password|passwd|cookie|set-cookie|authorization|token|csrf|xsrf|secret|api[_-]?key|sessionid)"
+    rf"\b({_SECRET_NAMES})"
     r"((?:\\*[\"'])?\s*[:=]\s*)", re.I,
 )
 _PRIVATE_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}")
@@ -26,18 +22,17 @@ _URL_QUERY = re.compile(r"(https?://[^\s?#\"']+)\?[^\s\"']+", re.I)
 def redact_text(value: str, *, depth: int = 0) -> str:
     if depth > 12:
         return "[DEPTH_LIMIT]"
-    result = _redact_embedded_json(value, depth=depth)
-    for match in _SECRET_PREFIX.finditer(result):
-        if not result[match.end():].lstrip("\\\"'").startswith(REDACTED):
-            # 非结构化或未闭合秘密的边界不可信，保守丢弃其后全部文本。
-            result = result[:match.end()] + REDACTED
-            break
-    result = _HEADERS.sub(lambda match: match[1] + match[2] + REDACTED, result)
-    result = _QUOTED_SECRET.sub(lambda match: match[1] + match[2] + match[3][0] + REDACTED + match[3][0], result)
+    return _redact_embedded_json(value, depth=depth)
+
+
+def _redact_plain_text(value: str) -> tuple[str, bool]:
+    match = _SECRET_PREFIX.search(value)
+    # 文本里的脱敏标记也可能是秘密前缀；边界不可信时丢弃后续所有片段。
+    result = value[:match.end()] + REDACTED if match else value
     result = _AUTH.sub("Bearer " + REDACTED, result)
     result = _PRIVATE_KEY.sub(REDACTED, result)
     result = _URL_QUERY.sub(r"\1?[REDACTED]", result)
-    return result
+    return result, match is not None
 
 
 def _redact_embedded_json(value: str, *, depth: int) -> str:
@@ -52,12 +47,23 @@ def _redact_embedded_json(value: str, *, depth: int) -> str:
         except (ValueError, RecursionError):
             index += 1
             continue
+        if isinstance(parsed, str) and not parsed.lstrip().startswith(('{', '[', '"')) and (
+            value[:index].strip() or value[end:].strip()
+        ):
+            # 不把损坏对象里的单独键名隔离出去，避免切断秘密键和值的关联。
+            index += 1
+            continue
         if isinstance(parsed, (dict, list, str)):
-            parts.extend((value[cursor:index], json.dumps(redact_log_value(parsed, depth=depth + 1), ensure_ascii=False)))
+            plain, truncated = _redact_plain_text(value[cursor:index])
+            parts.append(plain)
+            if truncated:
+                return "".join(parts)
+            # 已解析片段只在值上脱敏，不再跨 JSON 边界运行文本正则。
+            parts.append(json.dumps(redact_log_value(parsed, depth=depth + 1), ensure_ascii=False))
             cursor = index = end
         else:
             index += 1
-    parts.append(value[cursor:])
+    parts.append(_redact_plain_text(value[cursor:])[0])
     return "".join(parts)
 
 
