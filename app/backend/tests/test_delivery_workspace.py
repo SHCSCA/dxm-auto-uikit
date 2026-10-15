@@ -14,6 +14,7 @@ from src.core import config
 from src.execution.action_result_contract import (
     validate_independent_save_verification_pair,
 )
+from tests.support.network_receipts import complete_save_receipt
 from src.repository import Repository
 from src.services import delivery_workspace
 from src.services.state_consistency import audit_state_consistency
@@ -269,6 +270,7 @@ def _strict_save_result(*, target_identity: dict, store_name: str) -> dict:
         "code": 0,
         "msg": "您的产品编辑保存成功！",
     }
+    network = complete_save_receipt(network)
     network_audit = {
         "scope": "same_origin_write_window",
         "complete": True,
@@ -303,7 +305,7 @@ def _strict_save_result(*, target_identity: dict, store_name: str) -> dict:
         "publish_action_clicked": False,
         "text": "保存",
         "exact_save_count": 1,
-        "click_method": "native_exact_save",
+        "click_method": "playwright_exact_role",
         "network_save_success": True,
         "page_save_success": True,
         "mutation_authorization": authorization,
@@ -406,6 +408,9 @@ def _action_result_pair(
         "evidence": {
             "observations": {
                 "save_result": save_result,
+                "save_field_readbacks": [{"field_key": "weight", "field_label": "包装重量",
+                    "source": "exact_control_readback", "before_value": "10", "after_value": "10",
+                    "readback_proven": True, "timestamp": "2026-07-22T08:00:02+00:00"}],
                 "exact_save_target": {
                     "text": "保存",
                     "exact_save_count": 1,
@@ -697,7 +702,7 @@ def test_complete_product_box_single_save_passes_acceptance_and_readiness(
     data = delivery_workspace.build_delivery_workspace(repo, fixture["task"]["id"])
 
     acceptance = data["single_save_acceptance"]
-    assert acceptance["passed"] is True
+    assert acceptance["passed"] is True, acceptance
     assert acceptance["status"] == "passed"
     assert acceptance["missing_codes"] == []
     assert all(acceptance["checks"].values())

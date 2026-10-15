@@ -1,0 +1,36 @@
+.lp-section-form .product-path-contract {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 720px) {
+  .lp-modal-overlay {
+    padding: 12px;
+  }
+
+  .lp-modal-overlay .lp-modal__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .lp-modal-overlay .lp-sections-nav {
+    flex-direction: row;
+    align-items: center;
+    max-height: 72px;
+    padding: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .lp-modal-overlay .lp-sections-nav button {
+    flex: 0 0 auto;
+    min-height: 38px;
+    white-space: nowrap;
+  }
+
+  .lp-modal-overlay .lp-section-form {
+    min-width: 0;
+    padding: 14px;
+  }
+}

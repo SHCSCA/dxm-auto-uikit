@@ -22,7 +22,10 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from src.core.config import DATA_DIR
+from src.core.config import DATA_DIR, RUNTIME_CONFIG
+from src.core.config_bus import env_string
+from src.services.http_errors import register_exception_handlers
+from src.services.structured_logging import append_structured_log, configure_logging, structured_log_level
 from src.services.operation_audit import (
     OperationAuditError,
     get_audit_service,
@@ -33,6 +36,7 @@ from src.services.runtime_bootstrap import ensure_runtime_bootstrap
 
 APP_VERSION = '0.3.0'
 REPO_ROOT = Path(__file__).resolve().parents[3]
+configure_logging(RUNTIME_CONFIG.logging.level)
 runtime_bootstrap_state = ensure_runtime_bootstrap(
     data_dir=DATA_DIR,
     repo_root=REPO_ROOT,
@@ -200,6 +204,7 @@ async def app_lifespan(_app: FastAPI):
 
 
 app = FastAPI(title='dxm-auto-uikit backend', version=APP_VERSION, lifespan=app_lifespan)
+register_exception_handlers(app)
 LOOPBACK_CORS_ORIGIN_RE = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 PUBLIC_ARTIFACT_ROOTS = {
     'screenshots': DATA_DIR / 'screenshots',
@@ -579,20 +584,15 @@ UNRELEASED_REAL_DXM_MODE_DETAIL = (
     'batch_save remains unreleased'
 )
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
-RUNTIME_LAUNCHER_LOG_FILE = Path(
-    os.environ.get('DXM_LAUNCHER_LOG_FILE')
-    or DATA_DIR / ('desktop-main.log' if runtime_bootstrap_state.owner == 'electron_desktop' else 'start-mvp.log')
-)
+RUNTIME_LAUNCHER_LOG_FILE = RUNTIME_CONFIG.paths.launcher_log
 RUNTIME_LOG_SOURCES = {
     'backend': DATA_DIR / 'backend.log',
     'frontend': DATA_DIR / 'frontend.log',
     'launcher': RUNTIME_LAUNCHER_LOG_FILE,
     'npm': DATA_DIR / 'npm-install.log',
 }
-RUNTIME_CONTROL_COMMAND_FILE = Path(
-    os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE') or DATA_DIR / 'runtime-control-command.json'
-)
-RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
+RUNTIME_CONTROL_COMMAND_FILE = RUNTIME_CONFIG.paths.runtime_control_command
+RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(env_string('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
 RUNTIME_DESKTOP_MODE = runtime_bootstrap_state.owner == 'electron_desktop'
 RUNTIME_BACKEND_INSTANCE_ID = runtime_identity.instance_id
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
@@ -4638,7 +4638,7 @@ def export_operation_audit_package():
 @app.get('/api/runtime/status')
 def runtime_status(frontend_url: str | None = None):
     frontend_url = _runtime_frontend_url(frontend_url)
-    backend_url = os.environ.get('DXM_BACKEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_BACKEND_PORT', '8000')}"
+    backend_url = RUNTIME_CONFIG.server.backend_url
     agent_status = agent_console_service.status()
     dxm_state = normalize_artifact_paths(login_flow.get_state())
     real_browser_status = _runtime_real_browser_status(agent_status, dxm_state)
@@ -4789,12 +4789,12 @@ def _runtime_real_browser_status(agent_status: dict[str, Any], dxm_state: dict[s
 def _runtime_frontend_url(frontend_url: str | None = None) -> str:
     if frontend_url:
         return frontend_url
-    env_frontend_url = os.environ.get('DXM_FRONTEND_URL')
+    env_frontend_url = env_string('DXM_FRONTEND_URL')
     if env_frontend_url:
         return env_frontend_url
     if RUNTIME_DESKTOP_MODE:
         return 'file://'
-    return f"http://127.0.0.1:{os.environ.get('DXM_FRONTEND_PORT', '5173')}"
+    return f"http://127.0.0.1:{RUNTIME_CONFIG.server.frontend_port}"
 
 
 def _workflow_runtime_status() -> dict[str, Any]:
@@ -5326,7 +5326,10 @@ def _public_artifact_url(value: str) -> str | None:
 
 def _runtime_log_item(line: str) -> dict:
     normalized = line.lower()
-    if any(token in normalized for token in (' error', 'error:', 'traceback', 'exception', ' failed', ' 500 ')):
+    structured_level = structured_log_level(line)
+    if structured_level:
+        level = structured_level
+    elif any(token in normalized for token in (' error', 'error:', 'traceback', 'exception', ' failed', ' 500 ')):
         level = 'error'
     elif any(token in normalized for token in ('warn', 'warning', 'blocked', 'forbidden', ' 403 ', ' 409 ')):
         level = 'warning'
@@ -5345,6 +5348,15 @@ def _runtime_log_item(line: str) -> dict:
 
 
 def _is_runtime_access_log(line: str) -> bool:
+    if line.startswith('{'):
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError):
+            return False
+        return bool(isinstance(record, dict) and record.get('schema') == 'dxm.log.v1'
+                    and record.get('component') == 'uvicorn.access'
+                    and '"GET /api/' in str(record.get('event') or '')
+                    and 'HTTP/1.1"' in str(record.get('event') or ''))
     return line.startswith('INFO:') and '"GET /api/' in line and 'HTTP/1.1"' in line
 
 
@@ -5496,29 +5508,17 @@ def _format_agent_action_line(event: dict) -> str:
 
 def _append_runtime_control_log(message: str) -> None:
     path = RUNTIME_LOG_SOURCES.get('launcher') or (DATA_DIR / 'start-mvp.log')
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = f"[runtime-control] {message}"
-    try:
-        with path.open('a', encoding='utf-8') as handle:
-            handle.write(line + '\n')
-    except OSError:
-        pass
+    append_structured_log(path, 'runtime_control', component='runtime-control', message=message)
 
 
 def _append_backend_runtime_log(message: str) -> None:
     path = RUNTIME_LOG_SOURCES.get('backend') or (DATA_DIR / 'backend.log')
-    path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).isoformat()
-    try:
-        with path.open('a', encoding='utf-8') as handle:
-            handle.write(f'[{timestamp}] {message}\n')
-    except OSError:
-        pass
+    append_structured_log(path, 'runtime_lifecycle', component='backend', message=message)
 
 
 def _resource_root_candidates() -> list[Path]:
     roots: list[Path] = []
-    for raw in (os.environ.get('DXM_RESOURCE_ROOT'), os.environ.get('DXM_REPO_ROOT')):
+    for raw in (env_string('DXM_RESOURCE_ROOT'), env_string('DXM_REPO_ROOT')):
         if raw:
             roots.append(Path(raw))
     roots.extend([
@@ -6147,7 +6147,7 @@ def _read_final_delivery_check_summary():
 
 
 def _final_delivery_check_json_path():
-    configured = os.environ.get('DXM_FINAL_DELIVERY_CHECK_JSON')
+    configured = env_string('DXM_FINAL_DELIVERY_CHECK_JSON')
     if configured:
         return Path(configured).expanduser().resolve()
     return FINAL_DELIVERY_CHECK_JSON

@@ -185,7 +185,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     }],
     safety: {
       mode: '商品箱范围 -> 一次批准 -> 严格串行逐件只保存',
-      guarantee: '受控逐件商品箱批次已开放；旧版批量保存、无人值守和发布仍关闭。',
+      guarantee: '完整 Path B 与五项必经能力尚未取得真实放行证据；历史单商品保存不能代表产品成功。',
       forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
       lastCheckedAt: '等待任务数据',
     },
@@ -317,9 +317,9 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
     modes: [
       {
         mode: 'single_save',
-        label: '受控单商品只保存已放行',
-        status: 'released_controlled',
-        allowed: true,
+        label: '历史单商品诊断路径，不代表产品完成',
+        status: 'blocked_unreleased',
+        allowed: false,
         release_scope: '受控单商品只保存验收',
         required_evidence: [
           '商品箱真实只读检查通过',
@@ -328,19 +328,19 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
           '保存成功回包和页面记录',
         ],
         required_controls: sharedControls,
-        blockers: [],
+        blockers: ['缺少当前完整 Path B 放行证据'],
         readiness_checklist: [
-          checklist('l2_draft_box', '商品箱真实只读检查通过', 'passed'),
-          checklist('l3_single_canary', '单商品只保存证据', 'passed'),
-          checklist('published_false', '未发布状态证明', 'passed'),
-          checklist('publish_guard', '发布隔离无风险信号', 'passed'),
+          checklist('l2_draft_box', '商品箱真实只读检查通过', 'missing'),
+          checklist('l3_single_canary', '单商品只保存证据', 'missing'),
+          checklist('published_false', '未发布状态证明', 'missing'),
+          checklist('publish_guard', '发布隔离无风险信号', 'missing'),
         ],
       },
       {
         mode: 'edit_batch',
-        label: '商品箱受控逐件批次已开放',
-        status: 'released_controlled',
-        allowed: true,
+        label: '旧批次写入入口已关闭',
+        status: 'blocked_unreleased',
+        allowed: false,
         release_scope: 'immutable draft-box scope with strict sequential save-only execution',
         required_evidence: [
           '真实商品箱范围与店铺身份冻结',
@@ -353,12 +353,12 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
           '全局并发为 1',
           '范围或身份变化立即停止',
         ],
-        blockers: [],
+        blockers: ['缺少当前完整 Path B 放行证据'],
         readiness_checklist: [
-          checklist('immutable_scope', '商品箱范围与店铺身份已冻结', 'passed'),
-          checklist('atomic_approval_start', '一次批准并原子启动', 'passed'),
-          checklist('strict_sequential', '逐商品严格串行', 'passed'),
-          checklist('unknown_stop_no_retry', '不确定结果停止且不重试', 'passed'),
+          checklist('immutable_scope', '商品箱范围与店铺身份已冻结', 'missing'),
+          checklist('atomic_approval_start', '一次批准并原子启动', 'missing'),
+          checklist('strict_sequential', '逐商品严格串行', 'missing'),
+          checklist('unknown_stop_no_retry', '不确定结果停止且不重试', 'missing'),
         ],
       },
       {

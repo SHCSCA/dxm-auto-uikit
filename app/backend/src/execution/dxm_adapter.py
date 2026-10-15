@@ -1,3 +1,4 @@
+from src.core.config_bus import env_string
 import os
 import re
 import hashlib
@@ -8,6 +9,8 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+from src.execution.save_target_contract import EXACT_SAVE_CLICK_METHOD
+from src.execution.native_gate_evidence import join_native_gate_evidence
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS, derive_frozen_main_fill_facts
 from src.execution.browser_agent_protocol import canonical_frozen_target_identity
 from src.execution.canonical_receipt import (
@@ -1047,9 +1050,8 @@ class DxmWorkflowAdapter:
             result['workflow_events'] = events
         return result
 
-    @classmethod
     def _normalize_published_evidence(
-        cls,
+        self,
         action: str,
         evidence: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -1077,7 +1079,7 @@ class DxmWorkflowAdapter:
                 and save.get('publish_action_clicked') is False
                 and save.get('text') == '保存'
                 and _strict_int(save.get('exact_save_count')) == 1
-                and save.get('click_method') == 'playwright_exact_role'
+                and save.get('click_method') == EXACT_SAVE_CLICK_METHOD
                 and authorization.get('ok') is True
                 and authorization.get('executed') is True
                 and authorization.get('mutation_action') == 'save_only_click'
@@ -1129,6 +1131,7 @@ class DxmWorkflowAdapter:
             result['save_result'] = save
         elif action == 'first_save_intent':
             handshake = _mapping_copy(result.get('first_save_intent_handshake'))
+            native_gate = join_native_gate_evidence(handshake, expected_browser_session_id=self.browser_session_id())
             audit = _mapping_copy(handshake.get('network_audit'))
             receipt = _mapping_copy(handshake.get('network_save_result'))
             signal = _mapping_copy(handshake.get('publish_signal'))
@@ -1154,6 +1157,7 @@ class DxmWorkflowAdapter:
                 result.get('ok') is True
                 and handshake.get('schema_version') == 'dxm.first-save-intent-handshake.v1'
                 and handshake.get('save_stage') == 'SAVE1'
+                and native_gate.admitted
                 and handshake.get('same_handshake') is True
                 and handshake.get('physical_mutation_count') == 1
                 and handshake.get('publish_request_count') == 0
@@ -1180,6 +1184,8 @@ class DxmWorkflowAdapter:
                 }
             )
             published = False if complete_no_publish_handshake else None
+            if not native_gate.admitted:
+                result.update(ok=False, failure_code='UNKNOWN', reason_code=native_gate.reason_code)
             result['first_save_intent_handshake'] = handshake
         elif action == 'verify_not_published':
             proof = _mapping_copy(result.get('unpublished_proof'))
@@ -1570,8 +1576,8 @@ class DxmWorkflowAdapter:
             if key in sources and sources[key]
         }
 
-    @staticmethod
     def _augment_action_observations(
+        self,
         action: str,
         sources: Mapping[str, dict[str, Any]],
         observations: dict[str, Any],
@@ -1634,23 +1640,8 @@ class DxmWorkflowAdapter:
                     ]
                 except ReceiptValidationError as exc:
                     raise RuntimeError('FIRST_SAVE_INTENT_FIELD_READBACKS_INVALID') from exc
-            modal_handshake = {
-                'gate_outcome': 'admitted' if handshake.get('same_handshake') is True else None,
-                'semi_entry_triggered': _mapping_copy(
-                    handshake.get('open_semi_managed_editor')
-                ).get('observed'),
-                'same_handshake': handshake.get('same_handshake'),
-                'handshake_id': handshake.get('handshake_id'),
-                'save1_verified': _mapping_copy(
-                    handshake.get('network_save_result')
-                ).get('ok'),
-                'exactly_one_save_request': bool(
-                    handshake.get('physical_mutation_count') == 1
-                    and _mapping_copy(handshake.get('network_audit')).get(
-                        'save_request_count'
-                    ) == 1
-                ),
-            }
+            modal_handshake = join_native_gate_evidence(
+                handshake, expected_browser_session_id=self.browser_session_id()).summary
             observations.update({
                 'first_save_intent_handshake': dict(handshake),
                 'save_result': dict(handshake),
@@ -2205,13 +2196,14 @@ class DxmWorkflowAdapter:
             and network_audit.get('complete') is True
         )
 
-    @staticmethod
     def _derive_first_save_intent_postconditions(
+        self,
         evidence: Mapping[str, Any],
         sources: Mapping[str, dict[str, Any]],
         postconditions: dict[str, bool],
     ) -> None:
         handshake = sources.get('first_save_intent_handshake') or {}
+        native_gate = join_native_gate_evidence(handshake, expected_browser_session_id=self.browser_session_id())
         authorization = _mapping_copy(handshake.get('mutation_authorization'))
         intent = _mapping_copy(handshake.get('first_save_intent'))
         opened = _mapping_copy(handshake.get('open_semi_managed_editor'))
@@ -2257,7 +2249,8 @@ class DxmWorkflowAdapter:
             and exact_transition
         )
         postconditions['same_handshake'] = bool(
-            handshake.get('same_handshake') is True
+            native_gate.admitted
+            and handshake.get('same_handshake') is True
             and str(handshake.get('handshake_id') or '').strip()
             and intent.get('handshake_id') == handshake.get('handshake_id')
             and opened.get('handshake_id') == handshake.get('handshake_id')
@@ -2418,7 +2411,7 @@ class DxmWorkflowAdapter:
 
     def _requires_visible_execution_browser_login_check(self) -> bool:
         return any(
-            str(os.getenv(name) or '').strip().lower() in {'1', 'true', 'yes', 'on', 'browser_agent'}
+            str(env_string(name) or '').strip().lower() in {'1', 'true', 'yes', 'on', 'browser_agent'}
             for name in (
                 'DXM_DESKTOP',
                 'DXM_WORKFLOW_PERSISTENT_PROFILE',

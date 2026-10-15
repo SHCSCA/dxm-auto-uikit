@@ -43,6 +43,8 @@ const {
   registerPrimaryInstanceLifecycle,
 } = require('./runtime-start.cjs')
 const { resolveDesktopWindowLayout, browserBoundsEnvironment } = require('./window-layout.cjs')
+const { loadDesktopRuntimeConfig, snapshotEnvironment } = require('./runtime-config.cjs')
+const { redactText, serializeDesktopLog, exceptionFields } = require('./runtime-observability.cjs')
 
 app.setName('DXM Agent Console')
 const nativeExitCoordinator = createNativeExitCoordinator({ app })
@@ -301,17 +303,19 @@ function runCredentialSmoke(outputPath) {
   return result
 }
 
-function appendDesktopLog(message) {
+function appendDesktopLog(message, options = {}) {
   if (!runtimeInfo.desktopLogPath) initializeDesktopLogPath()
   const logPath = runtimeInfo.desktopLogPath
   if (!logPath || !runtimeInfo.dataDirReady) return false
-  const line = `[${new Date().toISOString()}] ${message}\n`
+  const line = serializeDesktopLog(options.event || 'desktop_runtime', {
+    level: options.level || 'INFO', fields: { message, ...options.fields },
+  }) + '\n'
   try {
     fs.appendFileSync(logPath, line, 'utf8')
     runtimeInfo.desktopLogWritten = true
     return true
   } catch (error) {
-    console.error(`Desktop log write failed: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(serializeDesktopLog('desktop_log_write_failed', { level: 'ERROR', fields: exceptionFields(error) }))
     return false
   }
 }
@@ -501,7 +505,7 @@ async function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
   const args = ['-m', 'src.desktop_server']
   appendDesktopLog(`Starting backend: ${pythonPath} ${args.join(' ')}`)
 
-  const packagedPythonEnvironment = buildPackagedPythonEnvironment(process.env, backendDir)
+  const packagedPythonEnvironment = buildPackagedPythonEnvironment(snapshotEnvironment(), backendDir)
   const desktopBackendEnvironment = buildDesktopBackendEnvironment({
     ...packagedPythonEnvironment,
     DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
@@ -709,6 +713,7 @@ function requestBackendTermination(reason) {
 }
 
 async function startDesktopRuntime() {
+  const configuration = loadDesktopRuntimeConfig()
   const qaCapturePath = launchPolicy.smokeOutputs.capture
   const qaCredentialSmokePath = launchPolicy.smokeOutputs.credential
   const qaVisibleSmokePath = launchPolicy.smokeOutputs.visible
@@ -748,7 +753,7 @@ async function startDesktopRuntime() {
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     packageVersion: app.getVersion(),
-    explicitManifestFile: process.env.DXM_BUILD_MANIFEST_FILE || null,
+    explicitManifestFile: configuration.buildManifestFile,
     directManifestFactory: () => createDirectLaunchManifest({
       repoRoot,
       packageVersion: app.getVersion(),
@@ -757,9 +762,9 @@ async function startDesktopRuntime() {
   })
   const packageSha256 = await resolvePortablePackageSha({
     isPackaged: app.isPackaged,
-    portableExecutableFile: process.env.PORTABLE_EXECUTABLE_FILE,
-    portableExecutableDir: process.env.PORTABLE_EXECUTABLE_DIR,
-    portableExecutableAppFilename: process.env.PORTABLE_EXECUTABLE_APP_FILENAME,
+    portableExecutableFile: configuration.portable.executableFile,
+    portableExecutableDir: configuration.portable.executableDir,
+    portableExecutableAppFilename: configuration.portable.appFilename,
     expectedPortableAppFilename: desktopPackage.name,
     innerExecutablePath: process.execPath,
   })
@@ -915,11 +920,11 @@ registerPrimaryInstanceLifecycle({
 })
 
 process.on('uncaughtException', (error) => {
-  runtimeInfo.lastError = error.stack || error.message
-  appendDesktopLog(`Uncaught exception: ${runtimeInfo.lastError}`)
+  runtimeInfo.lastError = redactText(error.stack || error.message)
+  appendDesktopLog('Uncaught exception', { event: 'uncaught_exception', level: 'ERROR', fields: exceptionFields(error) })
 })
 
 process.on('unhandledRejection', (reason) => {
-  runtimeInfo.lastError = reason instanceof Error ? reason.stack || reason.message : String(reason)
-  appendDesktopLog(`Unhandled rejection: ${runtimeInfo.lastError}`)
+  runtimeInfo.lastError = redactText(reason instanceof Error ? reason.stack || reason.message : String(reason))
+  appendDesktopLog('Unhandled rejection', { event: 'unhandled_rejection', level: 'ERROR', fields: exceptionFields(reason) })
 })

@@ -53,44 +53,20 @@ const realPageResponse = {
 }
 
 
-test('confirmed input carries unified target category into the batch contract', () => {
-  const confirmed = buildConfirmedDraftTaskInput(
-    {
-      shopId: '101',
-      productIds: ['1001'],
-      planId: 42,
-      products: [{
-        id: '1001',
-        shop_id: '101',
-        subject: 'Draft one',
-        category_id: '301',
-        dxm_state: 'draft',
-      }],
-      targetCategoryId: '300',
-      targetCategoryName: 'ACG Stand(立牌类谷子)',
-      targetCategoryMatch: 'ACG Stand',
-    },
-    'session-a',
-  )
-  assert.deepEqual(confirmed, {
-    sessionRef: 'session-a',
-    input: {
-      shopId: '101',
-      productIds: ['1001'],
-      planId: 42,
-      targetCategoryId: '300',
-      targetCategoryName: 'ACG Stand(立牌类谷子)',
-      targetCategoryMatch: 'ACG Stand',
-      items: [{
-        productId: '1001',
-        shopId: '101',
-        categoryId: '301',
-        categoryName: null,
-        title: 'Draft one',
-      }],
-    },
-  })
+test('confirmed input carries all three product identities and unified target category', () => {
+  const products = ['1001', '1002', '1003'].map((id, index) => ({
+    id, shop_id: '101', subject: `Draft ${index + 1}`, category_id: '301', dxm_state: 'draft',
+  }))
+  const confirmed = buildConfirmedDraftTaskInput({
+    shopId: '101', productIds: products.map((product) => product.id), planId: 42, products,
+    targetCategoryId: '300', targetCategoryName: '立牌类谷子', targetCategoryMatch: 'ACG Stand',
+  }, 'session-a')
+  assert.equal(confirmed.sessionRef, 'session-a')
   assert.equal(confirmed.input.targetCategoryId, '300')
+  assert.deepEqual(confirmed.input.productIds, ['1001', '1002', '1003'])
+  assert.deepEqual(confirmed.input.items, products.map((product) => ({
+    productId: product.id, shopId: '101', categoryId: '301', categoryName: null, title: product.subject,
+  })))
 })
 
 
@@ -99,7 +75,7 @@ test('confirmed input rejects an invalid target category id', () => {
     () => buildConfirmedDraftTaskInput(
       {
         shopId: '101',
-        productIds: ['1001'],
+        productIds: ['1001', '1002', '1003'],
         planId: 42,
         targetCategoryId: '0',
         targetCategoryMatch: 'ACG Stand',
@@ -172,21 +148,24 @@ test('changing visible browser session clears cross-session selection', () => {
 })
 
 
-test('task input requires at least one product and a positive plan id', () => {
-  assert.equal(MIN_DRAFT_SELECTION, 1)
+test('task input requires at least three products and a positive plan id', () => {
+  assert.equal(MIN_DRAFT_SELECTION, 3)
   assert.equal(MAX_DRAFT_SELECTION, 100)
+  for (const productIds of [['1001'], ['1001', '1002']]) {
+    assert.throws(() => buildDraftTaskInput({ shopId: '101', productIds, planId: 9 }), /at least 3/)
+  }
   assert.throws(
     () => buildDraftTaskInput({
       shopId: '101',
       productIds: [],
       planId: 9,
     }),
-    /at least 1/,
+    /at least 3/,
   )
   assert.throws(
     () => buildDraftTaskInput({
       shopId: '101',
-      productIds: ['1001'],
+      productIds: ['1001', '1002', '1003'],
       planId: null,
     }),
     /plan/,

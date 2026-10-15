@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getJson, postJson } from '../../api'
+import { frontendConfig } from '../../config/frontendConfig'
 import {
   BATCH_SAVE_ONLY_CONFIRMATION,
   batchTaskDestination,
@@ -132,7 +133,7 @@ export function BatchSavePlaceholderPage({
           text: `任务 #${approvalAttempt.taskId} 状态暂时读不到；结果按 UNKNOWN 处理，只读轮询继续，绝不重复批准。`,
         })
       }
-      if (!cancelled) timer = window.setTimeout(() => { void pollTask() }, 2000)
+      if (!cancelled) timer = window.setTimeout(() => { void pollTask() }, frontendConfig.polling.approvalMs)
     }
 
     void pollTask()
@@ -144,6 +145,7 @@ export function BatchSavePlaceholderPage({
 
   function buildSnapshotRequest(expectedSnapshotHash: string | null = null) {
     if (!taskInput || !plan) throw new Error('请先确认真实商品范围和普货方案。')
+    if (plan.path !== 'B' || plan.shop_id !== taskInput.input.shopId) throw new Error('请选择当前店铺的完整 Path B 方案；历史诊断方案不能用于产品任务。')
     if (taskInput.input.shopId === '-1') throw new Error('请先选择一个具体店铺；批量保存不能绑定“全部店铺”。')
     const productCount = taskInput.input.productIds.length
     if (productCount < MIN_DRAFT_SELECTION || productCount > MAX_DRAFT_SELECTION) {
@@ -172,6 +174,7 @@ export function BatchSavePlaceholderPage({
     try {
       const request = buildSnapshotRequest()
       const result = await postJson<PlanSnapshot>('/api/plan-snapshots/preview', request)
+      if (result.path !== 'B') throw new Error('返回的快照不是完整 Path B；不能冻结为产品任务。')
       setPreview(result)
       setFrozen(null)
       setCreatedTask(null)
@@ -191,6 +194,7 @@ export function BatchSavePlaceholderPage({
       if (!preview) throw new Error('请先预览并校验当前快照')
       const request = buildSnapshotRequest(preview.snapshot_hash)
       const snapshot = await postJson<PlanSnapshot>('/api/plan-snapshots', request)
+      if (snapshot.path !== 'B') throw new Error('冻结快照路径不一致；请先核对后端状态，不会启动任务。')
       if (!snapshot.task_id) throw new Error('原子冻结回包缺少 task_id')
       const task = await getJson<Task>(`/api/tasks/${snapshot.task_id}`)
       setPreview(snapshot)
@@ -245,11 +249,13 @@ export function BatchSavePlaceholderPage({
     && createdTask
     && frozen.task_id === createdTask.id
     && frozen.mode === 'batch_draft_save'
+    && frozen.path === 'B'
     && frozen.approval_context.publish_allowed === false
     && createdTask.mode === 'batch_draft_save'
     && createdTask.status === 'draft',
   )
   const approvalReady = approvalContractValid
+    && frozen?.approval_context.runner_released === true
     && approvedBy.trim().length > 0
     && confirmation === BATCH_SAVE_ONLY_CONFIRMATION
     && !approvalAttempt
@@ -371,11 +377,13 @@ export function BatchSavePlaceholderPage({
           <div className="batch-digest-strip">
             <span><strong>快照校验摘要</strong><code>{frozen.snapshot_hash}</code></span>
             <span><strong>店铺范围</strong><code>{frozen.shop_scope}</code></span>
-            <span><strong>执行路径</strong><code>路径 A · 只保存</code></span>
+            <span><strong>执行路径</strong><code>Path B · 两阶段只保存</code></span>
           </div>
 
           {!approvalContractValid ? (
             <p className="batch-inline-error" role="alert">任务与冻结事实不一致，原子批准入口已关闭。</p>
+          ) : !frozen.approval_context.runner_released ? (
+            <p className="batch-inline-error" role="alert">完整 Path B 执行能力尚未放行；当前仅能预览与冻结，不能批准真实保存。</p>
           ) : (
             <div className="batch-approval-card" aria-label="批量只保存原子批准">
               <div className="batch-approval-card__intro">

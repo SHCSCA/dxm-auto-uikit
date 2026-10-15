@@ -199,8 +199,8 @@ class _LiveDomPreflightAdapter:
     [
         pytest.param("binding", "FROZEN_EXECUTION_BINDING_UNRESOLVED", id="stable-binding"),
         pytest.param("value", "frozen_execution_value_mismatch", id="frozen-value"),
-        pytest.param("exact-zero", "精确“保存”按钮数量不是 1：0", id="exact-save-zero"),
-        pytest.param("exact-two", "精确“保存”按钮数量不是 1：2", id="exact-save-two"),
+        pytest.param("exact-zero", "精确语义“保存”按钮不是唯一可见、启用且可操作控件：0", id="exact-save-zero"),
+        pytest.param("exact-two", "精确语义“保存”按钮不是唯一可见、启用且可操作控件：2", id="exact-save-two"),
     ],
 )
 def test_reserve_to_jit_live_dom_preflight_rejects_with_zero_operation(

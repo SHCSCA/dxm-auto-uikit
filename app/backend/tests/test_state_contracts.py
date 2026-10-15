@@ -11,12 +11,20 @@ from src.state_machine.contracts import (
 
 def test_v1_state_specs_have_required_contract_fields():
     specs = build_v1_state_specs()
+    unknown_states = {
+        StateName.FIRST_SAVE_INTENT,
+        StateName.VERIFY_DISCOVERY_SAVE1_NOT_PUBLISHED,
+        StateName.DISCOVERY_SEAL_STOP,
+    }
 
     assert StateName.PRECHECK_CONFIG in specs
     assert StateName.SAVE_ONLY in specs
     for spec in specs.values():
         spec.validate()
-        assert spec.failure_code.startswith("E")
+        if spec.state_name in unknown_states:
+            assert spec.failure_code == "UNKNOWN"
+        else:
+            assert spec.failure_code.startswith("E")
         assert spec.evidence_required
 
 

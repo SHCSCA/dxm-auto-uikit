@@ -10,17 +10,14 @@ BATCH_EDIT_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "BatchEditPage
 BATCH_RECORDS_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "BatchRecordsPage.tsx"
 
 
-def test_app_routes_live_batch_builder_and_batch_records_without_legacy_aliasing():
+def test_app_routes_new_batches_to_snapshot_flow_and_keeps_legacy_records_readonly():
     source = APP_TSX.read_text(encoding="utf-8")
-
-    assert "from './components/workbench/BatchEditPage'" in source
-    assert "from './components/workbench/BatchRecordsPage'" in source
-    assert "case 'task_history':" in source
-    assert "<BatchRecordsPage" in source[source.index("case 'task_history':") :]
-    assert "case 'draft_edit_save':" in source
-    assert "<BatchEditPage" in source[source.index("case 'draft_edit_save':") :]
-    assert "task_history: 'product_tasks'" not in source
-    assert "onShowDraftEdit={() => setActiveSection('draft_edit_save')}" in source
+    assert not BATCH_EDIT_PAGE_TSX.exists()
+    assert "<BatchEditPage" not in source
+    assert "draft_edit_save: 'draft_selection'" in source
+    assert "<BatchSavePlaceholderPage" in source
+    assert "<BatchRecordsPage" in source
+    assert "showBatchRecords(batchId)" in source
 
 
 def test_low_noise_pages_hide_legacy_single_save_safety_bar():
@@ -33,71 +30,40 @@ def test_low_noise_pages_hide_legacy_single_save_safety_bar():
     assert "<SafetyStatusBar" in render
 
 
-def test_batch_builder_uses_only_live_backend_scope_and_enabled_bundle_templates():
-    source = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
-
-    assert "postJson<DraftBoxScopeSnapshot>('/api/dxm/draft-box/scope-snapshots'" in source
-    assert "postJson<EditBatchDetail>('/api/edit-batches'" in source
-    assert "template.template_type === 'edit_batch_bundle'" in source
-    assert "template.is_enabled" in source
-    assert "scope_snapshot_id: scopeSnapshot.id" in source
-    assert "template_id: selectedTemplate.id" in source
-    assert "范围已冻结，等待一次批准" in source
-    assert "CONFIRM_DXM_BATCH_SAVE_ONLY" in source
-    assert "一次批准后严格串行处理，每件只保存、不发布" in source
-    assert "检查模板中心" in source
-    assert "localStorage" not in source
-    assert "mock" not in source.lower()
-    assert "/approve-and-start" in source
-    # No publish API call or action handler (publishguard CSS class is a safe guard)
-    import re as _re
-    publish_action = _re.findall(
-        r"(?<!publishguard-)publish(?![a-z])", source, _re.IGNORECASE
-    )
-    assert not publish_action, f"Unexpected publish references: {publish_action[:5]}"
+def test_active_frontend_contains_no_legacy_batch_mutation_route():
+    import re
+    for path in FRONTEND_SRC.rglob("*"):
+        if path.suffix not in {".ts", ".tsx"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        assert not re.search(r"(?:postJson|patchJson|deleteJson)[^\n]*['\"`](/api/edit-batches)", source), path
+    snapshot = (FRONTEND_SRC / "components/workbench/BatchSavePlaceholderPage.tsx").read_text(encoding="utf-8")
+    assert "plan.path !== 'B'" in snapshot
+    assert "postJson<PlanSnapshot>('/api/plan-snapshots'" in snapshot
 
 
-def test_batch_builder_shows_frozen_order_and_live_scope_evidence():
-    source = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
-
-    for field in [
-        "scopeSnapshot.items",
-        "scopeSnapshot.store_identity",
-        "scopeSnapshot.filter_state",
-        "scopeSnapshot.sort_state",
-        "scopeSnapshot.page_state",
-        "scopeSnapshot.zero_write_proof",
-    ]:
-        assert field in source
-    assert "item.ordinal" in source
-    assert "item.title" in source
-    assert "item.dxm_product_id" in source
+def test_snapshot_preserves_reader_scope_and_order_before_approval():
+    source = (FRONTEND_SRC / "components/workbench/BatchSavePlaceholderPage.tsx").read_text(encoding="utf-8")
+    assert "product_ids: taskInput.input.productIds" in source
+    assert "session_ref: taskInput.sessionRef" in source
+    assert "expected_snapshot_hash: expectedSnapshotHash" in source
+    assert "frozen.task_id === createdTask.id" in source
+    assert "frozen.path === 'B'" in source
 
 
-def test_batch_builder_handles_nullable_page_facts_and_proves_all_zero_write_dimensions():
-    page_source = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
-    types_source = TYPES_TS.read_text(encoding="utf-8")
-    zero_write = page_source[page_source.index("function isZeroWriteProven"):]
-    capture = page_source[page_source.index("async function captureLiveScope"):page_source.index("async function createDraftBatch")]
-
-    for field in ["current_page", "page_size", "total_items"]:
-        assert f"{field}: number | null" in types_source
-    for field in ["navigation_attempted", "interactive_action_attempted", "mutation_dispatch_attempted"]:
-        assert f"proof.{field} === false" in zero_write
-    assert "if (!selectedTemplate)" not in capture
-    assert "不影响只读范围读取" in page_source
-    assert '<details className="batch-scope-review">' in page_source
-    assert "第 {scopeSnapshot.page_state.current_page} 页" not in page_source
+def test_frozen_product_approval_requires_explicit_execution_release():
+    source = (FRONTEND_SRC / "components/workbench/BatchSavePlaceholderPage.tsx").read_text(encoding="utf-8")
+    assert "frozen?.approval_context.runner_released === true" in source
+    assert "执行能力尚未放行" in source
+    assert "MIN_DRAFT_SELECTION" in source
+    assert "MAX_DRAFT_SELECTION" in source
 
 
 def test_unknown_batch_errors_do_not_echo_raw_backend_messages():
-    page_source = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
     records_source = BATCH_RECORDS_PAGE_TSX.read_text(encoding="utf-8")
-    batch_error = page_source[page_source.index("function humanBatchError"):page_source.index("function templateVersion")]
     records_error = records_source[records_source.index("function humanRecordsError"):records_source.index("function humanBatchStatus")]
-
-    assert "${message ?" not in batch_error
     assert "${message ?" not in records_error
+    assert "postJson" not in records_source
 
 
 def test_batch_records_loads_real_summaries_and_details_without_fake_success():
@@ -105,7 +71,7 @@ def test_batch_records_loads_real_summaries_and_details_without_fake_success():
 
     assert "getJson<EditBatchSummary[]>('/api/edit-batches')" in source
     assert "getJson<EditBatchDetail>(`/api/edit-batches/${batchId}`)" in source
-    assert "范围和模板已冻结，尚未开始处理商品" in source
+    assert "旧批次不能批准或启动" in source
     assert "结果不确定待对账" in source
     assert "localStorage" not in source
     assert "mock" not in source.lower()

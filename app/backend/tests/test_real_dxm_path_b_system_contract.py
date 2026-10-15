@@ -17,6 +17,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.content_authority_case import (
+    _scope_facts, _prepared_scope, _approval_facts, _prepared_approval, _shared_required_editor_actions_plan,
+)
+
 from src import db
 from src.batch_edit.full_product_edit_orchestrator import (
     EditPhase,
@@ -70,71 +74,8 @@ HASH_D = "D" * 64
 GIT_HEAD = "1" * 40
 
 
-def _scope_facts(*, task_id: int = 701) -> dict:
-    products = []
-    for ordinal, product_id in enumerate((8101, 8102, 8103), start=1):
-        products.append(
-            {
-                "ordinal": ordinal,
-                "productId": product_id,
-                "allowedFields": [
-                    {
-                        "field": "title",
-                        "saveStage": "SAVE1",
-                        "preimageSha256": HASH_A,
-                        "expectedSha256": HASH_B,
-                    },
-                    {
-                        "field": "semi_goods",
-                        "saveStage": "SAVE2",
-                        "preimageSha256": HASH_C,
-                        "expectedSha256": HASH_D,
-                    },
-                ],
-                "saves": [
-                    {"stage": "SAVE1", "maxPhysicalRequests": 1},
-                    {"stage": "SAVE2", "maxPhysicalRequests": 1},
-                ],
-            }
-        )
-    return {
-        "schema": REAL_DXM_WRITE_SCOPE_SCHEMA,
-        "stage": "execute",
-        "path": "B",
-        "issuedAt": ISSUED_AT,
-        "expiresAt": EXPIRES_AT,
-        "nonce": "scope-nonce-00000001",
-        "account": {"accountContextHash": HASH_A},
-        "shop": {"shopId": 91, "shopName": "Contract Shop"},
-        "snapshot": {
-            "snapshotId": 601,
-            "snapshotSha256": HASH_B,
-            "taskId": task_id,
-        },
-        "git": {"head": GIT_HEAD},
-        "worktree": {
-            "schema": "dxm.git-worktree.identity.v1",
-            "git_head": GIT_HEAD,
-            "git_dirty": False,
-            "status_count": 0,
-            "status_sha256": EMPTY_SHA256,
-            "execution_file_count": 12,
-            "execution_tree_sha256": HASH_C,
-        },
-        "runtime": {
-            "runtimeInstanceId": "backend-runtime-contract",
-            "browserRuntimeId": "browser-runtime-contract",
-            "browserSessionId": "persistent-session-contract",
-        },
-        "l2": {"status": "passed", "evidenceFingerprint": HASH_D},
-        "orderedProducts": products,
-        "publishAllowed": False,
-        "maxPhysicalRequestsPerSave": 1,
-    }
 
 
-def _prepared_scope(*, task_id: int = 701) -> dict:
-    return prepare_real_dxm_write_scope(_scope_facts(task_id=task_id), now=NOW)
 
 
 def test_save2_freeze_is_deferred_without_inventing_preimages():
@@ -393,25 +334,8 @@ def test_late_save2_uses_shared_executor_and_checks_the_seal_before_dispatch():
     assert not any(_call_name(node) in {'goto', 'click', '_goto_with_live_hud'} for node in ast.walk(tree) if isinstance(node, ast.Call))
 
 
-def _approval_facts(scope: dict) -> dict:
-    return {
-        "schema": REAL_DXM_WRITE_APPROVAL_SCHEMA,
-        "stage": "execute",
-        "scopeSha256": scope["scopeSha256"],
-        "nonce": scope["nonce"],
-        "approvedAt": APPROVED_AT,
-        "expiresAt": scope["expiresAt"],
-        "approvedBy": "contract-operator",
-        "decision": "APPROVE",
-    }
 
 
-def _prepared_approval(scope: dict) -> dict:
-    return prepare_real_dxm_write_approval(
-        _approval_facts(scope),
-        scope=scope,
-        now=NOW,
-    )
 
 
 @pytest.fixture()
@@ -881,6 +805,7 @@ def test_writer_fence_is_shop_scoped_and_release_invalidates_owner(contract_db) 
 
 
 def test_orchestrator_blocks_missing_failed_readback_or_receipt() -> None:
+    from tests.support.path_b_receipts import section_receipt, capability_receipt
     orchestrator = FullProductEditOrchestrator()
     required = (
         *orchestrator.MAIN_SECTIONS,
@@ -897,7 +822,11 @@ def test_orchestrator_blocks_missing_failed_readback_or_receipt() -> None:
         ("readback_proven", False),
         ("receipt_sha256", "not-a-receipt-hash"),
     ):
-        results = {name: _verified_section_receipt() for name in required}
+        results = {name: section_receipt(name) for name in orchestrator.MAIN_SECTIONS}
+        results.update({name: capability_receipt(name) for name in orchestrator.CONTENT_FINALIZE_CAPABILITIES})
+        complete = orchestrator.execute_phase(orchestrator.create_context("8101", "91"),
+                                               EditPhase.PHASE_MAIN_EDIT, deepcopy(results))
+        assert complete.status == PhaseStatus.COMPLETED
         results[required[0]][field_name] = bad_value
         ctx = orchestrator.create_context("8101", "91")
         blocked = orchestrator.execute_phase(ctx, EditPhase.PHASE_MAIN_EDIT, results)
@@ -1495,28 +1424,6 @@ def test_shared_sku_rule_preserves_identity_and_has_one_resolution_authority() -
     assert "self._resolve_field_value(" in preflight
 
 
-def _shared_required_editor_actions_plan():
-    return {
-        "id": 71, "name": "共享动作合同", "version": "1.0.0", "shop_id": "91",
-        "category_ids": ["17"], "path": "B", "configuration_contract": "local_plan_template.v3",
-        "status": "draft", "source_snapshots": {}, "dxm_template_refs": [],
-        "fixed_values": {"publish_allowed": False, "field_values": {"17": {}}},
-        "fill_rules": {"17": {}}, "source_policies": {"17": {}},
-        "field_mappings": {"17": {"mapping_version": "1.0.0", "entries": [{
-            "field_key": "title", "ui_label_zh": "标题", "ui_binding": "dxm_editor:title",
-            "category_schema_path": "$.properties.title",
-        }]}},
-        "editor_actions": {"17": {
-            "video": {"enabled": True, "failure_strategy": "pause", "max_wait_seconds": 300, "poll_interval_seconds": 5},
-            "wholesale": {"enabled": True, "min_quantity": 3, "discount_percent": 10, "deduction_method": "payment"},
-            "translation": {"enabled": True, "translate_type": "normal", "direction": "zh_en",
-                            "apply_to": ["title", "attributes", "description_pc", "description_mobile", "custom_name"]},
-            "description": {"editor": "new", "generate_mobile_from_pc": True, "confirm_before_save": True},
-            "marketing_images": {"generate_from_product_images": True, "required_slots": ["1:1_white_background", "3:4_scene"]},
-        }},
-        "validation_policy": {"required_fields": "fail_closed", "natural_language": "english_before_save"},
-        "exception_policy": {"unknown": "stop_batch"}, "provenance": "pure contract only",
-    }
 
 
 def test_shared_required_editor_actions_are_explicit_and_never_product_overrides():
@@ -2094,7 +2001,7 @@ def test_shared_preimage_preflight_preserves_raw_values_without_any_write() -> N
                   and isinstance(node.value, str) and node.value.startswith("({fields, operation, preimage})"))
     check = r"""
 const assert = require('node:assert/strict');
-const run = new Function('return (' + JSON.parse(process.argv[1]) + ')')();
+const run = new Function('return (' + JSON.parse(require('node:fs').readFileSync(0, 'utf8')) + ')')();
 const noWrite = () => { throw Error('preflight attempted a write'); };
 const control = {tagName:'INPUT', value:'  Before\nvalue  ', disabled:false, readOnly:false,
   getAttribute: key => key === 'type' ? 'text' : null, hasAttribute:() => false,
@@ -2125,7 +2032,7 @@ field.resolved_value = 'old';
 assert.equal(preflight().ok, false); // A value readable now may not be restorable.
 assert.equal(control.value, 'old');
 """
-    result = subprocess.run(["node", "-e", check, json.dumps(script)], capture_output=True, text=True, encoding="utf-8", timeout=15)
+    result = subprocess.run(["node", "-e", check], input=json.dumps(script), capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -2177,7 +2084,7 @@ def test_preimage_restore_writer_keeps_whitespace_and_rejects_lossy_controls() -
                   and isinstance(node.value, str) and node.value.startswith("({fields, operation, preimage})"))
     check = r"""
 const assert = require('node:assert/strict');
-const run = new Function('return (' + JSON.parse(process.argv[1]) + ')')();
+const run = new Function('return (' + JSON.parse(require('node:fs').readFileSync(0, 'utf8')) + ')')();
 let writes = 0;
 const control = {tagName:'TEXTAREA', value:'old', children:[], disabled:false, readOnly:false,
   getAttribute:() => null, hasAttribute:() => false, matches:() => true,
@@ -2198,7 +2105,7 @@ control.getAttribute = key => key === 'contenteditable' ? 'true' : null;
 assert.equal(run({fields,operation:'preflight',preimage:null}).ok, false);
 assert.equal(writes, 3);
 """
-    result = subprocess.run(["node", "-e", check, json.dumps(script)], capture_output=True, text=True, encoding="utf-8", timeout=15)
+    result = subprocess.run(["node", "-e", check], input=json.dumps(script), capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -2239,7 +2146,7 @@ def test_save1_first_write_compares_raw_preimage_and_checks_choice_restoreabilit
                   and isinstance(node.value, str) and node.value.startswith("({fields, operation, preimage})"))
     check = r"""
 const assert = require('node:assert/strict');
-const run = new Function('return (' + JSON.parse(process.argv[1]) + ')')();
+const run = new Function('return (' + JSON.parse(require('node:fs').readFileSync(0, 'utf8')) + ')')();
 let writes = 0;
 const control = {tagName:'TEXTAREA', value:' before ', children:[], disabled:false, readOnly:false,
   getAttribute:() => null, hasAttribute:() => false, matches:() => true,
@@ -2267,7 +2174,7 @@ fields[0].resolved_value = ['a','b'];
 assert.equal(run({fields,operation:'preflight',preimage:null}).ok, false);
 assert.equal(writes, 3);
 """
-    result = subprocess.run(["node", "-e", check, json.dumps(script)], capture_output=True, text=True, encoding="utf-8", timeout=15)
+    result = subprocess.run(["node", "-e", check], input=json.dumps(script), capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert result.returncode == 0, result.stderr
     method = inspect.getsource(DxmLoginFlow._prepare_frozen_execution_page_for_save)
     assert method.index("prepared['attempted'] = True") < method.index("fill_result = self._fill_frozen_execution_payload_on_page")
@@ -2308,7 +2215,9 @@ def test_save1_shared_fill_prepares_once_preserves_raw_baseline_and_never_falls_
 
     page.evaluate = evaluate
     flow = SimpleNamespace(
-        _execution_evidence_context={'task_id': 1, 'job_id': 2},
+        _execution_evidence_context={'task_id': 1, 'job_id': 2, 'command_id': 'first-fill',
+            'runtime_id': 'unit-runtime', 'browser_session_id': 'unit-session',
+            'state': 'FILL_BASE_INFO', 'command_action': 'fill_editor_required_defaults'},
         _save1_prefill_state={'observation': observation, 'page': page,
                              'task_id': 1, 'job_id': 2, 'attempted': False, 'result': None},
         browser_session_id=lambda: 'unit-session',
@@ -2562,7 +2471,7 @@ def test_stock_deduction_binding_uses_observed_wire_values_and_one_group() -> No
                   and isinstance(node.value, str) and node.value.startswith("({fields, operation, preimage})"))
     check = r"""
 const assert = require('node:assert/strict');
-const run = new Function('return (' + JSON.parse(process.argv[1]) + ')')();
+const run = new Function('return (' + JSON.parse(require('node:fs').readFileSync(0, 'utf8')) + ')')();
 let writes = 0;
 const group = {};
 const radios = ['payment_success_deduct', 'place_order_withhold'].map((value, index) => ({
@@ -2595,7 +2504,7 @@ assert.equal(read().ok, false);
 assert.equal(run({fields,operation:'apply',preimage:null}).ok, false);
 assert.equal(writes, 4);
 """
-    result = subprocess.run(["node", "-e", check, json.dumps(script)], capture_output=True, text=True, timeout=15)
+    result = subprocess.run(["node", "-e", check], input=json.dumps(script), capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -3551,6 +3460,7 @@ assert.equal(read('publish').execution_allowed,false);
     assert "'executionAllowed': False, 'capabilityCertified': False" in source
     assert "'contentSurface': content_surface" in source
 def test_content_commands_share_scope_authority_and_keep_save_leases_separate(contract_db, monkeypatch):
+    from src.execution.batch_command_contract import BatchCommandContractError, validate_path_b_save1_discovery_dispatch
     from dataclasses import replace
     from src import repository as repository_module
     from src.batch_edit.plan_snapshot_store import PlanSnapshotStore
@@ -3562,81 +3472,13 @@ def test_content_commands_share_scope_authority_and_keep_save_leases_separate(co
     from src.execution.v1_runner import V1TaskRunner
     from src.state_machine.batch_draft_authorization import build_batch_draft_save_task_facts, build_authorization_context
 
-    # Synthetic state only: no adapter, browser, business response or SAVE receipt.
-    for module, name in ((repository_module, 'now_iso'), (authority, 'utc_now_iso'), (ledger_module, 'utc_now_iso')):
-        monkeypatch.setattr(module, name, lambda: NOW)
-    repo = Repository()
-    store = repo.create_store('Contract Shop', 'AliExpress')
-    products = [81010001, 81010002, 81010003]
-    actions = _shared_required_editor_actions_plan()['editor_actions']['17']
-    values = {'title': 'Shared input', 'videoUrl': '', 'bulkOrder': 3, 'semi_goods': 2}
-    properties = {key: {'type': 'string' if isinstance(value, str) else 'integer',
-        'ui_binding': 'dxm_editor:'+key, 'ui_section': 'semi_managed' if key == 'semi_goods' else 'basic_info'}
-        for key, value in values.items()}
-    properties['title']['natural_language'] = True
-    properties['videoUrl']['ui_control'] = 'media'
-    schema = {'type': 'object', 'properties': properties}
-    mapping = {'mapping_version': 'unit.content.v1', 'entries': [{'field_key': key, 'ui_binding': definition['ui_binding'],
-        'ui_label_zh': '字段', 'category_schema_path': '$.properties.'+key,
-        **({'delegated_to': 'content_finalize.'+('video' if key == 'videoUrl' else 'translation')} if key in {'videoUrl', 'title'} else {})}
-        for key, definition in properties.items()]}
-    resolution = {'resolved_fields': [{'field_key': key, 'resolved_value': value} for key, value in values.items() if key != 'semi_goods'],
-        'unresolved_fields': [], 'price_validation': {}}
-    items = []
-    for product in products:
-        target = build_frozen_product_target_identity(product_id=str(product), store_name=store['name'],
-            source_urls=[f'https://detail.1688.com/offer/{product}.html'])
-        item = {'product_id': str(product), 'shop_id': str(store['id']), 'categoryId': '17',
-            'target_identity': target, 'target_identity_sha256': canonical_sha256(target),
-            'current_value_snapshot': deepcopy(values), 'category_schema': {'normalized_schema': schema, 'schema_hash': canonical_sha256(schema)},
-            'field_mapping': {**mapping, 'mapping_hash': canonical_sha256(mapping)},
-            'resolution_result': {**resolution, 'resolution_hash': canonical_sha256(resolution)},
-            'real_write_stage_fields': {'SAVE1': ['title', 'videoUrl', 'bulkOrder'], 'SAVE2': ['semi_goods']}}
-        item['content_finalize_policy'] = build_content_finalize_policy(item, editor_actions=actions, source_sha256=HASH_B)
-        semi_policy = {'schema': 'dxm.deferred_save2_policy.v1', 'freeze_timing': 'after_native_gate', 'source_sha256': HASH_B,
-            'fields': [{'field_key': 'semi_goods', 'ui_binding': 'dxm_editor:semi_goods', 'ui_label_zh': '字段',
-                'property_schema': properties['semi_goods'], 'rule': {'value': 2}}]}
-        item['deferred_save2'] = {**semi_policy, 'policy_sha256': canonical_sha256(semi_policy)}
-        items.append(item)
-    body = {'schema': 'dxm_batch_draft_save_plan.v1', 'mode': 'batch_draft_save', 'path': 'B', 'shop_scope': str(store['id']),
-        'publish_allowed': False, 'local_plan_template': {'id': 71, 'version': '1.0.0'}, 'plan_content_sha256': HASH_B,
-        'editor_actions': {'17': actions}, 'product_ids': [str(value) for value in products], 'item_snapshots': items,
-        'session_context': {'session_ref': 'unit-reader', 'account_ref_hash': HASH_A, 'shop_id': str(store['id']), 'shop_name': store['name']}}
-    plan = {**body, 'snapshot_hash': plan_snapshot_sha256(body)}
-    row = PlanSnapshotStore().freeze_with_task(plan, idempotency_key='unit-content-dispatch')
-    facts = _scope_facts(task_id=row['task_id'])
-    facts.update(schema='real_dxm_write_scope.v3', shop={'shopId': store['id'], 'shopName': store['name']},
-        snapshot={'snapshotId': row['id'], 'snapshotSha256': plan['snapshot_hash'], 'taskId': row['task_id']})
-    for scoped, product, item in zip(facts['orderedProducts'], products, items):
-        scoped.update(productId=product, allowedFields=frozen_scope_field_bindings(item))
-    scope = prepare_real_dxm_write_scope(facts, now=NOW)
-    assert repo.prepare_real_dxm_write_scope(scope)['ok'] is True
-    assert repo.consume_real_dxm_write_approval(scope=scope, approval=_prepared_approval(scope))['ok'] is True
-    task = repo.get_task_private(row['task_id'])
-    from src.execution.batch_command_contract import build_path_b_save1_discovery_profile, validate_path_b_save1_discovery_dispatch, BatchCommandContractError
-    profile = build_path_b_save1_discovery_profile(task, target_product_id=products[0], scope_sha256=scope['scopeSha256'],
-        approval_sha256=task['payload']['real_dxm_write_authorization']['approval_sha256'], discovery_key_sha256=HASH_C)
-    task['payload']['real_dxm_path_b_discovery'] = profile
-    with db.connection() as conn:
-        conn.execute('UPDATE tasks SET payload_json=? WHERE id=?', (db.dumps(task['payload']), task['id']))
-    stages = build_batch_draft_save_task_facts(task_id=task['id'], store_id=store['id'], product_ids=products,
-        plan_snapshot_id=row['id'], plan_snapshot_hash=plan['snapshot_hash'], path='B',
-        real_authorization=task['payload']['real_dxm_write_authorization'])
-    context = build_authorization_context(stage_task_facts=stages, runtime_instance_id=facts['runtime']['runtimeInstanceId'],
-        browser_session_id=facts['runtime']['browserSessionId'], git_head=GIT_HEAD, worktree_identity=facts['worktree'],
-        l2_evidence_fingerprint=HASH_D, approved_by='contract-operator')
-    assert repo.approve_and_start_task_with_authorization(task['id'], token='unit-only', confirmation='CONFIRM_DXM_SAVE_ONLY',
-        approved_by='contract-operator', authorization_context=context, lease_id='unit-parent', issued_at=ISSUED_AT,
-        consumed_at=NOW, expires_at='2026-08-31T00:04:00Z').ok is True
-    live = authority.LiveDispatchFacts(runtime_instance_id=facts['runtime']['runtimeInstanceId'],
-        browser_runtime_id=facts['runtime']['browserRuntimeId'], browser_session_id=facts['runtime']['browserSessionId'],
-        git_head=GIT_HEAD, worktree_identity=facts['worktree'], l2_status='passed', l2_evidence_fingerprint=HASH_D, account_ref_hash=HASH_A)
-    current_live = [live]
-    ledger = MutationDispatchLedger(recover_inflight=False, live_facts_provider=lambda: current_live[0])
-    dispatch = ControlledMutationDispatch(ledger=ledger)
-    runner = V1TaskRunner(repo, None)
-    monkeypatch.setattr(runner, '_browser_agent_runtime_id', lambda: live.browser_runtime_id)
-    original_leases = deepcopy(task['payload']['real_dxm_write_authorization']['save_leases'])
+    from tests.support.content_authority_case import content_dispatch_case
+
+    case = content_dispatch_case(monkeypatch)
+    repo, store, products = case['repository'], case['store'], case['products']
+    task, live, current_live = case['task'], case['live'], case['current_live']
+    ledger, dispatch, runner = case['ledger'], case['dispatch'], case['runner']
+    original_leases = case['original_leases']
     commands = []
     for state, (action, mutation) in CONTENT_MUTATION_COMMANDS.items():
         task = repo.get_task_private(task['id'])
@@ -3966,7 +3808,10 @@ def test_native_translation_observation_and_action_contract_bind_the_actual_disp
     assert flow.index('def click_language') < flow.index('window.arm()') < flow.index('language.click(')
     assert 'validate_native_translation_values(payload, before, verified, network)' in flow
     assert 'login_flow.translate_editor_content(' in inspect.getsource(DxmWorkflowAdapter.translate_editor_content)
-    assert "action in {'validate_editor_wholesale', 'translate_editor_content'}" in inspect.getsource(execute_browser_agent_action)
+    dispatch = inspect.getsource(execute_browser_agent_action)
+    for action in ('validate_editor_wholesale', 'translate_editor_content'):
+        assert f"if action == '{action}':" in dispatch
+        assert f"return adapter.{action}(" in dispatch
 
 
 def test_translation_native_click_returns_worker_dispatch_confirmation_only_after_click():
@@ -4101,7 +3946,7 @@ def test_translation_persistence_sources_and_runner_reject_reuse_and_drift():
     persist = inspect.getsource(Repository.persist_path_b_editor_source)
     assert "'BATCH_TRANSLATE_EXECUTE': 'translate_editor_content'" in persist
     assert 'validate_translation_wholesale_source(' in persist and 'validate_translation_source(' in persist
-    assert 'validate_current_task_against_frozen_authority(conn, authority)' in persist
+    assert 'validate_current_translation_authority(conn, authority, command=parsed, observation=observed)' in persist
     assert "parent.get('artifacts') != load_browser_agent_action_source(" in persist
     assert persist.index('validate_translation_source(') < persist.index('INSERT INTO job_evidences')
     run = inspect.getsource(V1TaskRunner._run_workflow_action_browser_agent)

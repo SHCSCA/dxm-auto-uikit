@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from playwright.sync_api import Browser, Page, Route, sync_playwright
+from frontend_browser_fixtures import _e2_plan_payload, _install_e2_plan_routes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -159,9 +160,15 @@ def _install_reader_routes(page: Page, state: dict[str, object]) -> None:
                 }),
             )
             return
+        if path == "/api/dxm/category/get":
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "categoryId": "100", "pcid": "0", "nodePathId": "100",
+                "nameZh": "真实目标叶子", "isleaf": True, "executableLeaf": True,
+            }, ensure_ascii=False))
+            return
         route.fallback()
 
-    page.route("**/api/dxm/draft-reader/**", handle)
+    page.route("**/api/dxm/**", handle)
 
 
 def _confirm_three_products(page: Page, *, expect_confirmed: bool = True) -> None:
@@ -316,428 +323,6 @@ def test_real_app_start_save_navigation_opens_safe_placeholder(
     page.close()
 
 
-def _e2_plan_payload() -> dict[str, object]:
-    return {
-        "model": "local_plan_template",
-        "id": 9,
-        "lineage_id": 9,
-        "supersedes_id": None,
-        "name": "浏览器测试方案",
-        "version": "1.0.0",
-        "shop_id": "3001",
-        "category_ids": ["100"],
-        "path": "A",
-        "fixed_values": {"publish_allowed": False},
-        "fill_rules": {"100": {}},
-        "dxm_template_refs": [{
-            "ref_id": 31,
-            "source_digest": "A" * 64,
-        }],
-        "field_mappings": {
-            "100": {
-                "mapping_version": "zh-map-100-v1",
-                "entries": [
-                    {
-                        "ui_label_zh": "英文标题",
-                        "field_key": "title",
-                        "category_schema_path": "$.properties.title",
-                        "ui_binding": "dxm_editor:title",
-                    },
-                    {
-                        "ui_label_zh": "材质",
-                        "field_key": "material",
-                        "category_schema_path": "$.properties.material",
-                        "ui_binding": "dxm_attribute:5301",
-                    },
-                ],
-            }
-        },
-        "validation_policy": {
-            "required_fields": "fail_closed",
-            "natural_language": "english_before_save",
-        },
-        "exception_policy": {"unknown": "stop_batch"},
-        "provenance": "operator_reviewed_local_plan",
-        "is_active": True,
-        "created_at": "2026-07-30T00:00:00Z",
-        "updated_at": "2026-07-30T00:00:00Z",
-    }
-
-
-def _e2_snapshot(*, frozen: bool) -> dict[str, object]:
-    snapshot_hash = "C" * 64
-    return {
-        **({"id": 5, "task_id": 17} if frozen else {}),
-        "schema": "dxm_batch_draft_save_plan.v1",
-        "mode": "batch_draft_save",
-        "path": "A",
-        "shop_scope": "3001",
-        "product_ids": ["70001", "70002", "70003"],
-        "local_plan_template": {"id": 9, "version": "1.0.0"},
-        "dxm_template_refs": [],
-        "fixed_values": {"publish_allowed": False},
-        "fill_rules": {"100": {}},
-        "session_context": {
-            "session_ref": "0123456789abcdef",
-            "account_ref_hash": "D" * 64,
-            "shop_id": "3001",
-        },
-        "approval_context": {
-            "state": "not_granted",
-            "runner_released": False,
-            "publish_allowed": False,
-        },
-        "item_snapshots": [
-            {"product_id": product_id}
-            for product_id in ("70001", "70002", "70003")
-        ],
-        "evidence_policy": "three_proofs",
-        "failure_policy": {"unknown": "stop_batch"},
-        "publish_allowed": False,
-        "snapshot_hash": snapshot_hash,
-    }
-
-
-def _install_e2_plan_routes(
-    page: Page,
-    requests: list[tuple[str, str, object | None]],
-    *,
-    approval_response_lost: bool = False,
-    empty_choice_field: bool = False,
-) -> None:
-    approval_state = {"dispatched": False}
-
-    def handle(route: Route) -> None:
-        path = urlparse(route.request.url).path
-        method = route.request.method
-        body = (
-            route.request.post_data_json
-            if method == "POST" and route.request.post_data
-            else None
-        )
-        requests.append((method, path, body))
-        if path == "/api/dxm/category/children":
-            pcid = parse_qs(urlparse(route.request.url).query).get("pcid", [""])[0]
-            records = {
-                "": [{"categoryId": "10", "nameZh": "一级测试类目", "isleaf": False, "level": 1}],
-                "10": [{"categoryId": "20", "nameZh": "二级测试类目", "pcid": "10", "isleaf": False, "level": 2}],
-                "20": [{"categoryId": "100", "nameZh": "测试类目", "pcid": "20", "isleaf": True, "level": 3}],
-            }.get(pcid, [])
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps(records, ensure_ascii=False),
-            )
-            return
-        if path == "/api/dxm/category/get":
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps({
-                    "categoryId": "100",
-                    "nameZh": "测试类目",
-                    "nodePath": "一级测试类目/二级测试类目/测试类目",
-                    "nodePathId": "10/20/100",
-                    "pcid": "20",
-                    "isleaf": True,
-                    "level": 3,
-                }, ensure_ascii=False),
-            )
-            return
-        if path == "/api/dxm/draft-reader/shops":
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps({
-                    "source": "api",
-                    "session_bound": True,
-                    "session_ref": "0123456789abcdef",
-                    "shops": [{
-                        "id": "3001",
-                        "name": "浏览器测试店铺",
-                        "platform": "smt",
-                        "shop_type": "POP",
-                    }],
-                }, ensure_ascii=False),
-            )
-            return
-        if path == "/api/dxm/draft-reader/products":
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps({
-                    "source": "api",
-                    "session_bound": True,
-                    "session_ref": "0123456789abcdef",
-                    "filter": {"shop_id": "3001", "dxm_state": "draft"},
-                    "pagination": {
-                        "page_no": 1,
-                        "page_size": 100,
-                        "total_pages": 1,
-                        "total_items": 1,
-                        "has_previous": False,
-                        "has_next": False,
-                    },
-                    "items": [{
-                        "id": "70001",
-                        "shop_id": "3001",
-                        "subject": "Draft 70001",
-                        "category_id": "100",
-                        "category_name": "测试类目",
-                        "dxm_state": "draft",
-                    }],
-                    "deduplicated_count": 0,
-                }, ensure_ascii=False),
-            )
-            return
-        if path == "/api/dxm-template-refs/sync":
-            route.fulfill(
-                status=201,
-                content_type="application/json",
-                body=json.dumps({
-                    "source": "api",
-                    "session_bound": True,
-                    "session_ref": "0123456789abcdef",
-                    "shop_id": "3001",
-                    "category_ids": ["100"],
-                    "category_schemas": {
-                        "100": {
-                            "type": "object",
-                            "properties": {
-                                "title": {
-                                    "type": "string",
-                                    "minLength": 8,
-                                    "natural_language": True,
-                                    "ui_label_zh": "英文标题",
-                                    "ui_binding": "dxm_editor:title",
-                                    "ui_section": "basic_info",
-                                    "source_api": "/api/smtProduct/edit.json",
-                                },
-                                "material": {
-                                    "type": "string",
-                                    "ui_label_zh": "材质",
-                                    "ui_binding": "dxm_attribute:5301",
-                                    "ui_section": "attribute_info",
-                                    "source_api": "/api/smtCategory/attributeList.json",
-                                    "values": [
-                                        {
-                                            "id": "ABS",
-                                            "name": "Plastic",
-                                            "names": {"zh": "塑料"},
-                                        },
-                                        {
-                                            "id": "Metal",
-                                            "name": "Metal",
-                                            "names": {"zh": "金属"},
-                                        },
-                                    ],
-                                },
-                                "imageURLs": {
-                                    "type": "array",
-                                    "ui_label_zh": "主图与附图",
-                                    "ui_binding": "dxm_editor:imageURLs",
-                                    "ui_section": "product_info",
-                                    "source_api": "/api/smtProduct/edit.json",
-                                    "items": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                    },
-                                },
-                                **({
-                                    "attr_3": {
-                                        "type": "string",
-                                        "ui_label_zh": "自定义英文属性",
-                                        "ui_binding": "dxm_attribute:3",
-                                        "ui_section": "attribute_info",
-                                        "source_api": "/api/smtCategory/attributeList.json",
-                                        "natural_language": True,
-                                        "values": [],
-                                        "enum": [],
-                                    },
-                                } if empty_choice_field else {}),
-                            },
-                            "required": ["title", "material"],
-                        }
-                    },
-                    "editor_models": {
-                        "100": {
-                            "schema": "dxm_editor_form.v3",
-                            "category_id": "100",
-                            "sections": [
-                                {
-                                    "code": "basic_info",
-                                    "label": "基本信息",
-                                    "help": "标题与类目基础字段。",
-                                    "order": 0,
-                                    "field_keys": ["title"],
-                                    "templates": [],
-                                    "source_apis": ["/api/smtProduct/edit.json"],
-                                },
-                                {
-                                    "code": "attribute_info",
-                                    "label": "属性信息",
-                                    "help": "类目属性与属性模板。",
-                                    "order": 1,
-                                    "field_keys": [
-                                        "material",
-                                        *(["attr_3"] if empty_choice_field else []),
-                                    ],
-                                    "templates": [{
-                                        "ref_id": 31,
-                                        "ref_type": "attribute",
-                                        "dxm_template_id": "902",
-                                        "display_name": "属性模板甲",
-                                        "category_id": "100",
-                                        "source_digest": "A" * 64,
-                                        "resolved_field_keys": ["material"],
-                                        "resolved_values": {"material": "ABS"},
-                                    }],
-                                    "source_apis": [
-                                        "/api/smtAttributeTemplate/pageList.json",
-                                        "/api/smtCategory/attributeList.json",
-                                    ],
-                                },
-                                {
-                                    "code": "product_info",
-                                    "label": "产品信息",
-                                    "help": "图片、SKU 与价格字段。",
-                                    "order": 2,
-                                    "field_keys": ["imageURLs"],
-                                    "templates": [],
-                                    "source_apis": ["/api/smtProduct/edit.json"],
-                                },
-                                {
-                                    "code": "description_info",
-                                    "label": "描述信息",
-                                    "help": "尺码表与新版描述编辑器流程。",
-                                    "order": 3,
-                                    "field_keys": [],
-                                    "templates": [],
-                                    "source_apis": ["/api/smtProduct/edit.json"],
-                                    "widgets": [{
-                                        "kind": "description_editor",
-                                        "label": "描述",
-                                        "workflow": [
-                                            "使用新版编辑器",
-                                            "根据 PC 端描述一键生成",
-                                            "确认",
-                                            "保存",
-                                        ],
-                                    }],
-                                },
-                            ],
-                        }
-                    },
-                    "refs": [{
-                        "model": "dxm_template_ref",
-                        "id": 31,
-                        "ref_type": "attribute",
-                        "dxm_template_id": "902",
-                        "shop_id": "3001",
-                        "category_id": "100",
-                        "observed_display_name": "属性模板甲",
-                        "source_api": "/api/smtAttributeTemplate/pageList.json",
-                        "availability": "available",
-                        "source_digest": "A" * 64,
-                        "resolved_values_hash": "B" * 64,
-                        "resolved_field_count": 1,
-                        "synced_at": "2026-07-30T00:00:00Z",
-                    }],
-                }, ensure_ascii=False),
-            )
-            return
-        if path == "/api/local-plan-templates" and method == "POST":
-            route.fulfill(
-                status=201,
-                content_type="application/json",
-                body=json.dumps({
-                    **_e2_plan_payload(),
-                    **(body if isinstance(body, dict) else {}),
-                    "id": 10,
-                }, ensure_ascii=False),
-            )
-            return
-        if path == "/api/local-plan-templates/71" and method == "DELETE":
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps({
-                    **_e2_plan_payload(),
-                    "id": 71,
-                    "name": "可删除方案",
-                    "is_active": False,
-                }, ensure_ascii=False),
-            )
-            return
-        if path == "/api/local-plan-templates/9":
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps(_e2_plan_payload(), ensure_ascii=False),
-            )
-            return
-        if path == "/api/plan-snapshots/preview":
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps(_e2_snapshot(frozen=False), ensure_ascii=False),
-            )
-            return
-        if path == "/api/plan-snapshots":
-            route.fulfill(
-                status=201,
-                content_type="application/json",
-                body=json.dumps(_e2_snapshot(frozen=True), ensure_ascii=False),
-            )
-            return
-        if path == "/api/tasks/17" and method == "GET":
-            route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=json.dumps({
-                    "id": 17,
-                    "name": "E2 atomic draft",
-                    "status": (
-                        "running" if approval_state["dispatched"] else "draft"
-                    ),
-                    "mode": "batch_draft_save",
-                    "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-                    "total_jobs": 3,
-                    "completed_jobs": 0,
-                    "failed_jobs": 0,
-                    "payload": {"runner_released": False},
-                }, ensure_ascii=False),
-            )
-            return
-        if path == "/api/tasks/17/approve-and-start" and method == "POST":
-            approval_state["dispatched"] = True
-            route.fulfill(
-                status=503 if approval_response_lost else 200,
-                content_type="application/json",
-                body=json.dumps(
-                    {
-                        "detail": "simulated response loss",
-                    }
-                    if approval_response_lost
-                    else {
-                        "ok": True,
-                        "taskId": 17,
-                        "status": "running",
-                        "authorizationConsumed": True,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-            return
-        route.fulfill(
-            status=404,
-            content_type="application/json",
-            body='{"detail":"unexpected E2 browser route"}',
-        )
-
-    page.route("**/api/**", handle)
-
-
 def test_e2_local_plan_uses_structured_schema_controls_in_browser(
     browser: Browser,
     vite_origin: str,
@@ -757,7 +342,7 @@ def test_e2_local_plan_uses_structured_schema_controls_in_browser(
     dialog.locator("label").filter(has_text="店铺").locator("select").select_option(
         "3001"
     )
-    cascade = dialog.get_by_label("适用类目三级联动")
+    cascade = dialog.get_by_label("适用类目逐级选择")
     cascade.locator("select").nth(0).select_option("10")
     cascade.locator("select").nth(1).select_option("20")
     cascade.locator("select").nth(2).select_option("100")
@@ -789,6 +374,8 @@ def test_e2_local_plan_uses_structured_schema_controls_in_browser(
         if method == "POST" and path == "/api/local-plan-templates"
     )
     assert isinstance(create_body, dict)
+    assert create_body["path"] == "B"
+    assert create_body["status"] == "draft"
     assert create_body["fill_rules"]["100"] == {
         "material": {"value": "ABS"},
         "title": {"value": "English Product Title"},
@@ -834,7 +421,7 @@ def test_e2_empty_schema_choices_render_an_editable_type_control(
     dialog.locator("label").filter(has_text="店铺").locator("select").select_option(
         "3001"
     )
-    cascade = dialog.get_by_label("适用类目三级联动")
+    cascade = dialog.get_by_label("适用类目逐级选择")
     cascade.locator("select").nth(0).select_option("10")
     cascade.locator("select").nth(1).select_option("20")
     cascade.locator("select").nth(2).select_option("100")
@@ -864,7 +451,7 @@ def test_e2_description_uses_explicit_new_editor_workflow_contract(
         "新版描述方案"
     )
     dialog.locator("label").filter(has_text="店铺").locator("select").select_option("3001")
-    cascade = dialog.get_by_label("适用类目三级联动")
+    cascade = dialog.get_by_label("适用类目逐级选择")
     cascade.locator("select").nth(0).select_option("10")
     cascade.locator("select").nth(1).select_option("20")
     cascade.locator("select").nth(2).select_option("100")
@@ -878,6 +465,7 @@ def test_e2_description_uses_explicit_new_editor_workflow_contract(
     editor.get_by_role("checkbox").check()
     editor.get_by_role("button", name="保存动作配置").click()
     dialog.get_by_role("button", name="创建方案").click()
+    page.get_by_text("已保存「新版描述方案」").wait_for()
 
     create_body = next(
         body
@@ -964,6 +552,7 @@ def test_batch_task_atomic_approval_never_reposts_after_response_loss(
         page,
         requests,
         approval_response_lost=True,
+        execution_released=True,
     )
     page.goto(
         f"{vite_origin}/tests/browser/e2-plan-harness.html",

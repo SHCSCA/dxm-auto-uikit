@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.core.config_bus import env_string, get_config_bus
 from src.core.config import DATA_DIR, SCREENSHOT_DIR
 from src.batch_edit.plan_contract import E2PlanService, PlanContractError
 from src.batch_edit.plan_snapshot_compiler import (
@@ -546,7 +547,7 @@ class V1TaskRunner:
         self._task_writer_fences: dict[int, dict[str, Any]] = {}
 
     def _workflow_action_timeout_from_env(self) -> float:
-        raw = os.getenv("DXM_WORKFLOW_ACTION_TIMEOUT_SECONDS")
+        raw = env_string("DXM_WORKFLOW_ACTION_TIMEOUT_SECONDS")
         if raw:
             try:
                 value = float(raw)
@@ -557,7 +558,7 @@ class V1TaskRunner:
         return DEFAULT_WORKFLOW_ACTION_TIMEOUT_SECONDS
 
     def _workflow_action_runtime_from_env(self) -> str:
-        raw = (os.getenv("DXM_WORKFLOW_ACTION_RUNTIME") or "auto").strip().lower()
+        raw = (env_string("DXM_WORKFLOW_ACTION_RUNTIME") or "auto").strip().lower()
         if raw in {"auto", "thread", "process", "browser_agent"}:
             return raw
         return "auto"
@@ -4474,7 +4475,7 @@ class V1TaskRunner:
             "--result-file",
             str(result_file),
         ]
-        env = os.environ.copy()
+        env = dict(get_config_bus().environment)
         env["DXM_WORKFLOW_TRACE_FILE"] = str(trace_file)
         env.setdefault("DXM_WORKFLOW_PERSISTENT_PROFILE", "1")
         try:

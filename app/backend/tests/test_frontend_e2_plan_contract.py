@@ -54,7 +54,10 @@ def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
     assert "留空时沿用每件商品的原标题" in workspace
     assert "同步${label}选项" in workspace
     assert "representative_product_ids" not in workspace
-    assert "主编辑页 + 半托管" in workspace
+    assert "<ProductPathContract" in workspace
+    path_contract = (LOCAL_PLAN_TSX.parent / "ProductPathContract.tsx").read_text(encoding="utf-8")
+    assert "店小秘原生门裁决" in path_contract
+    assert "resolveSemiManagedAvailability" not in workspace
     assert "PLAN_PATH_EXECUTION_NOT_RELEASED" in (
         REPO_ROOT / "app" / "backend" / "src" / "batch_edit" / "plan_snapshot_compiler.py"
     ).read_text(encoding="utf-8")
@@ -74,10 +77,12 @@ def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
     assert "loadOrFallback<DxmTemplateRef[]>('/api/dxm-template-refs'" in app
 
 
-def test_local_plan_uses_explicit_three_level_category_scope_and_fail_closed_fields():
+def test_local_plan_uses_dynamic_leaf_category_scope_and_fail_closed_fields():
     workspace = LOCAL_PLAN_TSX.read_text(encoding="utf-8")
     cascade = CATEGORY_CASCADE_TSX.read_text(encoding="utf-8")
     shell = APP_SHELL_TSX.read_text(encoding="utf-8")
+    category_reader = (CATEGORY_CASCADE_TSX.parent / "useCategorySelection.ts").read_text(encoding="utf-8")
+    category_contract = (FRONTEND_SRC / "categorySelection.ts").read_text(encoding="utf-8")
 
     assert "<CategoryCascadePicker" in workspace
     assert "读取类目字段与模板" in workspace
@@ -86,10 +91,12 @@ def test_local_plan_uses_explicit_three_level_category_scope_and_fail_closed_fie
     assert "一个普货方案必须且只能选择一个末级类目" in workspace
     assert "方案类目（仅 1 个）" in workspace
     assert "setCategoryRecords([record])" in workspace
-    assert "/api/dxm/category/children?" in cascade
-    assert "/api/dxm/category/search?" in cascade
-    assert "适用类目三级联动" in cascade
-    assert "中文类目名称待读取" in cascade
+    assert "/api/dxm/category/children?" in category_reader
+    assert "/api/dxm/category/search?" in category_reader
+    assert "适用类目逐级选择" in cascade
+    assert "[0, 1, 2]" not in cascade
+    assert "executableLeaf === true" in category_contract
+    assert "中文名称待读取" in category_contract
     assert "frontendPackage.version" in shell
     assert "NavigationGlyph" in shell
     api = API_TS.read_text(encoding="utf-8")
@@ -103,7 +110,7 @@ def test_e2_ui_carries_per_item_category_and_freezes_before_atomic_batch_approva
     approval = BATCH_APPROVAL_TS.read_text(encoding="utf-8")
 
     assert "products: selectedIds" in draft_selection
-    assert "e2LocalPlans?.filter((plan) => plan.is_active)" in draft_selection
+    assert "plan.is_active && plan.path === 'B' && plan.shop_id === shopId" in draft_selection
     assert "localPlans={localPlans}" in APP_TSX.read_text(encoding="utf-8")
     assert "/api/plan-snapshots/preview" in snapshot
     assert "postJson<PlanSnapshot>('/api/plan-snapshots'" in snapshot

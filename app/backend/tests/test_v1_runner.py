@@ -21,6 +21,7 @@ from src.execution.v1_runner import V1ExecutionError, V1TaskRunner
 from src.repository import Repository
 from src.state_machine.contracts import StateName
 from tests.test_action_result_contract import _valid_save_result, _valid_unpublished_result
+from tests.support.network_receipts import complete_save_receipt
 
 
 def _test_runner(*args, **kwargs):
@@ -153,6 +154,7 @@ def _strict_test_save_result(*, target_identity: dict, store_name: str) -> dict:
         "code": 0,
         "msg": "您的产品编辑保存成功！",
     }
+    network = complete_save_receipt(network)
     network_audit = {
         "scope": "same_origin_write_window",
         "complete": True,
@@ -189,7 +191,8 @@ def _strict_test_save_result(*, target_identity: dict, store_name: str) -> dict:
         "publish_action_clicked": False,
         "text": "保存",
         "exact_save_count": 1,
-        "click_method": "native_exact_save",
+        "click_method": "playwright_exact_role",
+        "save_field_readbacks": deepcopy(_valid_save_result()["evidence"]["observations"]["save_field_readbacks"]),
         "network_save_success": True,
         "page_save_success": True,
         "mutation_authorization": authorization,
@@ -310,6 +313,7 @@ def _canonical_test_action_result(
         if legacy_result.get(key) is not None:
             observations[key] = legacy_result[key]
     if action == "save_only" and isinstance(save_result, dict) and save_result.get("ok") is True:
+        observations["save_field_readbacks"] = deepcopy(save_result["save_field_readbacks"])
         observations.update(
             {
                 "exact_save_target": {
@@ -1999,7 +2003,7 @@ def test_save_only_smt_add_json_network_success_does_not_leave_failure_summary(v
             "message": "您的产品编辑成功！",
             "success_text": "您的产品编辑成功！",
             "published": False,
-            "network_save_result": {
+            "network_save_result": complete_save_receipt({
                 "ok": True,
                 "url": "https://www.dianxiaomi.com/api/smtProduct/add.json",
                 "method": "POST",
@@ -2015,7 +2019,7 @@ def test_save_only_smt_add_json_network_success_does_not_leave_failure_summary(v
                         "productId": "130658341344670934",
                     },
                 },
-            },
+            }),
             "network_events": [
                 {
                     "url": "https://www.dianxiaomi.com/api/smtProduct/add.json",

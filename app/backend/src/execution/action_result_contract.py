@@ -11,6 +11,8 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from src.execution.save_target_contract import EXACT_SAVE_CLICK_METHOD
+from src.execution.native_gate_evidence import join_native_gate_evidence
 from src.batch_edit.wholesale_filler import WHOLESALE_POSTCONDITIONS
 from src.batch_edit.translator import NATIVE_TRANSLATION_POSTCONDITIONS
 from src.execution.batch_command_contract import (
@@ -796,7 +798,7 @@ def _validate_save_success_semantics(
         _reject("SAVE success requires publish_action_clicked=false")
     if str(save.get("text") or "") != "保存" or save.get("exact_save_count") != 1:
         _reject("SAVE success requires exactly one visible button labelled 保存")
-    if save.get("click_method") != "playwright_exact_role":
+    if save.get("click_method") != EXACT_SAVE_CLICK_METHOD:
         _reject("SAVE success requires an approved exact-save click method")
 
     authorization = _required_mapping(
@@ -1030,6 +1032,10 @@ def _validate_first_save_intent_success_semantics(
         observations.get("first_save_intent_handshake"),
         "evidence.observations.first_save_intent_handshake",
     )
+    native_gate = join_native_gate_evidence(
+        handshake, expected_browser_session_id=envelope["page_identity"]["browser_session_id"])
+    if not native_gate.admitted:
+        _reject(native_gate.reason_code)
     required_keys = frozenset(
         {
             "schema_version",
@@ -1049,6 +1055,8 @@ def _validate_first_save_intent_success_semantics(
             "physical_mutation_count",
             "publish_request_count",
             "same_handshake",
+            "native_gate_evidence",
+            "save1_receipt",
         }
     )
     if frozenset(handshake) != required_keys:
@@ -1229,14 +1237,7 @@ def _validate_first_save_intent_success_semantics(
     }:
         _reject("FIRST_SAVE_INTENT post-dispatch page transition is not exact")
 
-    compatibility_handshake = {
-        "gate_outcome": "admitted",
-        "semi_entry_triggered": True,
-        "same_handshake": True,
-        "handshake_id": handshake["handshake_id"],
-        "save1_verified": True,
-        "exactly_one_save_request": True,
-    }
+    compatibility_handshake = native_gate.summary
     if observations.get("save_result") != handshake:
         _reject("FIRST_SAVE_INTENT save_result must preserve the canonical handshake")
     if observations.get("save_intent_handshake") != compatibility_handshake:

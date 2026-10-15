@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from src.execution.save_target_contract import EXACT_SAVE_CLICK_METHOD
 from src.core.config import DATA_DIR, SCREENSHOT_DIR
 from src.execution.action_result_contract import (
     ActionResultContractError,
@@ -2162,7 +2163,7 @@ def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
         or payload.get("publish_action_clicked") is not False
         or str(payload.get("text") or "") != "保存"
         or payload.get("exact_save_count") != 1
-        or payload.get("click_method") not in {"native_exact_save", "dom_exact_save"}
+        or payload.get("click_method") != EXACT_SAVE_CLICK_METHOD
         or payload.get("network_save_success") is not True
         or payload.get("page_save_success") is not True
     ):

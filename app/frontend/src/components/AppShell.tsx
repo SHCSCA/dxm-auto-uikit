@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 import { useDxmShop } from '../dxmShopContext'
 import frontendPackage from '../../package.json'
+import { readWorkbenchTheme, saveWorkbenchTheme } from '../config/frontendPreferences'
+import { frontendConfig } from '../config/frontendConfig'
+import { CompactWorkbenchNavigation } from './CompactWorkbenchNavigation'
 
 type PrimaryNavigationItem = {
   id: WorkbenchSection
@@ -70,9 +73,7 @@ export function AppShell({
   sourceLabel,
 }: AppShellProps) {
   const mainRef = useRef<HTMLElement | null>(null)
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => (
-    window.localStorage.getItem('dxm-workbench-theme') === 'dark' ? 'dark' : 'light'
-  ))
+  const [theme, setTheme] = useState<'light' | 'dark'>(readWorkbenchTheme)
   const dxmShop = useDxmShop()
   const activeLabel = useMemo(
     () => sectionLabels[activeSection] ?? '工作台',
@@ -84,7 +85,7 @@ export function AppShell({
   }, [activeSection])
 
   useEffect(() => {
-    window.localStorage.setItem('dxm-workbench-theme', theme)
+    saveWorkbenchTheme(theme)
   }, [theme])
 
   return (
@@ -176,6 +177,7 @@ export function AppShell({
             <strong>{activeLabel}</strong>
           </div>
           <div className="workspace-topbar__actions">
+            <CompactWorkbenchNavigation items={primaryNavigation} activeSection={activeSection} activeLabel={activeLabel} onSectionChange={onSectionChange} />
             <span className="workspace-topbar__source">{sourceLabel}</span>
             <button
               className="workspace-topbar__theme"
@@ -187,7 +189,10 @@ export function AppShell({
             </button>
           </div>
         </header>
-        <div className="workspace-body">{children}</div>
+        <div className="workspace-body">
+          {frontendConfig.apiConfigurationError && <div className="draft-selection-alert" role="alert">{frontendConfig.apiConfigurationError}</div>}
+          {children}
+        </div>
       </main>
     </div>
   )

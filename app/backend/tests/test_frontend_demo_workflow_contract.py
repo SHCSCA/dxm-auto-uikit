@@ -12,7 +12,7 @@ HOME_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "HomePage.tsx"
 HELP_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "HelpPage.tsx"
 RESULTS_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "ResultsPage.tsx"
 PRODUCT_TASKS_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "ProductTasksPage.tsx"
-BATCH_EDIT_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "BatchEditPage.tsx"
+SNAPSHOT_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "BatchSavePlaceholderPage.tsx"
 DXM_ACCESS_PAGE_TSX = FRONTEND_SRC / "components" / "workbench" / "DxmAccessPage.tsx"
 QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
 
@@ -78,7 +78,7 @@ def test_navigation_exposes_product_box_batch_edit_as_the_primary_workflow():
     app = read(APP_TSX)
     assert "draft_edit_save: '商品箱批量编辑'" in source
     assert "受控编辑 · 只保存不发布" in source
-    assert "case 'draft_edit_save':" in app
+    assert "draft_edit_save: 'draft_selection'" in app
     assert "case 'product_tasks':" in app
 
 
@@ -101,47 +101,38 @@ def test_readonly_precheck_targets_only_the_product_box():
     assert "真实店小秘商品箱只读检查；不修改、不保存、不发布。" in workspace
 
 
-def test_batch_edit_freezes_exact_scope_before_one_approval():
-    source = read(BATCH_EDIT_PAGE_TSX)
-    assert "'/api/dxm/draft-box/scope-snapshots'" in source
-    assert "冻结当前商品箱范围" in source
-    assert "范围已冻结，等待一次批准" in source
-    assert "整批一次批准" in source
-    assert "我确认只保存、不发布" in source
-    assert "这次批准只适用于上方已冻结范围" in source
+def test_snapshot_freezes_exact_scope_before_one_atomic_approval():
+    source = read(SNAPSHOT_PAGE_TSX)
+    assert "expected_snapshot_hash: expectedSnapshotHash" in source
+    assert "product_ids: taskInput.input.productIds" in source
+    assert "冻结为 draft 任务（不启动）" in source
+    assert "postJson(request.path, request.body)" in source
+    assert "approvalAttemptRef.current = attempt" in source
 
 
-def test_live_scope_can_create_one_single_save_task_without_a_claim_stage():
-    batch = read(BATCH_EDIT_PAGE_TSX)
+def test_product_flow_does_not_expose_single_save_as_a_batch_prerequisite():
     app = read(APP_TSX)
-    types = read(TYPES_TS)
-    assert "local_product_id: number | null" in types
-    assert "store_id: number | null" in types
-    assert "单商品只保存入口" in batch
-    assert "创建单商品只保存任务" in batch
-    assert "onCreateSingleSave(storeId, productId)" in batch
-    assert "onCreateSingleSave={async (storeId, productId)" in app
-    assert "await getJson<Product[]>('/api/products')" in app
-    assert "setActiveSection('product_tasks')" in app
+    assert "onCreateSingleSave={" not in app
+    assert "<DraftSelectionPage" in app
+    assert "<BatchSavePlaceholderPage" in app
+    assert "draft_edit_save: 'draft_selection'" in app
 
 
-def test_batch_edit_is_strictly_serial_and_unknown_never_auto_retries():
-    source = read(BATCH_EDIT_PAGE_TSX)
-    workspace = read(WORKSPACE_TS)
-    assert "逐件串行；保存前安全停止无需对账，结果不确定停止且不自动重试。" in source
-    assert "系统不会自动重试" in source
-    assert "必要时人工核对真实店小秘页面" in source
-    assert "strict_sequential" in workspace
-    assert "unknown_stop_no_retry" in workspace
+def test_batch_approval_result_loss_only_polls_and_does_not_redispatch():
+    source = read(SNAPSHOT_PAGE_TSX)
+    approval = read(FRONTEND_SRC / "batchApproval.ts")
+    assert "系统只会继续 GET 轮询，不会重复 POST" in source
+    assert "approvalAttemptRef.current" in source
+    assert "method: 'GET'" in approval
+    assert "unknown_stop_no_retry" in read(WORKSPACE_TS)
 
 
-def test_batch_edit_keeps_publish_and_legacy_batch_features_closed():
-    source = read(BATCH_EDIT_PAGE_TSX)
-    workspace = read(WORKSPACE_TS)
-    assert "只保存 · 不发布" in source
-    assert "旧版批量保存、无人值守和发布仍关闭" in source
-    assert "不能复用 single_save 证据" in workspace
-    assert "发现发布风险立即停止" in workspace
+def test_results_do_not_fabricate_capability_or_save_receipts():
+    source = read(RESULTS_PAGE_TSX)
+    assert "prod-001" not in source
+    assert "Mock item results" not in source
+    assert "缺失数据保持未证明" in source
+    assert "不能复用 single_save 证据" in read(WORKSPACE_TS)
 
 
 def test_single_save_task_requires_config_precheck_and_current_approver():
@@ -156,8 +147,8 @@ def test_single_save_task_requires_config_precheck_and_current_approver():
 def test_home_and_help_start_from_existing_product_box_scope():
     home = read(HOME_PAGE_TSX)
     help_page = read(HELP_PAGE_TSX)
-    assert "读取当前商品箱范围" in home
-    assert "继续批准批次" in home
+    assert "选择至少三件真实草稿" in home
+    assert "查看历史批次草稿" in home
     assert "直接编辑商品箱现有商品" in help_page
     assert "整批只批准一次，严格串行" in help_page
     assert "结果不确定立即停止并转人工对账" in help_page
@@ -203,7 +194,7 @@ def test_frontend_sources_are_split_into_current_operator_pages():
         HELP_PAGE_TSX,
         RESULTS_PAGE_TSX,
         PRODUCT_TASKS_PAGE_TSX,
-        BATCH_EDIT_PAGE_TSX,
+        SNAPSHOT_PAGE_TSX,
         DXM_ACCESS_PAGE_TSX,
     ):
         assert path.is_file()

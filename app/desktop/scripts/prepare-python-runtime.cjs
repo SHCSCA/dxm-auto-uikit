@@ -1,12 +1,14 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
+const { snapshotEnvironment } = require('../src/runtime-config.cjs')
+const environment = snapshotEnvironment()
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..')
 const backendRoot = path.join(repoRoot, 'app', 'backend')
 const venvPython = path.join(backendRoot, '.venv', 'Scripts', 'python.exe')
 const outputRoot = path.resolve(
-  process.env.DXM_DESKTOP_PYTHON_RUNTIME_OUTPUT
+  environment.DXM_DESKTOP_PYTHON_RUNTIME_OUTPUT
     || path.join(repoRoot, 'outputs', 'desktop-python-runtime'),
 )
 
@@ -33,7 +35,7 @@ function discoverBaseRuntime() {
   ], {
     cwd: backendRoot,
     encoding: 'utf8',
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    env: { ...environment, PYTHONDONTWRITEBYTECODE: '1' },
     timeout: 30000,
   })
   if (probe.status !== 0) fail(probe.stderr || probe.stdout || 'base runtime probe failed')
@@ -102,7 +104,7 @@ function copyRuntime({ baseRoot, version }) {
 
 function verifyRuntime() {
   const outputPython = path.join(outputRoot, 'python.exe')
-  const cleanEnvironment = { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+  const cleanEnvironment = { ...environment, PYTHONDONTWRITEBYTECODE: '1' }
   for (const key of Object.keys(cleanEnvironment)) {
     if (['PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV'].includes(key.toUpperCase())) {
       delete cleanEnvironment[key]

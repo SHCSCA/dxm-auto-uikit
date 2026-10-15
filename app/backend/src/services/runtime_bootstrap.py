@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from src.core.config import ensure_runtime_directories
+from src.core.config_bus import get_config_bus
 from src.services.desktop_parent_channel import (
     PARENT_CHANNEL_PROTOCOL,
     DesktopParentChannel,
@@ -292,7 +293,7 @@ def _prepare_runtime_bootstrap(
     if platform not in {"nt", "posix"}:
         raise RuntimeBootstrapError(f"unsupported runtime bootstrap platform: {platform!r}")
 
-    source_environment = os.environ if environ is None else environ
+    source_environment = get_config_bus().environment if environ is None else environ
     environment_copy = dict(source_environment)
     owner_facts = _parse_owner_facts(environment_copy)
     dependencies = _resolve_dependencies(

@@ -7,16 +7,17 @@ import { DraftSelectionPage } from '../../src/components/workbench/DraftSelectio
 import { getJson } from '../../src/api'
 import { DxmShopProvider } from '../../src/dxmShopContext'
 import type { ConfirmedDraftTaskInput } from '../../src/draftSelection'
-import type { DxmDraftShopsResponse, Template, WorkbenchSection } from '../../src/types'
+import type { DxmDraftShopsResponse, LocalPlanTemplate, WorkbenchSection } from '../../src/types'
 import '../../src/styles.css'
 
-const plans: Template[] = [{
-  id: 9,
-  template_type: 'edit_batch_bundle',
-  template_name: 'E1 browser plan',
-  binding_scope: 'draft',
-  payload: {},
-  is_enabled: true,
+const plans: LocalPlanTemplate[] = [{
+  model: 'local_plan_template', id: 9, lineage_id: 9, supersedes_id: null,
+  name: 'E1 browser plan', version: '1.0.0', shop_id: '101', category_ids: ['100'],
+  path: 'B', scope_contract: 'single_target_category.v2', status: 'draft',
+  fixed_values: { publish_allowed: false }, fill_rules: { '100': {} }, dxm_template_refs: [], field_mappings: {},
+  validation_policy: { required_fields: 'fail_closed', natural_language: 'english_before_save' },
+  exception_policy: { unknown: 'stop_batch' }, provenance: 'browser_fixture', is_active: true,
+  created_at: '2026-10-15T00:00:00Z', updated_at: '2026-10-15T00:00:00Z',
 }]
 
 function BrowserHarness() {
@@ -25,13 +26,20 @@ function BrowserHarness() {
   const [selectionMounted, setSelectionMounted] = useState(true)
   const [shopSnapshot, setShopSnapshot] = useState<DxmDraftShopsResponse | null>(null)
   const [selectedShopId, setSelectedShopId] = useState('')
+  const [shopReadError, setShopReadError] = useState<string | null>(null)
   const autoAdvance = new URLSearchParams(window.location.search).get('autoAdvance') === '1'
   const refreshShops = useCallback(async (force = false) => {
     if (!force && shopSnapshot) return shopSnapshot
-    const next = await getJson<DxmDraftShopsResponse>('/api/dxm/draft-reader/shops')
-    setShopSnapshot(next)
-    setSelectedShopId((current) => current || next.shops[0]?.id || '')
-    return next
+    setShopReadError(null)
+    try {
+      const next = await getJson<DxmDraftShopsResponse>('/api/dxm/draft-reader/shops')
+      setShopSnapshot(next)
+      setSelectedShopId((current) => current || next.shops[0]?.id || '')
+      return next
+    } catch (caught) {
+      setShopReadError(caught instanceof Error ? caught.message : '店铺读取失败')
+      return null
+    }
   }, [shopSnapshot])
 
   return (
@@ -40,7 +48,7 @@ function BrowserHarness() {
       snapshot: shopSnapshot,
       selectedShopId,
       loading: false,
-      error: null,
+      error: shopReadError,
       setSelectedShopId,
       refresh: refreshShops,
     }}>
@@ -74,7 +82,7 @@ function BrowserHarness() {
           : selectionMounted
             ? (
               <DraftSelectionPage
-                plans={plans}
+                localPlans={plans}
                 taskInput={taskInput}
                 onTaskInputChange={setTaskInput}
                 onShowDxmAccess={() => setActiveSection('dxm_access')}

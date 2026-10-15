@@ -1,15 +1,4 @@
-"""Isolated Path B closed-loop: real FastAPI + Dang Kang fixtures + website replay.
-
-This test wires the production FastAPI, snapshot compiler, V1TaskRunner and
-BrowserAgent pipeline to a closed-loop website replay adapter. The adapter
-stands in for dianxiaomi.com so the full editor + semi-managed flow runs
-without a real browser.
-
-The test deliberately stops before the SAVE_ONLY mutation dispatch because
-that boundary requires the production ``real_dxm_write_scope`` /
-``real_dxm_write_approval`` ledger, which is a security boundary that must
-not be silently bypassed for the isolated closed-loop run.
-"""
+"""隔离回放只验证已建模读取；缺少原值准备时首写前停止，绝不伪造成功。"""
 
 from __future__ import annotations
 
@@ -140,12 +129,16 @@ def closed_loop_client(tmp_path, monkeypatch):
     repo = Repository()
     monkeypatch.setattr(main, "repo", repo)
     monkeypatch.setattr(main, "workflow_adapter", adapter)
-    main.runner.workflow_adapter = adapter
-    main.runner.repo = repo
-    try:
-        main.browser_agent_runtime.reset(adapter)
-    except Exception:
-        main.browser_agent_runtime.adapter = adapter
+    from src.execution.browser_agent_worker import BrowserAgentRuntime
+    from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
+    from src.execution.v1_runner import V1TaskRunner
+
+    runtime = BrowserAgentRuntime(adapter, mutation_ledger=MutationDispatchLedger(recover_inflight=False))
+    runner = V1TaskRunner(repo, main.runner.manager, workflow_adapter=adapter,
+                          browser_agent_runtime=runtime,
+                          authorization_verifier=main.runner.authorization_verifier)
+    monkeypatch.setattr(main, "runner", runner)
+    monkeypatch.setattr(main, "browser_agent_runtime", runtime)
     with db.connection() as conn:
         conn.execute(
             """
@@ -154,7 +147,12 @@ def closed_loop_client(tmp_path, monkeypatch):
             """,
             (int(SHOP_ID), SHOP_NAME),
         )
-    return TestClient(main.app), main, adapter
+    try:
+        yield TestClient(main.app), main, adapter
+    finally:
+        runtime.shutdown()
+        if runner._workflow_executor is not None:
+            runner._workflow_executor.shutdown(wait=True)
 
 
 def test_closed_loop_reader_only_returns_dang_kang(closed_loop_client):
@@ -173,7 +171,7 @@ def test_closed_loop_reader_only_returns_dang_kang(closed_loop_client):
     assert [item["id"] for item in products.json()["items"]] == list(PRODUCT_IDS)
 
 
-def test_closed_loop_runs_path_b_through_real_fastapi_runner(closed_loop_client):
+def test_closed_loop_stops_before_unmodeled_preimage_and_never_writes(closed_loop_client):
     """Path B runs through real FastAPI + Runner up to the SAVE dispatch gate.
 
     The closed-loop replay adapter substitutes dianxiaomi.com only; FastAPI,
@@ -243,58 +241,35 @@ def test_closed_loop_runs_path_b_through_real_fastapi_runner(closed_loop_client)
 
     asyncio.run(main.runner.run_task(task_id))
 
-    assert adapter.calls[: len(PATH_B_PRE_SAVE_ACTIONS)] == list(PATH_B_PRE_SAVE_ACTIONS), (
-        "closed-loop replay must walk every pre-save action in canonical order; "
-        f"got {adapter.calls!r}"
-    )
-
-    pre_save_observations = [
-        envelope.get("evidence_observations") or envelope.get("evidence", {}).get("observations") or {}
-        for envelope in adapter.envelopes
-    ]
-    capability_receipts: dict[str, dict] = {}
-    for observations in pre_save_observations:
-        receipts = observations.get("mandatory_capability_receipts")
-        if isinstance(receipts, Mapping):
-            capability_receipts.update(receipts)
-    for required in ("video", "wholesale", "translation", "rollbackPreparation"):
-        assert required in capability_receipts, (
-            f"mandatory capability {required} missing from closed-loop observations; "
-            f"got {sorted(capability_receipts)!r}"
-        )
-
-    section_receipts: dict[str, dict] = {}
-    for observations in pre_save_observations:
-        sections = observations.get("path_b_section_receipts")
-        if isinstance(sections, Mapping):
-            section_receipts.update(sections)
-    for required in ("basic_info", "attribute_info"):
-        assert required in section_receipts, (
-            f"section receipt {required} missing from closed-loop observations; "
-            f"got {sorted(section_receipts)!r}"
-        )
-
     private = main.repo.get_task_private(task_id)
-    assert private["status"] in {"needs_manual_review", "failed"}, (
-        "closed-loop runner is expected to stop at the SAVE dispatch gate; "
-        "a 'completed' status would imply the scope/approval ledger was "
-        "silently bypassed"
-    )
-    failing_job = private["jobs"][0]
-    assert failing_job["status"] in {"failed", "needs_manual_review"}
-    assert "AUTH_SNAPSHOT_ROW_AUTHORITY_MISMATCH" in (failing_job["error_message"] or ""), (
-        "expected the runner to stop exactly at the mutation scope authority gate; "
-        f"got: {failing_job['error_message']!r}"
-    )
+    assert adapter.calls == [
+        "check_login_state", "open_draft_box", "open_editor", "verify_edit_ownership",
+    ]
+    assert private["status"] == "failed"
+    first, *remaining = private["jobs"]
+    assert first["status"] == "failed"
+    assert "CLOSED_LOOP_CAPABILITY_NOT_MODELED:prepare_rollback" in first["error_message"]
+    assert all(job["status"] == "pending" for job in remaining)
+    assert len(remaining) == 2
+    assert not any(action in adapter.calls for action in (
+        "fill_editor_required_defaults", "save_only", "open_semi_managed_page",
+        "generate_editor_video", "translate_editor_content",
+    ))
+    assert not any(envelope.get("evidence_observations", {}).get("mandatory_capability_receipts")
+                   for envelope in adapter.envelopes)
+    with _db.connection() as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM job_evidences WHERE evidence_type='path_b_rollback_preparation'").fetchone()["n"]
+    assert count == 0
+    assert adapter.accepted_session_refs
+    assert all(ref == session_ref() for ref in adapter.accepted_session_refs)
 
-    closed_loop_calls = sum(
-        1 for call in adapter.calls if call in PATH_B_PRE_SAVE_ACTIONS
-    )
-    assert closed_loop_calls == len(PATH_B_PRE_SAVE_ACTIONS)
-    assert adapter.calls.count("save_only") == 0, (
-        "closed-loop must not actually dispatch SAVE_ONLY without real mutation scope"
-    )
 
-    accepted = json.loads(json.dumps(adapter.accepted_session_refs))
-    assert accepted, "closed-loop must have at least one accepted session_ref"
-    assert all(ref == session_ref() for ref in accepted)
+@pytest.mark.parametrize("action", ["prepare_rollback", "validate_editor_wholesale", "translate_editor_content", "generate_editor_video"])
+def test_replay_rejects_unmodeled_capabilities(action, caplog):
+    from src.execution.closed_loop_replay_adapter import ClosedLoopReplayAdapter
+
+    adapter = ClosedLoopReplayAdapter()
+    with pytest.raises(RuntimeError, match="CLOSED_LOOP_CAPABILITY_NOT_MODELED:" + action):
+        getattr(adapter, action)()
+    assert adapter.calls == []
+    assert "replay_capability_unavailable" in caplog.text

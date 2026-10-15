@@ -873,10 +873,12 @@ def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():
 
 def test_frontend_vite_proxy_uses_runtime_backend_target_for_isolated_qa():
     source = FRONTEND_VITE_CONFIG.read_text(encoding="utf-8")
+    config = (REPO_ROOT / "app/frontend/src/config/frontendConfig.ts").read_text(encoding="utf-8")
 
     assert "const backendTarget =" in source
-    assert "process.env.DXM_BACKEND_URL" in source
-    assert "process.env.DXM_BACKEND_PORT" in source
+    assert "developmentBackendTarget(process.env)" in source
+    assert "environment.DXM_BACKEND_URL" in config
+    assert "environment.DXM_BACKEND_PORT" in config
     assert "target: backendTarget" in source
     assert "target: 'http://127.0.0.1:8000'" not in source
     assert "target: 'ws://127.0.0.1:8000'" not in source

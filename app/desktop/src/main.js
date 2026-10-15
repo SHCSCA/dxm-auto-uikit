@@ -1,5 +1,6 @@
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
+const { snapshotEnvironment } = require('./runtime-config.cjs')
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -14,7 +15,7 @@ function createWindow() {
     },
   })
 
-  const url = process.env.DXM_FRONTEND_URL || 'http://127.0.0.1:5173'
+  const url = snapshotEnvironment().DXM_FRONTEND_URL || 'http://127.0.0.1:5173'
   win.loadURL(url)
 }
 

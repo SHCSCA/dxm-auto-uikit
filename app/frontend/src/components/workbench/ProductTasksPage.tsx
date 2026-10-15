@@ -8,6 +8,7 @@ import type {
 import { isTaskControlActive } from '../../taskControl'
 import { humanTaskDisplayName, humanOperatorMessage } from './workbenchCopy'
 import { TaskControlKeys } from './TaskControlKeys'
+import { DiagnosticPathNotice } from './DiagnosticPathNotice'
 
 type ProductTasksPageProps = {
   workspace: DeliveryWorkspace
@@ -101,9 +102,11 @@ export function ProductTasksPage({
           <div>
             <span className="eyebrow">当前保存任务</span>
             <h2>{currentTask ? humanTaskDisplayName(currentTask) : '还没有可启动的保存任务'}</h2>
-            <p>这里保留单商品只保存的历史与执行入口。新任务直接从商品箱读取现有商品并创建，只保存、不发布。</p>
+            <p>当前产品任务来自真实选品、完整 Path B 方案和不可变快照；保存始终受后端授权与证据门禁约束。</p>
           </div>
         </div>
+
+        <DiagnosticPathNotice mode={currentTask?.mode} />
 
         <div className={`task-current-panel__decision task-current-panel__decision--${decision.tone}`} aria-label="当前任务判断">
           <span>

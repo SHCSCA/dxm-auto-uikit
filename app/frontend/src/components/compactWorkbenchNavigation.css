@@ -1,0 +1,21 @@
+.workspace-topbar .compact-workbench-navigation {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .workspace-topbar .compact-workbench-navigation {
+    display: block;
+    min-width: 0;
+    max-width: 160px;
+    min-height: 36px;
+    border: 1px solid var(--line, #d8dee7);
+    border-radius: 8px;
+    background: var(--surface, #fff);
+    color: inherit;
+    padding: 6px;
+  }
+
+  .workspace-topbar .workspace-topbar__source {
+    display: none;
+  }
+}

@@ -117,7 +117,7 @@ function ControlledBatchIssues({
       }
     : draft
       ? {
-          label: '继续批准批次',
+          label: '查看历史批次草稿',
           detail: '当前没有待处理问题；核对已冻结范围后，一次批准并启动严格串行执行。',
           onClick: () => onOpenBatch(draft.id),
         }

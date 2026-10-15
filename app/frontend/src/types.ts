@@ -94,6 +94,10 @@ export type DxmCategoryRecord = {
   nodePathId?: string
   pcid?: string
   isleaf?: boolean | number | string
+  executableLeaf?: boolean
+  catalogSha256?: string
+  catalogVersion?: string
+  catalogStatus?: string
   level?: number | string
 }
 export type DxmDraftProduct = {
@@ -382,7 +386,7 @@ export type PlanSnapshot = {
   task_id?: number
   schema: 'dxm_batch_draft_save_plan.v1'
   mode: 'batch_draft_save'
-  path: 'A'
+  path: 'A' | 'B'
   shop_scope: string
   product_ids: string[]
   local_plan_template: { id: number; version: string }
@@ -396,7 +400,7 @@ export type PlanSnapshot = {
   }
   approval_context: {
     state: 'not_granted'
-    runner_released: false
+    runner_released: boolean
     publish_allowed: false
   }
   item_snapshots: Array<{

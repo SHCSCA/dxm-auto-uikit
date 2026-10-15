@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getJson, getJsonOrDefault, postJson, withDxmSessionBusyRetry } from './api'
+import { frontendConfig } from './config/frontendConfig'
+import { recordFrontendError } from './diagnostics/frontendErrors'
 import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
-import { BatchEditPage } from './components/workbench/BatchEditPage'
 import { BatchRecordsPage } from './components/workbench/BatchRecordsPage'
 import { DraftSelectionPage } from './components/workbench/DraftSelectionPage'
 import { BatchSavePlaceholderPage } from './components/workbench/BatchSavePlaceholderPage'
@@ -23,13 +24,13 @@ import { OperationAuditTimeline } from './components/workbench/OperationAuditTim
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
 import { DxmShopProvider } from './dxmShopContext'
 import type { ConfirmedDraftTaskInput } from './draftSelection'
-import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, DxmDraftShop, DxmDraftShopsResponse, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, DxmDraftShop, DxmDraftShopsResponse, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { isTaskControlActive } from './taskControl'
 import { composeWorkspace } from './workspace'
 
-const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
+const AGENT_CONSOLE_TARGET_URL = frontendConfig.browser.homeUrl
 const DXM_TARGET_URLS = {
-  draft_box: 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
+  draft_box: frontendConfig.browser.draftUrl,
 } as const
 const DXM_TARGET_PATHS: Record<keyof typeof DXM_TARGET_URLS, string> = {
   draft_box: '/web/smt/smtProductList/draft',
@@ -37,7 +38,7 @@ const DXM_TARGET_PATHS: Record<keyof typeof DXM_TARGET_URLS, string> = {
 const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
   draft_box: '商品箱',
 }
-const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
+const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = frontendConfig.browser.navigationSettleMs
 const REAL_DXM_MUTATION_MODES = new Set(['single_save', 'batch_save', 'batch_draft_save'])
 const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save', 'batch_draft_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
@@ -134,6 +135,7 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     agent_execution: 'start_save',
     browser: 'start_save',
     dashboard: 'home',
+    draft_edit_save: 'draft_selection',
     guide: 'help',
     tasks: 'product_tasks',
     product_tasks: 'product_tasks',
@@ -176,7 +178,6 @@ export default function App() {
   const [dxmShopsError, setDxmShopsError] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
-  const [activeScopeSnapshot, setActiveScopeSnapshot] = useState<DraftBoxScopeSnapshot | null>(null)
   const [draftTaskInput, setDraftTaskInput] = useState<ConfirmedDraftTaskInput | null>(null)
   const [editBatches, setEditBatches] = useState<EditBatchSummary[]>([])
   const [localPlans, setLocalPlans] = useState<LocalPlanTemplate[]>([])
@@ -422,17 +423,15 @@ export default function App() {
 
   const workspaceHasRunningTask = workspace.tasks.some((task) => isTaskControlActive(task.status))
   const workspaceHasRunningBatch = editBatches.some((batch) => batch.status === 'running' || batch.status === 'stop_requested')
-  const runningEditBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
-  const runningMutationTask = workspace.tasks.find((task) => isTaskControlActive(task.status) && REAL_DXM_MUTATION_MODES.has(task.mode)) ?? null
 
   useEffect(() => {
     if (!workspaceHasRunningTask && !workspaceHasRunningBatch && !agentConsole?.active) return
     let cancelled = false
     const poll = async () => {
       await refreshWorkspace({ silent: true })
-      if (!cancelled) timer = window.setTimeout(poll, 1500)
+      if (!cancelled) timer = window.setTimeout(poll, frontendConfig.polling.workspaceMs)
     }
-    let timer = window.setTimeout(poll, 1500)
+    let timer = window.setTimeout(poll, frontendConfig.polling.workspaceMs)
     return () => {
       cancelled = true
       window.clearTimeout(timer)
@@ -496,7 +495,7 @@ export default function App() {
     const shouldRefreshFrame = normalizedSection === 'start_save' && Boolean(agentConsole?.browser_visible)
     const timer = window.setInterval(() => {
       void refreshAgentConsole(shouldRefreshFrame)
-    }, 3500)
+    }, frontendConfig.polling.browserMs)
     return () => window.clearInterval(timer)
   }, [activeSection, agentConsole?.active, agentConsole?.browser_visible, refreshAgentConsole])
 
@@ -558,7 +557,7 @@ export default function App() {
     void refreshRuntimeLogs()
     const timer = window.setInterval(() => {
       void refreshRuntimeLogs()
-    }, 1500)
+    }, frontendConfig.polling.logsMs)
     return () => window.clearInterval(timer)
   }, [refreshRuntimeLogs])
 
@@ -632,20 +631,25 @@ export default function App() {
     void refreshRuntimeStatus()
     const timer = window.setInterval(() => {
       void refreshRuntimeStatus()
-    }, 5000)
+    }, frontendConfig.polling.runtimeMs)
     return () => window.clearInterval(timer)
   }, [refreshRuntimeStatus])
 
   useEffect(() => {
     let cancelled = false
     async function loadDesktopRuntime() {
-      const runtime = await window.dxmDesktop?.getRuntimeInfo?.()
-      if (!cancelled && runtime) setDesktopRuntime(runtime)
+      try {
+        const runtime = await window.dxmDesktop?.getRuntimeInfo?.()
+        if (!cancelled && runtime) setDesktopRuntime(runtime)
+      } catch (caught) {
+        recordFrontendError(caught, { component: 'desktop_bridge', action: 'runtime_info' })
+        if (!cancelled) setRuntimeStatusError('桌面运行身份读取失败；请先核对服务状态，不要重复启动任务。')
+      }
     }
     void loadDesktopRuntime()
     const timer = window.setInterval(() => {
       void loadDesktopRuntime()
-    }, 5000)
+    }, frontendConfig.polling.runtimeMs)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -1338,18 +1342,15 @@ export default function App() {
     && currentSection !== 'issues'
   const startNewEditBatch = () => {
     setActiveEditBatchId(null)
-    setActiveScopeSnapshot(null)
-    setActiveSection('draft_edit_save')
+    setActiveSection('draft_selection')
   }
   const showBatchRecords = (batchId?: number) => {
-    setActiveScopeSnapshot(null)
     setActiveEditBatchId(batchId ?? null)
     setActiveSection('task_history')
   }
   const openBatchForApproval = (batchId: number) => {
-    setActiveScopeSnapshot(null)
-    setActiveEditBatchId(batchId)
-    setActiveSection('draft_edit_save')
+    showBatchRecords(batchId)
+    setOperationNotice('旧批次仅供历史查询；新任务请从采集箱选择至少三件草稿，经完整 Path B 方案预览和冻结。')
   }
   const showSelectedTaskResults = () => {
     setActiveEditBatchId(null)
@@ -1395,9 +1396,8 @@ export default function App() {
             configPreviewLoading={configPreviewLoading}
             onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }}
             onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}
-            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowDraftEdit={startNewEditBatch}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
-            batchScopeStoreName={activeScopeSnapshot?.store_identity.store_name ?? null}
             localPlans={localPlans}
             dxmTemplateRefs={dxmTemplateRefs}
             initialMode={templateCenterEntryMode}
@@ -1425,7 +1425,6 @@ export default function App() {
       case 'draft_selection':
         return (
           <DraftSelectionPage
-            plans={workspace.templates}
             localPlans={localPlans}
             taskInput={draftTaskInput}
             onTaskInputChange={setDraftTaskInput}
@@ -1475,48 +1474,6 @@ export default function App() {
             initialBatchId={activeEditBatchId}
             onCreateBatch={startNewEditBatch}
             onOpenBatch={openBatchForApproval}
-          />
-        )
-      case 'draft_edit_save':
-        return (
-          <BatchEditPage
-            stores={workspace.stores}
-            templates={workspace.templates}
-            scopeSnapshot={activeScopeSnapshot}
-            initialBatchId={activeEditBatchId}
-            activeExecution={runningEditBatch
-              ? { kind: 'batch', id: runningEditBatch.id, label: `批次 #${runningEditBatch.id}` }
-              : runningMutationTask
-                ? { kind: 'task', id: runningMutationTask.id, label: `真实任务 #${runningMutationTask.id}` }
-                : null}
-            batchStateAvailable={editBatchStateAvailable}
-            dxmReady={Boolean(runtimeStatus && DXM_READY_SESSION_STATUSES.has(runtimeStatus.dxmLogin.status))}
-            diagnosticBrowserActive={runtimeStatus?.agentConsole?.active === true}
-            onScopeSnapshotChange={setActiveScopeSnapshot}
-            onBatchSelected={(batchId) => {
-              setActiveEditBatchId(batchId)
-              if (batchId) {
-                setActiveScopeSnapshot(null)
-                void refreshWorkspace({ silent: true })
-              }
-            }}
-            onShowTemplates={() => {
-              setTemplateCenterEntryMode('batch_bundle')
-              setActiveSection('template_center')
-            }}
-            onShowRecords={(batchId) => {
-              showBatchRecords(batchId)
-              void refreshWorkspace({ silent: true })
-            }}
-            onShowDxmAccess={() => setActiveSection('dxm_access')}
-            onShowConsole={() => setActiveSection('start_save')}
-            onShowTasks={() => setActiveSection('product_tasks')}
-            onCreateSingleSave={async (storeId, productId) => {
-              await createRealTask({ storeId, mode: 'single_save', productIds: [productId] })
-            }}
-            onRefreshStatus={async () => {
-              await Promise.all([refreshWorkspace(), refreshRuntimeStatus()])
-            }}
           />
         )
       case 'start_save':
@@ -1583,7 +1540,7 @@ export default function App() {
             onControlAgentConsoleBrowser={controlAgentConsoleBrowser}
             onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('product_tasks')}
-            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowDraftEdit={startNewEditBatch}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowEvidence={() => setActiveSection('evidence')}
             onShowReports={showSelectedTaskResults}

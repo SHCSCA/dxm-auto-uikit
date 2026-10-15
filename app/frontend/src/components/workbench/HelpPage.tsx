@@ -27,7 +27,7 @@ export function HelpPage({
   const hasTask = Boolean(selectedTask)
   const nextAction = !dxmLoggedIn
     ? { label: '登录店小秘', action: onShowDxmAccess, detail: '先在可见浏览器完成登录和验证码。' }
-    : { label: '创建商品箱批次', action: onShowDraftEdit, detail: '读取商品箱现有商品，选择店铺级模板并创建待批准草稿。' }
+    : { label: '创建商品箱批次', action: onShowDraftEdit, detail: '选择当前店铺至少三件真实草稿，使用单目标叶子的完整 Path B 方案预览并冻结。' }
 
   return (
     <section className="module-layout guide-layout" aria-label="使用帮助">
@@ -36,7 +36,7 @@ export function HelpPage({
         <div className="guide-step guide-step--primary">
           <span aria-hidden="true">1</span>
           <div>
-            <strong>目标只有一个：直接编辑商品箱现有商品，并按店铺级模板逐件只保存。</strong>
+            <strong>目标只有一个：直接编辑商品箱现有商品，并按完整 Path B 方案逐件两阶段只保存。</strong>
             <div className="guide-step__summary-line">
               <small>{nextAction.detail}</small>
               <em>整批只批准一次，严格串行；结果不确定立即停止并转人工对账。</em>
@@ -70,15 +70,15 @@ export function HelpPage({
           <GuideStep
             index="3"
             state={hasTask ? 'is-current' : undefined}
-            title="冻结范围并选择店铺级模板"
-            detail="从真实商品箱读取当前店铺范围，选择不绑定类目的整批模板；店小秘引用只采用 5 个可精确选择并读回的控件。"
+            title="选择完整方案并冻结快照"
+            detail="方案绑定一个真实可执行末级类目；店小秘模板只读引用，方案与选品一起预览并冻结。每件必须完成视频、批发、翻译、半托管与回滚准备。"
             action="创建整批草稿"
             onAction={onShowDraftEdit}
           />
           <GuideStep
             index="4"
             title="一次批准并启动"
-            detail="核对冻结范围后一次批准；系统按商品严格串行只保存。运行中的旧诊断浏览器必须先关闭，但不需要先打开它。"
+            detail="完整 Path B 执行能力与证据未放行时不能批准；已放行时按冻结范围一次批准，严格串行处理。结果不确定立即停批，不重复派发。"
             action="查看批次记录"
             onAction={onShowBatchRecords}
           />

@@ -3,12 +3,14 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const { createBuildManifest, readGitBuildState } = require('../src/runtime-identity.cjs')
+const { snapshotEnvironment } = require('../src/runtime-config.cjs')
+const environment = snapshotEnvironment()
 
 const desktopDir = path.resolve(__dirname, '..')
 const repoRoot = path.resolve(desktopDir, '..', '..')
 const packageJson = JSON.parse(fs.readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
 const outputPath = path.resolve(
-  process.env.DXM_BUILD_MANIFEST_OUTPUT
+  environment.DXM_BUILD_MANIFEST_OUTPUT
   || path.join(repoRoot, 'outputs', 'build-metadata', 'desktop-build-manifest.json'),
 )
 
@@ -20,13 +22,13 @@ function parseDirty(value) {
 }
 
 const probed = readGitBuildState(repoRoot)
-const envDirty = parseDirty(process.env.DXM_BUILD_GIT_DIRTY)
+const envDirty = parseDirty(environment.DXM_BUILD_GIT_DIRTY)
 const manifest = createBuildManifest({
-  gitHead: process.env.DXM_BUILD_GIT_HEAD || probed.gitHead,
+  gitHead: environment.DXM_BUILD_GIT_HEAD || probed.gitHead,
   gitDirty: envDirty === null ? probed.gitDirty : envDirty,
-  buildId: process.env.DXM_BUILD_ID || `desktop-${crypto.randomUUID()}`,
+  buildId: environment.DXM_BUILD_ID || `desktop-${crypto.randomUUID()}`,
   packageVersion: packageJson.version,
-  builtAt: process.env.DXM_BUILD_AT || new Date().toISOString(),
+  builtAt: environment.DXM_BUILD_AT || new Date().toISOString(),
 })
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true })

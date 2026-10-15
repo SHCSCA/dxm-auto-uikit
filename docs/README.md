@@ -35,7 +35,7 @@
 
 - [运营操作详细文档](runbook/运营操作详细文档.md)：逐分区真实操作事实、必经能力、Path B 双阶段与 fail-closed 批量循环；不是独立安全授权源。
 - [操作与验收手册](runbook/操作与验收手册.md)：源码/桌面启动、登录、Reader、方案、preview/freeze、真实保存授权与验证命令。
-- [免安装桌面版](user/免安装桌面版.md)：当前没有 0.3.0 portable，历史 0.2.3 不能代表当前源码。
+- [免安装桌面版](user/免安装桌面版.md)：本轮 0.3.0 构建与隔离验证记录见 PROGRESS；历史包不能代表当前源码。
 - [项目 README](../README.md)：项目入口、快速启动、文档和安全边界。
 
 ## AI 与协作
@@ -68,7 +68,7 @@
 ## 当前发布口径
 
 - 当前 backend/frontend/desktop 与根 package manifest 均为 0.3.0。
-- 当前没有 0.3.0 portable；本地历史包最新到 0.2.3。
+- 本轮 0.3.0 portable 的构建身份与实际验证结果见 PROGRESS 和本地交付记录；历史文档记录过 0.2.3。
 - 视频、翻译、批发、半托管和回滚是完整产品必需能力；当前未接生产，所以是发布阻断而非可选扩展。
-- 当前工作树完整 backend L0 已通过 `2344 passed / 0 skipped`；同源 package smoke、0.3.0 portable 和真实三商品三铁证尚未组成放行证据。
+- `2344 passed / 0 skipped` 是 2026-08-28 的历史记录；本轮测试、构建和隔离检查以 PROGRESS 最新记录为准，仍缺真实三商品完整验收。
 - 所以当前只能是 `E3_OPEN / BLOCKED`；禁止宣称 `MVP_READY` 或 `PROD_READY`。

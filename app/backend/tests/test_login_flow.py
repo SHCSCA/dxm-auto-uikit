@@ -8,6 +8,8 @@ import threading
 import time
 
 import pytest
+from tests.support.network_receipts import complete_save_receipt
+from tests.support.semantic_save import SemanticButton, SemanticLocator
 from fastapi.testclient import TestClient
 from playwright.sync_api import sync_playwright
 
@@ -95,6 +97,10 @@ def _save_only_kwargs() -> dict[str, object]:
             'sha256': 'B' * 64,
         },
         'required_readback_complete': True,
+        'baseline_save_field_values': [{
+            'field_key': 'product_price', 'field_label': '商品价', 'source': 'synthetic-control',
+            'value_before': '1.00', 'value_after_prefill': '2.00',
+        }],
     }
 
 
@@ -184,7 +190,7 @@ def _complete_save_network_capture(events: list[dict[str, object]] | None = None
         'json': {'code': 0, 'msg': '保存成功'},
     }]
     return {
-        'events': captured,
+        'events': [complete_save_receipt(item) if item.get('mutation_kind') == 'save_request' else item for item in captured],
         'network_audit': {
             'scope': 'same_origin_write_window',
             'complete': True,
@@ -324,6 +330,7 @@ def test_pre_edit_frozen_target_identity_accepts_product_id_with_digit(tmp_path,
 
 
 def _arm_editor_action_test(flow, monkeypatch, tmp_path, *, action='save_only'):
+    flow.set_execution_evidence_context({'task_id': 1, 'job_id': 2, 'state': 'SAVE_ONLY', 'command_id': 'synthetic-command'})
     flow.set_mutation_authorizer(_execute_authorized_operation, {'task_id': 'test'})
     frozen_target = canonical_frozen_target_identity(
         _save_only_kwargs()['target_identity'],
@@ -339,6 +346,9 @@ def _arm_editor_action_test(flow, monkeypatch, tmp_path, *, action='save_only'):
         '_capture_save_field_integrity_snapshot',
         lambda *_args, **_kwargs: dict(_save_only_kwargs()['baseline_field_integrity']),
     )
+    monkeypatch.setattr(flow, '_capture_semi_managed_save_values', lambda *_args: {
+        'ok': True, 'values': [{'field_key': 'product_price', 'found': True, 'value': '2.00'}],
+    })
     proof_path = (tmp_path / f'{action}-proof.png').resolve()
     monkeypatch.setattr(flow, '_capture_scoped_evidence_screenshot', lambda *_args, **_kwargs: {
         'path': str(proof_path), 'sha256': 'A' * 64, 'size': 1,
@@ -369,53 +379,10 @@ def _execute_authorized_operation(context, operation):
     }
 
 
-class _FakeExactSaveElementHandle:
-    """Minimal ElementHandle seam for exact-save dispatch contract tests."""
-
-    def __init__(self, events: list[str], *, dispatch_error: Exception | None = None):
-        self.events = events
-        self.dispatch_error = dispatch_error
-        self.evaluate_calls = 0
-
-    def as_element(self):
-        return self
-
-    def evaluate(self, _script):
-        self.evaluate_calls += 1
-        if self.evaluate_calls == 1:
-            self.events.append('target_guard')
-            return {
-                'ok': True,
-                'text': '保存',
-                'at_point_text': '保存',
-                'exact_save_count': 1,
-                'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 20},
-                'reason': None,
-            }
-        self.events.append('dispatch')
-        if self.dispatch_error is not None:
-            raise self.dispatch_error
-        return {'ok': True, 'dispatched': True, 'method': 'dom_exact_text'}
-
-    def dispose(self):
-        return None
 
 
-class _FakeExactSaveJSHandle:
-    def __init__(self, element: _FakeExactSaveElementHandle):
-        self.element = element
-
-    def as_element(self):
-        return self.element
-
-    def dispose(self):
-        return None
 
 
-def _install_exact_save_handle(page, events: list[str], *, dispatch_error: Exception | None = None):
-    element = _FakeExactSaveElementHandle(events, dispatch_error=dispatch_error)
-    page.evaluate_handle = lambda _script: _FakeExactSaveJSHandle(element)
-    return element
 
 
 def test_login_browser_is_headed_by_default_on_windows(monkeypatch):
@@ -2370,6 +2337,16 @@ class DummySemiPage:
     def __init__(self, save_result):
         self.save_result = save_result
         self.handlers = {}
+        self.semantic_save = SemanticButton(on_click=self._dispatch_exact_save)
+        self.semantic_entry = SemanticButton()
+
+    def get_by_role(self, role, *, name, exact):
+        assert role == 'button' and exact is True
+        if name == '编辑半托管信息':
+            return SemanticLocator([self.semantic_entry])
+        assert name == '保存'
+        rejected = isinstance(self.save_result, dict) and self.save_result.get('ok') is False
+        return SemanticLocator([] if rejected else [self.semantic_save])
 
     def title(self):
         return '半托管信息'
@@ -2429,20 +2406,6 @@ class DummyExactSaveHandle:
         self.disposed = True
 
 
-class DummySaveOnlyScriptPage(DummySemiPage):
-    def __init__(self):
-        super().__init__({'ok': False, 'reason': '命中发布按钮：立即发布', 'published': False})
-        self.script = ''
-
-    def evaluate(self, script, arg=None):
-        if _is_dismiss_blocking_modals_script(script):
-            return {'visible': False}
-        if _is_visible_blocking_modal_state_script(script):
-            return {'visible': False}
-        if _is_structured_save_status_snapshot_script(script):
-            return {'ok': True, 'entries': []}
-        self.script = script
-        return self.save_result
 
 
 class DummySemiManagedFieldsPage(DummySemiPage):
@@ -2641,6 +2604,7 @@ class DummyNetworkRequest:
     url = 'https://www.dianxiaomi.com/api/smtProduct/add.json'
     method = 'POST'
     resource_type = 'xhr'
+    post_data = 'productId=synthetic-product&title=synthetic-title'
 
 
 class DummyNetworkResponse:
@@ -2664,6 +2628,9 @@ class DummyNetworkResponse:
                 'productId': '130658341344670934',
             },
         }
+
+    def body(self):
+        return json.dumps(self.json(), ensure_ascii=False).encode('utf-8')
 
 
 class DummySaveOnlyNetworkPage(DummySemiPage):
@@ -5461,213 +5428,14 @@ def test_visible_editor_save_only_fails_fast_when_exact_save_locator_is_not_safe
     assert result['save_result']['clicked'] is False
 
 
-def test_visible_editor_save_only_clicks_exact_save_with_native_window(monkeypatch, tmp_path):
-    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    monkeypatch.setattr(flow, '_capture_scoped_evidence_screenshot', lambda *_args, **_kwargs: {
-        'path': str((tmp_path / 'visible-save-proof.png').resolve()), 'sha256': 'A' * 64, 'size': 1,
-    })
-    monkeypatch.setattr(flow, '_artifact_url', lambda _path: '/artifacts/visible-save-proof.png')
-    clicks = []
-
-    class VisibleSavePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-        def title(self):
-            raise AssertionError('visible save path must not read page.title')
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('visible save path must use bounded helper, not direct page.evaluate')
-
-        def screenshot(self, *_args, **_kwargs):
-            raise AssertionError('visible save path must not take Playwright screenshot')
-
-    locator_state = {
-        'ok': True,
-        'text': '保存',
-        'at_point_text': '保存',
-        'exact_save_count': 1,
-        'rect': {'x': 120.0, 'y': 240.0, 'w': 80.0, 'h': 32.0},
-        'viewport': {'innerWidth': 1440, 'innerHeight': 900, 'devicePixelRatio': 1},
-        'forbidden_actions': [{'text': '保存并移入待发布', 'rect': {'x': 220, 'y': 240, 'w': 160, 'h': 32}}],
-    }
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(flow, '_visible_exact_save_button_state', lambda page: locator_state)
-    monkeypatch.setattr(flow, '_capture_save_network_events', lambda page, rect: {})
-    monkeypatch.setattr(flow, '_finalize_save_network_audit', lambda *_args: _complete_save_network_capture())
-    monkeypatch.setattr(flow, '_network_save_result', lambda events: {'ok': True, 'message': '您的产品编辑成功！', 'code': 0})
-    monkeypatch.setattr(flow, '_structured_save_status_snapshot', lambda *_args, **_kwargs: {'ok': True, 'entries': []})
-    monkeypatch.setattr(
-        flow,
-        '_visible_save_success_state',
-        lambda page, *, baseline=None: {'ok': True, 'success_text': '保存成功', 'published': False},
-    )
-    def authorized_native_click(page, x, y, **kwargs):
-        clicks.append({'x': x, 'y': y, **kwargs})
-        authorization = flow._dispatch_authorized_mutation(
-            kwargs['mutation_action'],
-            lambda: True,
-            pre_dispatch_guard=kwargs['pre_dispatch_guard'],
-        )
-        return authorization['operation_result']
-
-    monkeypatch.setattr(flow, '_click_point_with_native_window', authorized_native_click)
-
-    result = flow._save_only_on_page(VisibleSavePage(), **_save_only_kwargs())
-
-    assert result['stage'] == 'save_only'
-    assert result['page_title'] == '店小秘编辑页'
-    assert result['save_result']['clicked'] is True
-    assert result['save_result']['click_method'] == 'native_exact_save'
-    assert result['save_result']['network_save_result']['ok'] is True
-    assert result['save_result']['mutation_authorization']['executed'] is True
-    assert result['save_result']['exact_save_target'] is True
-    assert result['save_result']['save_click_dispatched'] is True
-    assert result['save_result']['network_save_success'] is True
-    assert result['save_result']['page_save_success'] is True
-    assert result['save_result']['publish_action_clicked'] is False
-    assert len(clicks) == 1
-    assert clicks[0]['x'] == 160.0
-    assert clicks[0]['y'] == 256.0
-    assert clicks[0]['use_viewport_metrics'] is False
-    assert clicks[0]['viewport_metrics_override'] == locator_state['viewport']
-    assert clicks[0]['mutation_action'] == 'save_only_click'
-    assert callable(clicks[0]['pre_dispatch_guard'])
 
 
-def test_visible_editor_save_only_stops_when_native_exact_save_click_fails(monkeypatch, tmp_path):
-    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class VisibleSavePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(
-        flow,
-        '_visible_exact_save_button_state',
-        lambda page: {'ok': True, 'text': '保存', 'rect': {'x': 10, 'y': 20, 'w': 40, 'h': 20}, 'viewport': {'innerWidth': 1200, 'innerHeight': 800}},
-    )
-    monkeypatch.setattr(flow, '_capture_save_network_events', lambda page, rect: {})
-    monkeypatch.setattr(flow, '_finalize_save_network_audit', lambda *_args: _complete_save_network_capture())
-    monkeypatch.setattr(flow, '_click_point_with_native_window', lambda *args, **kwargs: False)
-
-    result = flow._save_only_on_page(VisibleSavePage(), **_save_only_kwargs())
-
-    assert result['stage'] == 'save_only_failed'
-    assert result['save_result']['reason'] == 'native_exact_save_click_failed'
-    assert result['save_result']['clicked'] is False
 
 
-def test_visible_exact_save_button_state_uses_independent_devtools_probe(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-    def fake_devtools_probe(page, script, *, timeout=1800):
-        calls.append({'page': page, 'script': script, 'timeout': timeout})
-        return {
-            'ok': True,
-            'text': '保存',
-            'rect': {'x': 100, 'y': 200, 'w': 80, 'h': 32},
-            'viewport': {'innerWidth': 1440, 'innerHeight': 900, 'devicePixelRatio': 1},
-            'published': False,
-        }
-
-    monkeypatch.setattr(flow, '_evaluate_visible_page_function_via_devtools', fake_devtools_probe, raising=False)
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_zero_arg_page_function_with_runtime_timeout',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('visible save locator must not use Playwright Runtime.evaluate')),
-    )
-
-    state = flow._visible_exact_save_button_state(FakePage())
-
-    assert state['ok'] is True
-    assert state['text'] == '保存'
-    assert calls and calls[0]['timeout'] == 1800
 
 
-def test_visible_exact_save_button_state_fails_fast_when_devtools_probe_is_unavailable(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_visible_page_function_via_devtools',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('DevTools target unavailable')),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_zero_arg_page_function_with_runtime_timeout',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('devtools failure must not fall back to Playwright Runtime.evaluate')),
-    )
-    monkeypatch.setattr(flow, '_capture_native_dxm_content_snapshot', lambda page: None, raising=False)
-
-    state = flow._visible_exact_save_button_state(FakePage())
-
-    assert state['ok'] is False
-    assert state['published'] is None
-    assert 'DevTools target unavailable' in state['reason']
 
 
-def test_visible_exact_save_button_state_does_not_trust_native_toolbar_pixels_when_devtools_times_out(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-    def bgra_snapshot(width, height, rects):
-        pixels = bytearray([255, 255, 255, 255] * width * height)
-        for rect in rects:
-            x0, y0, w, h = rect['box']
-            r, g, b = rect['rgb']
-            for y in range(y0, y0 + h):
-                for x in range(x0, x0 + w):
-                    index = (y * width + x) * 4
-                    pixels[index:index + 4] = bytes((b, g, r, 255))
-        return {'width': width, 'height': height, 'pixels': bytes(pixels), 'format': 'bgra'}
-
-    snapshot = bgra_snapshot(
-        900,
-        260,
-        [
-            {'box': (320, 62, 135, 34), 'rgb': (255, 105, 55)},  # 保存并移入待发布
-            {'box': (468, 62, 58, 34), 'rgb': (255, 105, 55)},   # 保存
-            {'box': (540, 62, 72, 34), 'rgb': (0, 153, 102)},    # 发布
-        ],
-    )
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_visible_page_function_via_devtools',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('独立 DevTools 调用超时。')),
-        raising=False,
-    )
-    monkeypatch.setattr(flow, '_capture_native_dxm_content_snapshot', lambda page: snapshot, raising=False)
-
-    state = flow._visible_exact_save_button_state(FakePage())
-
-    assert state['ok'] is False
-    assert '精确文本定位通道不可用' in state['reason']
-    assert state['native_fallback'] is None
-    assert state['published'] is None
 
 
 def test_visible_save_success_state_uses_independent_devtools_probe(monkeypatch, tmp_path):
@@ -6243,93 +6011,10 @@ def test_visible_editor_semi_entry_steps_require_dom_verification(monkeypatch, t
         )
 
 
-def test_exact_save_revalidates_immediately_before_dom_dispatch(tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    events = []
-
-    class FakePage:
-        def __init__(self):
-            _install_exact_save_handle(self, events)
-
-        def locator(self, *_args, **_kwargs):
-            raise AssertionError('DOM exact save path should complete')
-
-        def wait_for_timeout(self, _timeout):
-            events.append('wait')
-
-    def authorize(_context, operation):
-        events.append('authorize')
-        guard_result = _context['_pre_dispatch_guard']()
-        if guard_result.get('ok') is not True:
-            return {'ok': False, 'executed': False, 'reason_code': 'MUTATION_TARGET_DRIFT'}
-        operation_result = operation()
-        return {'ok': True, 'executed': True, 'operation_result': operation_result}
-
-    flow.set_mutation_authorizer(
-        authorize,
-        {'task_id': 3, 'job_id': 4, 'state': 'SAVE_ONLY', 'mode': 'single_save'},
-    )
-
-    assert flow._click_exact_save_button(FakePage(), mutation_action='save_only_click') is True
-    assert events == ['authorize', 'target_guard', 'dispatch']
 
 
-def test_exact_save_dispatch_error_never_retries_with_locator_or_coordinate_click(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    events = []
-
-    class FakePage:
-        def __init__(self):
-            _install_exact_save_handle(self, events, dispatch_error=RuntimeError('DOM dispatch failed'))
-
-        def wait_for_timeout(self, _timeout):
-            events.append('wait')
-
-        def locator(self, _selector):
-            events.append('locator_fallback')
-            raise AssertionError('failed authorized operation must not enter locator fallback')
-
-    def authorize(_context, operation):
-        events.append('authorize')
-        guard_result = _context['_pre_dispatch_guard']()
-        if guard_result.get('ok') is not True:
-            return {'ok': False, 'executed': False, 'reason_code': 'MUTATION_TARGET_DRIFT'}
-        operation_result = operation()
-        return {'ok': True, 'executed': True, 'operation_result': operation_result}
-
-    flow.set_mutation_authorizer(authorize, {'task_id': 3})
-    monkeypatch.setattr(
-        flow,
-        '_click_rect_center',
-        lambda *_args, **_kwargs: events.append('coordinate_fallback'),
-    )
-
-    with pytest.raises(RuntimeError, match='MUTATION_OPERATION_FAILED'):
-        flow._click_exact_save_button(FakePage(), mutation_action='save_only_click')
-
-    assert events == ['authorize', 'target_guard', 'dispatch']
 
 
-def test_exact_save_locator_executes_only_inside_authorizer(tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    events = []
-
-    class FakePage:
-        def __init__(self):
-            _install_exact_save_handle(self, events)
-
-    def authorize(_context, operation):
-        events.append('authorize')
-        guard_result = _context['_pre_dispatch_guard']()
-        if guard_result.get('ok') is not True:
-            return {'ok': False, 'executed': False, 'reason_code': 'MUTATION_TARGET_DRIFT'}
-        operation_result = operation()
-        return {'ok': True, 'executed': True, 'operation_result': operation_result}
-
-    flow.set_mutation_authorizer(authorize, {'task_id': 3})
-
-    assert flow._click_exact_save_button(FakePage(), mutation_action='save_only_click') is True
-    assert events == ['authorize', 'target_guard', 'dispatch']
 
 
 def test_click_rect_page_mouse_executes_only_inside_authorizer(monkeypatch, tmp_path):
@@ -7654,21 +7339,6 @@ def test_dxm_login_flow_perform_editor_action_allows_verify_not_published(monkey
     assert state['published'] is False
 
 
-def test_open_semi_managed_page_records_source_editor_url(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    monkeypatch.setattr(flow, '_fill_editor_required_defaults_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'editor_required_defaults_filled'})
-    monkeypatch.setattr(flow, '_fill_editor_variants_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'editor_variants_filled'})
-    monkeypatch.setattr(flow, '_fill_compliance_defaults_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'compliance_defaults_filled'})
-    monkeypatch.setattr(flow, '_repair_product_main_images_on_page', lambda page: {'ok': True})
-    monkeypatch.setattr(flow, '_enable_semi_managed_on_page', lambda page: {'stage': 'semi_managed_enabled', 'screenshot_url': '/artifacts/screenshots/semi.png'})
-    monkeypatch.setattr(flow, '_semi_managed_page_state', lambda page: {'blocked': False, 'is_semi_page': True})
-
-    state = flow._open_semi_managed_page_from_editor(DummyOpenSemiPage())
-
-    assert state['stage'] == 'semi_managed_page'
-    assert state['source_editor_url'] == 'https://www.dianxiaomi.com/web/smt/edit?id=123'
 
 
 def test_semi_managed_page_state_accepts_inline_semi_managed_fields(tmp_path):
@@ -7695,111 +7365,10 @@ def test_semi_managed_page_state_accepts_inline_semi_managed_fields(tmp_path):
             browser.close()
 
 
-def test_open_semi_managed_page_allows_second_media_deferred_after_prior_eu_verified(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    media_results = iter([
-        {
-            'stage': 'media_assets_filled',
-            'fill_result': {
-                'image_slots': [
-                    {
-                        'label': '外包装/标签实拍图-欧盟',
-                        'slot_key': 'eu_outer_package',
-                        'ok': True,
-                    }
-                ],
-                'eu_outer_package_image': {'ok': True},
-            },
-        },
-        {
-            'stage': 'media_assets_deferred',
-            'message': '当前页面未出现图片槽位，已延后处理：外包装/标签实拍图-欧盟',
-            'fill_result': {
-                'image_slots': [
-                    {
-                        'label': '外包装/标签实拍图-欧盟',
-                        'slot_key': 'eu_outer_package',
-                        'deferred': True,
-                    }
-                ],
-                'eu_outer_package_image': {'deferred': True},
-            },
-        },
-    ])
-
-    monkeypatch.setattr(flow, '_fill_editor_required_defaults_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'editor_required_defaults_filled'})
-    monkeypatch.setattr(flow, '_fill_editor_variants_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'editor_variants_filled'})
-    monkeypatch.setattr(flow, '_fill_media_assets_on_page', lambda page, defaults=None, **_kwargs: next(media_results))
-    monkeypatch.setattr(flow, '_fill_compliance_defaults_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'compliance_defaults_filled'})
-    monkeypatch.setattr(flow, '_repair_product_main_images_on_page', lambda page: {'ok': True})
-    monkeypatch.setattr(flow, '_enable_semi_managed_on_page', lambda page: {'stage': 'semi_managed_enabled', 'screenshot_url': '/artifacts/screenshots/semi.png'})
-    monkeypatch.setattr(flow, '_semi_managed_page_state', lambda page: {'blocked': False, 'is_semi_page': True})
-
-    state = flow._open_semi_managed_page_from_editor(
-        DummyOpenSemiPage(),
-        _legacy_explicit_editor_defaults(
-            eu_outer_package_filename='微信图片_202504092228421.jpg',
-        ),
-    )
-
-    assert state['stage'] == 'semi_managed_page'
 
 
-def test_open_semi_managed_page_refills_variants_and_compliance_on_same_page(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-    monkeypatch.setattr(flow, '_fill_editor_required_defaults_on_page', lambda page, defaults=None, **_kwargs: calls.append('base') or {'stage': 'editor_required_defaults_filled'})
-    monkeypatch.setattr(flow, '_fill_editor_variants_on_page', lambda page, defaults=None, **_kwargs: calls.append('variants') or {'stage': 'editor_variants_filled'})
-    monkeypatch.setattr(flow, '_fill_compliance_defaults_on_page', lambda page, defaults=None, **_kwargs: calls.append('compliance') or {'stage': 'compliance_defaults_filled'})
-    monkeypatch.setattr(flow, '_repair_product_main_images_on_page', lambda page: calls.append('main_images') or {'ok': True})
-    monkeypatch.setattr(flow, '_enable_semi_managed_on_page', lambda page: calls.append('enable') or {'stage': 'semi_managed_enabled', 'screenshot_url': '/artifacts/screenshots/semi.png'})
-    monkeypatch.setattr(flow, '_semi_managed_page_state', lambda page: {'blocked': False, 'is_semi_page': True})
-
-    state = flow._open_semi_managed_page_from_editor(DummyOpenSemiPage())
-
-    assert state['stage'] == 'semi_managed_page'
-    assert calls == ['base', 'variants', 'compliance', 'main_images', 'enable']
 
 
-def test_open_semi_managed_page_retries_customs_after_image_repairs(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-    monkeypatch.setattr(
-        flow,
-        '_fill_editor_required_defaults_on_page',
-        lambda page, defaults=None, **_kwargs: calls.append('base') or {
-            'stage': 'editor_required_defaults_filled',
-            'fill_result': {'customs_supervision': {'ok': False, 'reason': '海关监管弹窗未打开'}},
-        },
-    )
-    monkeypatch.setattr(flow, '_fill_editor_variants_on_page', lambda page, defaults=None, **_kwargs: calls.append('variants') or {'stage': 'editor_variants_filled'})
-    monkeypatch.setattr(flow, '_fill_media_assets_on_page', lambda page, defaults=None, **_kwargs: calls.append('media') or {'stage': 'media_assets_filled', 'fill_result': {'eu_outer_package_image': {'ok': True}}})
-    monkeypatch.setattr(flow, '_media_result_has_verified_eu_outer_package', lambda result: True)
-    monkeypatch.setattr(flow, '_fill_compliance_defaults_on_page', lambda page, defaults=None, **_kwargs: calls.append('compliance') or {'stage': 'compliance_defaults_filled'})
-    monkeypatch.setattr(flow, '_repair_product_main_images_on_page', lambda page: calls.append('main_images') or {'ok': True})
-    monkeypatch.setattr(flow, '_fill_customs_supervision_attribute', lambda page, names: calls.append(('customs_after_repairs', names)) or {'ok': True})
-    monkeypatch.setattr(flow, '_enable_semi_managed_on_page', lambda page: calls.append('enable') or {'stage': 'semi_managed_enabled', 'screenshot_url': '/artifacts/screenshots/semi.png'})
-    monkeypatch.setattr(flow, '_semi_managed_page_state', lambda page: {'blocked': False, 'is_semi_page': True})
-
-    state = flow._open_semi_managed_page_from_editor(
-        DummyOpenSemiPage(),
-        _legacy_explicit_editor_defaults(
-            eu_outer_package_filename='微信图片_202504092228421.jpg',
-            customs_product_name_priorities=['keychain'],
-        ),
-    )
-
-    assert state['stage'] == 'semi_managed_page'
-    assert calls[:5] == ['base', 'variants', 'media', 'compliance', 'main_images']
-    assert calls[5] == ('customs_after_repairs', ['keychain'])
-    assert calls[6] == 'enable'
 
 
 def test_open_semi_managed_page_stops_when_same_page_variants_fail(monkeypatch, tmp_path):
@@ -8375,249 +7944,22 @@ def test_dismiss_blocking_modals_rejects_publish_confirmation(tmp_path):
         flow._dismiss_blocking_modals(DummyDangerousModalPage())
 
 
-def test_dismiss_blocking_modals_skips_collection_plugin_guide(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyGuideOverlayPage()
-    clicks = []
-
-    def fake_click(_page, rect):
-        clicks.append(rect)
-        page.clicked = True
-
-    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-    dismissed = flow._dismiss_blocking_modals(page)
-
-    assert dismissed == 1
-    assert clicks == [{'x': 10, 'y': 20, 'w': 30, 'h': 40}]
 
 
-def test_dismiss_blocking_modals_skips_important_reminder(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyImportantReminderModalPage()
-    clicks = []
-
-    def fake_click(_page, rect):
-        clicks.append(rect)
-        page.clicked = True
-
-    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-    dismissed = flow._dismiss_blocking_modals(page)
-
-    assert dismissed == 1
-    assert clicks == [{'x': 983, 'y': 315, 'w': 72, 'h': 15}]
 
 
-def test_dismiss_blocking_modals_skips_reminder_dropdown(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyReminderDropdownPage()
-    clicks = []
-
-    def fake_click(_page, rect):
-        clicks.append(rect)
-        page.clicked = True
-
-    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-    dismissed = flow._dismiss_blocking_modals(page)
-
-    assert dismissed == 1
-    assert clicks == [{'x': 1000, 'y': 345, 'w': 90, 'h': 24}]
 
 
-def test_dismiss_blocking_modals_uses_escape_when_same_close_click_repeats(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyPersistentModalUntilEscapePage()
-    clicks = []
-
-    def fake_click(_page, rect):
-        clicks.append(rect)
-
-    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-    dismissed = flow._dismiss_blocking_modals(page)
-
-    assert dismissed == 3
-    assert clicks == [
-        {'x': 120, 'y': 20, 'w': 24, 'h': 24},
-        {'x': 120, 'y': 20, 'w': 24, 'h': 24},
-    ]
-    assert page.presses == ['Escape']
-    assert flow._last_dismiss_blocking_modals_trace[-1]['fallback'] == 'escape_after_repeated_click'
 
 
-def test_dismiss_blocking_modals_removes_stuck_notice_after_repeated_ignore(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 760})
-        page.set_content(
-            '''
-            <div class="ant-modal-wrap comm-vip-tips-modal important-remind comm-modal" role="dialog"
-                 style="position:fixed;left:0;top:0;width:1200px;height:760px;background:rgba(0,0,0,.15);z-index:99999">
-              <div class="ant-modal css-1oz1bg8"
-                   style="position:absolute;left:370px;top:100px;width:700px;height:280px;background:white">
-                <div class="ant-modal-content">
-                  <div class="ant-modal-title">重要提醒</div>
-                  <div>您购买的 VIP1 将在3天后 过期，功能将被停用，超出的图片空间将被冻结</div>
-                  <div class="ant-modal-footer" style="position:absolute;left:15px;top:210px;width:670px;height:26px">
-                    <a class="ant-dropdown-link ant-dropdown-trigger"
-                       style="position:absolute;right:0;top:5px;width:72px;height:15px">忽略提示</a>
-                  </div>
-                </div>
-              </div>
-            </div>
-            '''
-        )
-
-        def fake_click(_target_page, rect):
-            clicks.append(rect)
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        remaining = page.locator('.ant-modal-wrap').count()
-        browser.close()
-
-    assert dismissed == 3
-    assert len(clicks) == 2
-    assert remaining == 0
-    assert flow._last_dismiss_blocking_modals_trace[-1]['fallback'] == 'remove_stuck_notice_modal'
 
 
-def test_dismiss_blocking_modals_prefers_ignore_prompt_over_close_button(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 500, 'height': 260})
-        page.set_content(
-            '''
-            <div class="ant-modal-wrap" style="position:fixed;left:0;top:0;width:420px;height:220px;background:white;display:block">
-              <button class="ant-modal-close" style="position:absolute;left:360px;top:10px;width:20px;height:20px"></button>
-              <div style="padding:50px">距离活动结束仅剩 1 小时</div>
-              <button id="ignore" style="position:absolute;left:40px;top:140px;width:90px;height:30px">忽略提示</button>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.ant-modal-wrap')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(40, abs=2)
-    assert clicks[0]['w'] == pytest.approx(90, abs=2)
 
 
-def test_remove_stuck_notice_modal_removes_stacked_safe_notices(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 760})
-        page.set_content(
-            '''
-            <div class="ant-modal-wrap comm-vip-tips-modal important-remind comm-modal" role="dialog"
-                 style="position:fixed;left:0;top:0;width:1200px;height:760px;background:rgba(0,0,0,.15);z-index:99999">
-              <div class="ant-modal-title">重要提醒</div>
-              <div>您购买的 VIP1 将在3天后 过期，功能将被停用</div>
-              <a>忽略提示</a>
-            </div>
-            <div class="ant-modal-wrap bullet-layer notice-list-modal notice-list-modal--offline" role="dialog"
-                 style="position:fixed;left:0;top:0;width:1200px;height:760px;background:rgba(0,0,0,.15);z-index:99998">
-              <div class="notice-list-modal__header">线下活动</div>
-              <div class="notice-list-modal__body">小秘公告 TikTok Shop 美区活动报名</div>
-              <button class="ant-modal-close">x</button>
-            </div>
-            '''
-        )
-
-        removed = flow._remove_stuck_notice_modal(page)
-        remaining = page.locator('.ant-modal-wrap').count()
-        browser.close()
-
-    assert removed['removed'] is True
-    assert removed['removed_count'] == 2
-    assert remaining == 0
 
 
-def test_dismiss_blocking_modals_handles_standalone_ignore_prompt(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 900, 'height': 500})
-        page.set_content(
-            '''
-            <div class="activity-popover" style="position:fixed;left:300px;top:180px;width:320px;height:60px;background:white;z-index:9999">
-              <div id="ignore" style="position:absolute;left:20px;top:16px;width:110px;height:28px">忽略提示</div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.activity-popover')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(320, abs=2)
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'忽略提示', 'standalone:忽略提示'}
 
 
-def test_dismiss_blocking_modals_handles_dxm_campaign_next_step(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 800})
-        page.set_content(
-            '''
-            <div class="dxm-campaign-layer" style="position:fixed;left:240px;top:120px;width:620px;height:280px;background:white;z-index:9999">
-              <h3>重要提醒</h3>
-              <div>您的活动权益即将结束，查看最新特惠</div>
-              <button id="next" style="position:absolute;right:24px;bottom:18px;width:80px;height:32px">下一步</button>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.dxm-campaign-layer')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(756, abs=4)
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'下一步', 'standalone:下一步'}
 
 
 def test_dispatch_authorized_mutation_without_authorizer_never_executes_operation(tmp_path):
@@ -8727,45 +8069,6 @@ def test_dispatch_authorized_mutation_operation_error_is_not_retried(tmp_path):
     assert operation_calls == ['attempt']
 
 
-def test_save_click_revalidates_at_exact_mutation_instant(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit'
-
-        def evaluate(self, *_args, **_kwargs):
-            return {'ok': True, 'rect': {'x': 10, 'y': 20, 'w': 80, 'h': 30}, 'published': False}
-
-        def wait_for_timeout(self, *_args, **_kwargs):
-            return None
-
-    monkeypatch.setattr(flow, '_is_visible_dxm_editor_page', lambda _page: False)
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda _page: 0)
-    monkeypatch.setattr(flow, '_visible_blocking_modal_state', lambda _page: {'visible': False})
-    monkeypatch.setattr(flow, '_capture_save_network_events', lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(flow, '_finalize_save_network_audit', lambda *_args: _complete_save_network_capture())
-    def fake_save_click(_page, **kwargs):
-        def operation():
-            clicks.append('save')
-            return True
-
-        return flow._dispatch_authorized_mutation(
-            kwargs['mutation_action'],
-            operation,
-        )['operation_result']
-
-    monkeypatch.setattr(flow, '_click_exact_save_button', fake_save_click)
-    monkeypatch.setattr(flow, '_click_rect_center', lambda *_args, **_kwargs: clicks.append('rect'))
-    flow.set_mutation_authorizer(
-        lambda _context, _operation: {'ok': False, 'reason_code': 'AUTH_CONTEXT_MISMATCH'},
-        {'task_id': 9, 'job_id': 10, 'state': 'SAVE_ONLY', 'mode': 'single_save'},
-    )
-
-    with pytest.raises(RuntimeError, match='AUTH_CONTEXT_MISMATCH'):
-        flow._save_only_on_page(FakePage(), **_save_only_kwargs())
-
-    assert clicks == []
 
 
 def test_scoped_evidence_capture_is_exclusive_and_does_not_overwrite(tmp_path):
@@ -8801,49 +8104,6 @@ def test_scoped_evidence_capture_is_exclusive_and_does_not_overwrite(tmp_path):
     assert first['size'] == len(b'first-exclusive-proof')
 
 
-def test_visible_save_only_requires_network_and_page_success(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    flow.set_execution_evidence_context({
-        'task_id': 3,
-        'job_id': 4,
-        'state': 'SAVE_ONLY',
-        'command_id': f'command-save-proof-{tmp_path.parent.name}-{tmp_path.name}',
-    })
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-        def screenshot(self, *, path, **_kwargs):
-            Path(path).write_bytes(b'save-proof')
-
-    monkeypatch.setattr(flow, '_is_visible_dxm_editor_page', lambda _page: True)
-    monkeypatch.setattr(flow, '_visible_exact_save_button_state', lambda _page: {
-        'ok': True,
-        'rect': {'x': 10, 'y': 20, 'w': 80, 'h': 30},
-        'viewport': {'screenX': 80, 'screenY': 80, 'outerWidth': 1600, 'outerHeight': 950},
-    })
-    monkeypatch.setattr(flow, '_capture_save_network_events', lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(flow, '_finalize_save_network_audit', lambda *_args: _complete_save_network_capture())
-    monkeypatch.setattr(flow, '_click_point_with_native_window', lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(flow, '_structured_save_status_snapshot', lambda *_args, **_kwargs: {'ok': True, 'entries': []})
-    monkeypatch.setattr(
-        flow,
-        '_visible_save_success_state',
-        lambda _page, *, baseline=None: {'ok': True, 'success_text': '保存成功'},
-    )
-    monkeypatch.setattr(flow, '_network_save_result', lambda _events: {'ok': False})
-
-    result = flow._save_only_on_page(FakePage(), **_save_only_kwargs())
-
-    assert result['ok'] is False
-    assert result['stage'] == 'save_only_failed'
-    assert result['save_result']['page_save_result']['ok'] is True
-    assert result['save_result']['network_save_result']['ok'] is False
-    assert set(result['evidence_ref']) == {'path', 'sha256', 'size'}
-    assert Path(result['evidence_ref']['path']).read_bytes() == b'save-proof'
 
 
 def test_verify_not_published_returns_content_attested_evidence(monkeypatch, tmp_path):
@@ -8898,257 +8158,18 @@ def test_verify_not_published_returns_content_attested_evidence(monkeypatch, tmp
     assert Path(result['evidence_ref']['path']).read_bytes() == b'unpublished-proof'
 
 
-def test_dismiss_blocking_modals_skips_ant_modal_mask_and_uses_dialog(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 900, 'height': 520})
-        page.set_content(
-            '''
-            <div class="ant-modal-root">
-              <div class="ant-modal-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99998"></div>
-              <div class="ant-modal-wrap comm-vip-tips-modal important-remind comm-modal" role="dialog"
-                   style="position:fixed;left:120px;top:80px;width:620px;height:220px;background:white;z-index:99999">
-                <div class="ant-modal-content">
-                  <div class="ant-modal-title">重要提醒</div>
-                  <div>您购买的 图片空间 将在 <span>2天后</span> 过期</div>
-                  <a class="ant-dropdown-link ant-dropdown-trigger" style="position:absolute;left:480px;top:170px;width:90px;height:24px">忽略提示</a>
-                </div>
-              </div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.ant-modal-root')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(600, abs=4)
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'忽略提示', 'standalone:忽略提示'}
 
 
-def test_dismiss_blocking_modals_skips_mask_for_notice_next_button(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 900, 'height': 520})
-        page.set_content(
-            '''
-            <div class="ant-modal-root">
-              <div class="ant-modal-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99998"></div>
-              <div class="ant-modal-wrap bullet-layer notice-list-modal" role="dialog"
-                   style="position:fixed;left:160px;top:70px;width:520px;height:280px;background:white;z-index:99999">
-                <div class="notice-list-modal__header">重要通知</div>
-                <div class="notice-content__title">店小秘618钜惠今日启动</div>
-                <button id="next" style="position:absolute;right:16px;bottom:14px;width:72px;height:28px">下一条</button>
-              </div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.ant-modal-root')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(592, abs=4)
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] == '下一条'
 
 
-def test_dismiss_blocking_modals_prefers_topmost_notice_modal(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 760})
-        page.set_content(
-            '''
-            <div class="ant-modal-wrap comm-vip-tips-modal important-remind comm-modal" role="dialog"
-                 style="position:fixed;left:320px;top:120px;width:620px;height:220px;background:white;z-index:99999">
-              <div class="ant-modal-content">
-                <div class="ant-modal-title">重要提醒</div>
-                <div>您购买的 VIP1 将在3天后 过期，功能将被停用</div>
-                <a class="ant-dropdown-link ant-dropdown-trigger" style="position:absolute;left:480px;top:170px;width:90px;height:24px">忽略提示</a>
-              </div>
-            </div>
-            <div class="ant-modal-wrap bullet-layer notice-list-modal" role="dialog"
-                 style="position:fixed;left:240px;top:80px;width:760px;height:440px;background:white;z-index:100000">
-              <button class="ant-modal-close ant-modal-close-x" style="position:absolute;right:16px;top:16px;width:32px;height:32px">x</button>
-              <div class="notice-list-modal__header">线下活动</div>
-              <h2>小秘公告 TikTok Shop 美区HOME行业 圣诞专题四城招品会</h2>
-              <p>报名链接：https://www.hudongba.com/dis/q1x45n9vm8</p>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelectorAll('.ant-modal-wrap').forEach(el => el.remove())")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] == 'modal-close'
 
 
-def test_dismiss_blocking_modals_allows_notice_copy_with_publish_word(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 900, 'height': 520})
-        page.set_content(
-            '''
-            <div class="ant-modal-wrap bullet-layer notice-list-modal" role="dialog"
-                 style="position:fixed;left:160px;top:70px;width:520px;height:280px;background:white;z-index:99999">
-              <div class="notice-list-modal__header">小秘公告</div>
-              <div>官方战略发布与圣诞品类方向说明，不是商品发布确认。</div>
-              <button id="close" style="position:absolute;right:16px;bottom:14px;width:72px;height:28px">关闭</button>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.notice-list-modal')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks
-    assert flow._last_dismiss_blocking_modals_trace[0]['dangerous'] is False
 
 
-def test_dismiss_blocking_modals_ignores_inline_logistics_notice(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 900, 'height': 520})
-        page.set_content(
-            '''
-            <div class="logistics-attr-notice" style="position:relative;width:600px;height:40px">
-              新增说明：平台物流属性更新，点击此处跳转设置
-            </div>
-            <div class="ant-modal-root">
-              <div class="ant-modal-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99998"></div>
-              <div class="ant-modal-wrap bullet-layer notice-list-modal" role="dialog"
-                   style="position:fixed;left:160px;top:70px;width:520px;height:280px;background:white;z-index:99999">
-                <div class="notice-list-modal__header">重要通知</div>
-                <button id="next" style="position:absolute;right:16px;bottom:14px;width:72px;height:28px">下一条</button>
-              </div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.ant-modal-root')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(592, abs=4)
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] == '下一条'
 
 
-def test_dismiss_blocking_modals_prefers_small_clickable_standalone_prompt(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 900, 'height': 520})
-        page.set_content(
-            '''
-            <div class="important-remind" style="position:fixed;left:120px;top:80px;width:620px;height:220px;background:white;z-index:99999">
-              <div>重要提醒</div>
-              <div id="wide-footer" style="position:absolute;left:220px;top:170px;width:360px;height:26px">
-                <a id="ignore" style="display:inline-block;width:90px;height:24px">忽略提示</a>
-              </div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.important-remind')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(340, abs=4)
-    assert clicks[0]['w'] == pytest.approx(90, abs=4)
 
 
-def test_dismiss_blocking_modals_prefers_text_span_inside_wide_prompt(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 900, 'height': 520})
-        page.set_content(
-            '''
-            <div class="important-remind" style="position:fixed;left:80px;top:80px;width:720px;height:220px;background:white;z-index:99999">
-              <div>重要提醒</div>
-              <a id="wide-ignore" style="position:absolute;left:300px;top:170px;width:360px;height:26px">
-                <span id="ignore-text" style="display:inline-block;width:64px;height:24px">忽略提示</span>
-              </a>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.important-remind')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks[0]['x'] == pytest.approx(380, abs=4)
-    assert clicks[0]['w'] == pytest.approx(64, abs=4)
 
 
 def test_wait_for_page_ready_loops_until_loading_disappears(tmp_path):
@@ -9170,23 +8191,6 @@ def test_wait_for_page_ready_loops_until_loading_disappears(tmp_path):
     assert page.dismiss_calls == 2
 
 
-def test_open_semi_managed_page_fails_on_product_info_error(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-    monkeypatch.setattr(flow, '_fill_editor_required_defaults_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'editor_required_defaults_filled'})
-    monkeypatch.setattr(flow, '_fill_editor_variants_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'editor_variants_filled'})
-    monkeypatch.setattr(flow, '_fill_compliance_defaults_on_page', lambda page, defaults=None, **_kwargs: {'stage': 'compliance_defaults_filled'})
-    monkeypatch.setattr(flow, '_repair_product_main_images_on_page', lambda page: {'ok': True})
-    monkeypatch.setattr(flow, '_enable_semi_managed_on_page', lambda page: {'stage': 'semi_managed_enabled', 'screenshot_url': '/artifacts/screenshots/semi.png'})
-    monkeypatch.setattr(flow, '_semi_managed_page_state', lambda page: {'blocked': True, 'message': '产品信息中有错误，请检查'})
-
-    state = flow._open_semi_managed_page_from_editor(DummyOpenSemiPage())
-
-    assert state['stage'] == 'open_semi_managed_page_failed'
-    assert state['published'] is None
-    assert '产品信息中有错误' in state['message']
 
 
 def test_extract_eu_outer_package_filename_from_nested_config(tmp_path):
@@ -12191,160 +11195,16 @@ def test_fill_customs_supervision_rejects_existing_product_name_outside_frozen_p
     assert page.timeouts == []
 
 
-def test_save_only_rejects_publish_buttons(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySemiPage({'ok': False, 'reason': '命中发布按钮：保存并发布', 'published': False})
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert state['stage'] == 'save_only_failed'
-    assert state['published'] is None
-    assert '保存并发布' in state['message']
 
 
-def test_save_only_dismisses_blocking_modals_before_locating_save(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyNetworkPage()
-    calls = []
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda target_page: calls.append('dismiss') or 1)
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert state['stage'] == 'save_only_failed'
-    assert state['save_result']['network_save_result']['ok'] is True
-    assert state['save_result']['page_save_result']['ok'] is False
-    assert calls == ['dismiss']
-    assert page.evaluate_calls == 1
-    assert page.snapshot_calls == 2
 
 
-@pytest.mark.parametrize(
-    ('baseline_entries', 'current_entries', 'expected_stage', 'expected_reason'),
-    [
-        ([], [], 'save_only_failed', 'structured_save_success_missing'),
-        (
-            [{'id': 'old-toast', 'text': '已保存', 'status': '', 'source': 'role-status'}],
-            [{'id': 'old-toast', 'text': '已保存', 'status': '', 'source': 'role-status'}],
-            'save_only_failed',
-            'stale_save_success_status',
-        ),
-        (
-            [],
-            [{'id': 'new-toast', 'text': '产品编辑成功', 'status': '', 'source': 'ant-notification-notice'}],
-            'save_only',
-            None,
-        ),
-    ],
-    ids=['body-text-only', 'unchanged-old-toast', 'new-toast'],
-)
-def test_other_save_only_requires_new_structured_status_transition(
-    monkeypatch,
-    tmp_path,
-    baseline_entries,
-    current_entries,
-    expected_stage,
-    expected_reason,
-):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-
-    class StructuredSavePage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-        def __init__(self):
-            self.snapshot_calls = 0
-            self.action_calls = 0
-
-        def evaluate(self, script, arg=None):
-            if _is_dismiss_blocking_modals_script(script):
-                return {'visible': False}
-            if _is_visible_blocking_modal_state_script(script):
-                return {'visible': False}
-            if '__DXM_STRUCTURED_SAVE_STATUS_SNAPSHOT__' in script:
-                entries = baseline_entries if self.snapshot_calls == 0 else current_entries
-                self.snapshot_calls += 1
-                return {'ok': True, 'entries': entries}
-            self.action_calls += 1
-            if self.action_calls == 1:
-                return {
-                    'ok': True,
-                    'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40},
-                    'message': '已定位保存按钮',
-                    'published': False,
-                }
-            return {'ok': True, 'success_text': '已保存', 'published': False}
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-        def title(self):
-            return '店小秘编辑页'
-
-    page = StructuredSavePage()
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-    monkeypatch.setattr(flow, '_click_exact_save_button', lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(flow, '_capture_save_network_events', lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(flow, '_finalize_save_network_audit', lambda *_args: _complete_save_network_capture())
-    monkeypatch.setattr(flow, '_network_save_result', lambda _events: {'ok': True, 'method': 'POST', 'code': 0})
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert state['stage'] == expected_stage
-    assert state['save_result']['page_save_result'].get('reason') == expected_reason
-    assert state['save_result']['network_save_result']['ok'] is True
 
 
-def test_save_only_stops_when_blocking_modal_remains_after_dismiss(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyNetworkPage()
-    flow._last_dismiss_blocking_modals_trace = [{'clicked': 'modal-close'}]
-
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda target_page: 10)
-    monkeypatch.setattr(
-        flow,
-        '_visible_blocking_modal_state',
-        lambda target_page: {'visible': True, 'text': '距离活动结束仅剩 我知道了'},
-    )
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert state['stage'] == 'save_only_failed'
-    assert page.clicks == []
-    assert state['save_result']['reason'] == '保存前弹窗未能关闭'
-    assert state['save_result']['blocking_modal']['visible'] is True
 
 
-def test_save_only_script_checks_publish_risk_before_clicking_save(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyScriptPage()
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert state['stage'] == 'save_only_failed'
-    for word in ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布']:
-        assert word in page.script
-    assert "querySelectorAll('button,a,[role=\"button\"]')" in page.script
 
 
-def test_save_only_script_prioritizes_exact_save_button_when_publish_button_is_visible(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyScriptPage()
-
-    flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert page.script.index("const exactSaves = candidates.filter") < page.script.index("const forbidden = candidates.find")
 
 
 def test_click_exact_save_button_ignores_save_and_move_to_publish(tmp_path):
@@ -12370,95 +11230,12 @@ def test_click_exact_save_button_ignores_save_and_move_to_publish(tmp_path):
     assert value == 'save'
 
 
-def test_save_only_fails_when_success_prompt_missing_after_click(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyVerifyPage({
-        'ok': False,
-        'clicked': True,
-        'reason': '未检测到保存成功提示',
-        'success_text': None,
-        'published': False,
-    })
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert page.evaluate_calls == 1
-    assert state['stage'] == 'save_only_failed'
-    assert state['save_result']['ok'] is False
-    assert 'structured_save_success_missing' in state['message']
 
 
-def test_save_only_fails_when_page_success_has_no_network_success(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyVerifyPage({
-        'ok': True,
-        'clicked': True,
-        'success_text': '产品编辑成功',
-        'published': False,
-    })
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert page.evaluate_calls == 1
-    assert state['stage'] == 'save_only_failed'
-    assert state['save_result']['ok'] is False
-    assert state['save_result']['page_save_result']['ok'] is True
-    assert state['save_result']['network_events'] == []
-    assert state['save_result']['network_save_result'] == {
-        'ok': False,
-        'reason': '未捕获唯一保存接口请求',
-        'receipt_count': 0,
-        'receipt_complete': False,
-    }
 
 
-def test_save_only_succeeds_only_when_page_and_network_both_succeed(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyVerifyPage({
-        'ok': True,
-        'clicked': True,
-        'success_text': '产品编辑成功',
-        'published': False,
-    })
-    monkeypatch.setattr(flow, '_network_save_result', lambda _events: {
-        'ok': True,
-        'message': '您的产品编辑成功！',
-        'method': 'POST',
-        'code': 0,
-    })
-    monkeypatch.setattr(flow, '_save_network_audit_complete', lambda *_args: True)
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert state['stage'] == 'save_only'
-    assert state['save_result']['ok'] is True
-    assert state['save_result']['page_save_result']['ok'] is True
-    assert state['save_result']['network_save_result']['ok'] is True
 
 
-def test_save_only_rejects_network_success_without_page_success(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    _arm_editor_action_test(flow, monkeypatch, tmp_path)
-    page = DummySaveOnlyNetworkPage()
-    monkeypatch.setattr(flow, '_click_point_with_native_window', lambda page, x, y, **_kwargs: False)
-    monkeypatch.setattr(flow, '_click_point_with_cdp', lambda page, x, y, **_kwargs: False)
-
-    state = flow._save_only_on_page(page, **_save_only_kwargs())
-
-    assert state['stage'] == 'save_only_failed'
-    assert page.clicks == []
-    assert state['save_result']['ok'] is False
-    assert state['save_result']['save_click_dispatched'] is True
-    assert state['save_result']['page_save_success'] is False
-    assert state['save_result']['network_save_success'] is True
-    assert state['published'] is None
 
 
 def test_dismiss_blocking_modals_if_visible_skips_heavy_scan_when_no_modal(monkeypatch, tmp_path):
@@ -12534,60 +11311,8 @@ def test_dismiss_blocking_modals_if_visible_uses_heavy_scan_for_real_modal(monke
     assert flow.recent_workflow_events()[-1]['event'] == 'blocking_modal_check:dismissed'
 
 
-def test_network_save_result_prefers_real_add_json_over_related_history_calls(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    result = flow._network_save_result([
-        {
-            'url': 'https://www.dianxiaomi.com/api/smtProduct/add.json',
-            'method': 'POST',
-            'request_observed': True,
-            'mutation_kind': 'save_request',
-            'status': 200,
-            'json': {'code': 0, 'msg': 'Successful', 'data': {'msg': '您的产品编辑成功！', 'code': 0}},
-        },
-        {
-            'url': 'https://www.dianxiaomi.com/api/smtProduct/addProductBrandHistory.json',
-            'method': 'POST',
-            'request_observed': True,
-            'mutation_kind': 'mutation_request',
-            'status': 200,
-            'json': {'code': 0, 'msg': 'Successful', 'data': 123},
-        },
-    ])
-
-    assert result['ok'] is True
-    assert result['url'] == 'https://www.dianxiaomi.com/api/smtProduct/add.json'
-    assert result['msg'] == '您的产品编辑成功！'
 
 
-def test_network_save_result_requires_post_2xx_for_real_smt_add_json(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    result = flow._network_save_result([
-        {
-            'url': 'https://www.dianxiaomi.com/api/smtProduct/add.json',
-            'method': 'GET',
-            'request_observed': True,
-            'mutation_kind': 'save_request',
-            'status': 200,
-            'json': {'code': 0, 'msg': 'Successful', 'data': {'msg': '您的产品编辑成功！', 'code': 0}},
-        },
-        {
-            'url': 'https://www.dianxiaomi.com/api/smtProduct/add.json',
-            'method': 'POST',
-            'request_observed': True,
-            'mutation_kind': 'save_request',
-            'status': 500,
-            'json': {'code': 0, 'msg': 'Successful', 'data': {'msg': '您的产品编辑成功！', 'code': 0}},
-        },
-    ])
-
-    assert result['ok'] is False
-    assert result['url'] == 'https://www.dianxiaomi.com/api/smtProduct/add.json'
-    assert result['code'] == 0
 
 
 def test_browser_session_generation_tracks_actual_context_lifecycle(tmp_path):

@@ -18,6 +18,11 @@ import type {
   LocalPlanTemplate,
 } from '../../types'
 import { CategoryCascadePicker, categoryLabel } from './CategoryCascadePicker'
+import { ProductPathContract } from './ProductPathContract'
+import { frontendConfig } from '../../config/frontendConfig'
+import { resolveCategorySelection } from '../../categorySelection'
+import { recordFrontendError } from '../../diagnostics/frontendErrors'
+import './localPlanResponsive.css'
 
 type LocalPlanWorkspaceProps = {
   plans: LocalPlanTemplate[]
@@ -55,6 +60,8 @@ export function LocalPlanWorkspace({
     shops: contextShops,
     selectedShopId,
     setSelectedShopId,
+    refresh: refreshShops,
+    error: shopReadError,
   } = useDxmShop()
   const [fallbackShops, setFallbackShops] = useState<DxmDraftShop[]>([])
   const shops = contextShops.length ? contextShops : fallbackShops
@@ -64,7 +71,7 @@ export function LocalPlanWorkspace({
   const [supersedesId, setSupersedesId] = useState<number | null>(null)
   const [name, setName] = useState('')
   const [version, setVersion] = useState('1.0.0')
-  const [planPath, setPlanPath] = useState<'A' | 'B'>('A')
+  const [planPath, setPlanPath] = useState<'A' | 'B'>(frontendConfig.product.path)
   const [shopId, setShopId] = useState('')
   const [categoryIdsText, setCategoryIdsText] = useState('')
   const [categoryRecords, setCategoryRecords] = useState<DxmCategoryRecord[]>([])
@@ -138,25 +145,25 @@ export function LocalPlanWorkspace({
   const editorCategoryIds = selectedCategoryIds.filter((categoryId) => editorModels[categoryId])
   const activeEditorCategoryId = editorCategoryIds[0]
   const activeEditorModel = activeEditorCategoryId ? editorModels[activeEditorCategoryId] : undefined
-  const semiManagedAvailability = resolveSemiManagedAvailability(
-    activeEditorCategoryId ? categoryCapabilities[activeEditorCategoryId] : undefined,
-  )
   const editorSections = (activeEditorModel?.sections ?? []).filter(
     (section) => section.code !== 'semi_managed' || planPath === 'B',
   )
 
-  // Standalone contract pages may render without App's provider.  Keep a
-  // read-only fallback there; the desktop App always prefers its account-bound
-  // global shop list.
+  // 复用全局只读入口；Reader 失败后等待人工刷新，避免页面切换触发重试。
   useEffect(() => {
     if (contextShops.length) return
-    void getJson<DxmDraftShopsResponse>('/api/dxm/draft-reader/shops')
+    if (shopReadError) {
+      setMessage({ tone: 'error', text: '店铺尚未连接或读取失败；请先检查店小秘连接，再刷新店铺。当前不能创建可执行方案。' })
+      return
+    }
+    void refreshShops()
       .then((response) => {
+        if (!response) return
         setFallbackShops(response.shops)
         setShopId((current) => current || selectedShopId || response.shops[0]?.id || '')
       })
-      .catch(() => undefined)
-  }, [contextShops.length, selectedShopId])
+      .catch((caught) => { recordFrontendError(caught, { component: 'local_plan', action: 'load_shops' }) })
+  }, [contextShops.length, selectedShopId, shopReadError, refreshShops])
 
   useEffect(() => {
     if (selectedShopId && selectedShopId !== shopId) setShopId(selectedShopId)
@@ -180,7 +187,7 @@ export function LocalPlanWorkspace({
     setSupersedesId(null)
     setName('')
     setVersion('1.0.0')
-    setPlanPath('A')
+    setPlanPath(frontendConfig.product.path)
     setShopId(selectedShopId || (shops[0]?.id ?? ''))
     setCategoryIdsText('')
     setCategoryRecords([])
@@ -228,6 +235,7 @@ export function LocalPlanWorkspace({
 
   function beginVersionFromCurrent() {
     if (!selectedPlan) return
+    setPlanPath(frontendConfig.product.path)
     setSupersedesId(selectedPlan.id)
     setVersion(nextPatchVersion(selectedPlan.version))
     setMessage(null)
@@ -361,6 +369,7 @@ export function LocalPlanWorkspace({
           : `已读取当前类目的真实字段、接口选项与 ${result.refs.length} 条分区模板。`,
       })
     } catch (error) {
+      recordFrontendError(error, { component: 'local_plan', action: 'configuration' })
       setMessage({
         tone: 'error',
         text: error instanceof Error ? error.message : '店小秘只读同步失败。',
@@ -379,9 +388,10 @@ export function LocalPlanWorkspace({
       if (!name.trim()) throw new Error('请填写方案名称。')
       if (!/^[1-9][0-9]*$/.test(shopId.trim())) throw new Error('请选择店铺。')
       if (categoryIds.length !== 1) throw new Error('一个普货方案必须且只能选择一个末级类目。')
-      if (planPath === 'B' && semiManagedAvailability === 'unsupported') {
-        throw new Error('当前店铺的半托管资格未通过只读接口确认，不能保存 Path B 方案。')
-      }
+      if (planPath !== 'B') throw new Error('历史 Path A 方案仅供诊断查看；请改新版并按完整 Path B 配置。')
+      await resolveCategorySelection(categoryIds[0], (id) => withDxmSessionBusyRetry(
+        () => getJson<DxmCategoryRecord | null>(`/api/dxm/category/get?category_id=${encodeURIComponent(id)}`),
+      ))
       const missingSchemas = categoryIds.filter((categoryId) => !categorySchemas[categoryId])
       if (missingSchemas.length) {
         throw new Error(`有 ${missingSchemas.length} 个已选类目的字段定义尚未读取。请点击「读取类目字段与模板」后再创建方案。`)
@@ -397,10 +407,6 @@ export function LocalPlanWorkspace({
         if (!ref) throw new Error(`只读引用 #${refId} 已漂移或不可用`)
         return { ref_id: ref.id, source_digest: ref.source_digest }
       })
-      const semiManagedComplete = planPath === 'B'
-        && semiCountries.length > 0
-        && Object.values(semiGoodsConfig).every((value) => String(value).trim())
-        && Object.values(semiVariantConfig).every((value) => String(value).trim())
       const body = {
         name: name.trim(),
         version: (supersedesId ? version.trim() : '1.0.0') || '1.0.0',
@@ -414,7 +420,7 @@ export function LocalPlanWorkspace({
         field_mappings: fieldMappings,
         source_policies: sourcePolicies,
         configuration_contract: 'local_plan_template.v3',
-        status: planPath === 'B' && !semiManagedComplete ? 'draft' : 'ready',
+        status: 'draft',
         source_snapshots: {
           category_ids: categoryIds,
           schema_categories: Object.keys(categorySchemas),
@@ -465,6 +471,7 @@ export function LocalPlanWorkspace({
         text: `已保存「${created.name}」。采集箱选品的下拉里会出现这个方案。`,
       })
     } catch (error) {
+      recordFrontendError(error, { component: 'local_plan', action: 'configuration' })
       setMessage({
         tone: 'error',
         text: error instanceof Error ? error.message : '本地方案保存失败。',
@@ -485,6 +492,7 @@ export function LocalPlanWorkspace({
       setMessage({ tone: 'success', text: `已删除方案「${plan.name}」。已开始的任务不受影响。` })
       setPlanPendingArchive(null)
     } catch (error) {
+      recordFrontendError(error, { component: 'local_plan', action: 'configuration' })
       setMessage({
         tone: 'error',
         text: error instanceof Error ? error.message : '方案删除失败。',
@@ -578,7 +586,7 @@ export function LocalPlanWorkspace({
               >
                 <button type="button" className="local-plan-card__open" onClick={() => openEditForPlan(plan)}>
                   <strong>{plan.name}</strong>
-                  <span>{shopLabel(plan.shop_id, shops)} · {plan.category_ids.length === 1 ? '单类目' : `${plan.category_ids.length} 个旧版类目`} · 10 个店小秘主编辑分区 · 引用 {plan.dxm_template_refs.length} 个模板</span>
+                  <span>{shopLabel(plan.shop_id, shops)} · {plan.category_ids.length === 1 ? '单类目' : `${plan.category_ids.length} 个旧版类目`} · 完整 Path B 配置 · 引用 {plan.dxm_template_refs.length} 个模板</span>
                   <small>上次更新 {plan.updated_at.replace('T', ' ').slice(0, 16)}</small>
                 </button>
                 <button
@@ -705,32 +713,7 @@ export function LocalPlanWorkspace({
                     ))}
                   </select>
                 </label>
-                <fieldset className="lp-path-choice">
-                  <legend>编辑路径</legend>
-                  <label className={planPath === 'A' ? 'is-selected' : ''}>
-                    <input type="radio" name="plan-path" checked={planPath === 'A'} onChange={() => setPlanPath('A')} />
-                    <span><strong>仅店小秘主编辑页</strong><small>Path A · 当前已放行真实只保存</small></span>
-                  </label>
-                  <label className={planPath === 'B' ? 'is-selected' : ''}>
-                    <input
-                      type="radio"
-                      name="plan-path"
-                      checked={planPath === 'B'}
-                      disabled={semiManagedAvailability === 'unsupported' && planPath !== 'B'}
-                      onChange={() => setPlanPath('B')}
-                    />
-                    <span><strong>主编辑页 + 半托管</strong><small>Path B · 可配置；真实批量执行仍需单独验收</small></span>
-                  </label>
-                  {planPath === 'B' && (
-                    <p className={semiManagedAvailability === 'unsupported' ? 'lp-path-choice__warning' : undefined}>
-                      {semiManagedAvailability === 'unsupported'
-                        ? '当前店铺的只读资格接口未证明支持半托管，不能保存为可执行 Path B。'
-                        : semiManagedAvailability === 'unknown'
-                          ? '尚未读取当前类目的半托管资格；同步后才会显示是否可用。'
-                          : '半托管作为编辑路径参与方案，但不会伪装成店小秘主编辑页的额外分区；相关字段仍按独立执行合同验收。'}
-                    </p>
-                  )}
-                </fieldset>
+                <ProductPathContract path={planPath} />
                 <div className="lp-field">
                   <div className="local-plan-categories__head">
                     <span>方案类目（仅 1 个）</span>
@@ -739,10 +722,13 @@ export function LocalPlanWorkspace({
                     </button>
                   </div>
                   <CategoryCascadePicker
+                    scopeKey={shopId}
+                    ready={Boolean(shopId)}
                     selectedCategories={selectedCategories}
-                    disabled={syncingRefs || submitting}
+                    disabled={!shopId || syncingRefs || submitting}
                     onAdd={addCategory}
                     onRemove={removeCategory}
+                    onPending={() => { if (selectedCategoryIds[0]) removeCategory(selectedCategoryIds[0]) }}
                   />
                   <small className="lp-category-help">一个方案绑定一个末级类目。重新选择类目会替换原类目，并清空上一类目的字段与模板配置。</small>
                 </div>
@@ -937,7 +923,7 @@ export function LocalPlanWorkspace({
 
         <footer className="lp-modal__foot">
           <small>只保存 · 不发布 · 必填 fail-closed</small>
-          <button className="button button--primary" type="button" disabled={submitting} onClick={() => { void savePlan() }}>
+          <button className="button button--primary" type="button" disabled={submitting || syncingRefs || !name.trim() || !shopId || selectedCategoryIds.length !== 1 || !categorySchemas[selectedCategoryIds[0]] || planPath !== 'B'} onClick={() => { void savePlan() }}>
             {submitting ? '保存中…' : selectedPlanId ? '保存为新版本' : '创建方案'}
           </button>
         </footer>
@@ -1155,21 +1141,6 @@ function resolveSemiLogisticsOptions(
   }
   visit(raw)
   return result
-}
-
-function resolveSemiManagedAvailability(
-  capability: DxmEditorCategoryCapabilities | undefined,
-): 'supported' | 'unsupported' | 'unknown' {
-  if (!capability || !Object.prototype.hasOwnProperty.call(capability, 'pop_choice_shop')) {
-    return 'unknown'
-  }
-  const record = capability.pop_choice_shop
-  if (!record || typeof record !== 'object') return 'unsupported'
-  const enabled = record.isPopChoice === true || record.isPopChoice === 1 || record.isPopChoice === '1'
-  const choiceShopId = record.popChoiceShopId ?? record.shopId
-  return enabled && choiceShopId !== undefined && choiceShopId !== null && String(choiceShopId).trim() !== '' && String(choiceShopId) !== '0'
-    ? 'supported'
-    : 'unsupported'
 }
 
 function countNestedOptions(values: Array<Record<string, unknown>>): number {

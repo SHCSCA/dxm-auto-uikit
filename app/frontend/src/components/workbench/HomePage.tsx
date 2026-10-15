@@ -116,7 +116,7 @@ export function HomePage({
             : {
                 tone: 'ready',
                 label: '可以准备商品箱批次',
-                detail: '先读取当前商品箱范围，再冻结模板并完成人工批准；只保存，不发布。',
+                detail: '从当前店铺选择至少三件真实草稿，使用完整 Path B 方案预览和冻结；真实执行仍由后端门禁决定。',
               }
 
   const primaryAction = activeBatch
@@ -145,8 +145,8 @@ export function HomePage({
           }
         : draftBatch
           ? {
-              label: '继续批准批次',
-              detail: '核对已冻结范围后，一次批准并启动严格串行执行。',
+              label: '查看历史批次草稿',
+              detail: '旧批次仅供查询；新任务通过真实选品与完整 Path B 快照创建。',
               action: () => onOpenBatch(draftBatch.id),
             }
         : !dxmLoggedIn
@@ -175,7 +175,7 @@ export function HomePage({
             }
           : {
               label: '进入批量编辑',
-              detail: '读取真实商品箱范围，选择整批模板并创建草稿。',
+              detail: '选择至少三件真实草稿和完整 Path B 方案，预览并冻结不可变快照。',
               action: onShowDraftEdit,
             }
 

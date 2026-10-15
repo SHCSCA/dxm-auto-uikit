@@ -16,9 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.core.config_bus import env_string
 from src.core.config import SCREENSHOT_DIR
 from src.execution.account_identity import account_context_hash
 from src.execution.action_result_contract import ACTION_RESULT_SCHEMA_VERSION
+from src.execution.replay_capability_boundary import ReplayCapabilityBoundary
 
 CLOSED_LOOP_ENV = "DXM_PATH_B_CLOSED_LOOP"
 SHOP_ID = "88001"
@@ -232,7 +234,7 @@ CAPABILITIES = (
 
 
 def closed_loop_replay_enabled() -> bool:
-    return os.environ.get(CLOSED_LOOP_ENV, "").strip() == "1"
+    return env_string(CLOSED_LOOP_ENV, "").strip() == "1"
 
 
 def is_closed_loop_replay_adapter(adapter: Any) -> bool:
@@ -375,7 +377,7 @@ def category_schema() -> dict[str, Any]:
     }
 
 
-class ClosedLoopReplayAdapter:
+class ClosedLoopReplayAdapter(ReplayCapabilityBoundary):
     """Replay dianxiaomi page actions for Dang Kang Path B only."""
 
     requires_persistent_browser_agent = False

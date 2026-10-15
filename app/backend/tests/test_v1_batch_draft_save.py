@@ -1,19 +1,4 @@
-"""Tests for V1TaskRunner `batch_draft_save` mode step sequences.
-
-These tests verify the V1TaskRunner task-based execution model satisfies the
-batch invariants:
-
-1. Path A is single-save: one SAVE_ONLY, followed by WRITE_REPORT/RELEASE_LOCK
-2. Path B is **dual-save**: SAVE1 (主编辑) → SAVE_INTENT_MODAL (原生门)
-   → 半托管 → SAVE2 → WRITE_REPORT/RELEASE_LOCK
-3. Path A must NOT include semi-managed steps
-4. Path B must include all semi-managed steps
-5. SAVE_INTENT_MODAL appears between SAVE1's verification and the semi-managed steps
-6. WRITE_REPORT and RELEASE_LOCK appear at the end exactly once
-
-The 15 skipped tests in `test_batch_edit_api.py` remain skipped because they
-test the old BatchExecutionRuntime API (410 Gone).
-"""
+"""验证唯一 Runner 的阶段顺序；双保存证据与原生入口必须分别闭合。"""
 from __future__ import annotations
 
 import pytest
@@ -52,10 +37,10 @@ class TestBatchDraftSaveStepSequences:
         )
 
     def test_path_b_includes_semi_managed_steps(self):
-        """Path B must include all semi-managed steps in order."""
+        """原生门取代旧单保存的直接入口，保留半托管字段阶段。"""
         semi_states = {
             StateName.ENABLE_SEMI_MANAGED,
-            StateName.OPEN_SEMI_MANAGED_PAGE,
+            StateName.SAVE_INTENT_MODAL,
             StateName.FILL_SEMI_GOODS,
             StateName.FILL_SEMI_VARIANTS,
         }
@@ -66,10 +51,10 @@ class TestBatchDraftSaveStepSequences:
         )
 
     def test_path_b_semi_step_order(self):
-        """Path B semi-managed steps must follow order: enable → open → goods → variants."""
+        """主页面启用半托管后，经原生门才进入第二页填写。"""
         state_names = _names(BATCH_PATH_B_STEPS)
         enable_idx = state_names.index(StateName.ENABLE_SEMI_MANAGED)
-        open_idx = state_names.index(StateName.OPEN_SEMI_MANAGED_PAGE)
+        open_idx = state_names.index(StateName.SAVE_INTENT_MODAL)
         goods_idx = state_names.index(StateName.FILL_SEMI_GOODS)
         variants_idx = state_names.index(StateName.FILL_SEMI_VARIANTS)
 
@@ -99,24 +84,28 @@ class TestBatchDraftSaveStepSequences:
 
         save1_idx = state_names.index(StateName.SAVE_ONLY)
         modal_idx = state_names.index(StateName.SAVE_INTENT_MODAL)
-        semi_idx = state_names.index(StateName.ENABLE_SEMI_MANAGED)
+        enable_idx = state_names.index(StateName.ENABLE_SEMI_MANAGED)
+        semi_idx = state_names.index(StateName.FILL_SEMI_GOODS)
         save2_idx = state_names.index(StateName.SAVE2_ONLY)
 
-        # 顺序合同：SAVE1 < 原生门 < 半托管 < SAVE2
+        # 原生入口已包含打开第二页，不得再调用旧复合保存入口。
+        assert enable_idx < save1_idx
+        assert StateName.OPEN_SEMI_MANAGED_PAGE not in state_names
         assert save1_idx < modal_idx < semi_idx < save2_idx, (
             f"Path B 必须按 SAVE1[{save1_idx}] → 原生门[{modal_idx}] "
             f"→ 半托管[{semi_idx}] → SAVE2[{save2_idx}] 顺序执行"
         )
 
     def test_path_b_save2_tail_closes_with_write_report_and_release(self):
-        """SAVE2 must be followed by VERIFY_SAVE_RESULT, VERIFY_NOT_PUBLISHED, then WRITE_REPORT, RELEASE_LOCK."""
+        """第二次保存必须使用独立阶段的未发布证明。"""
         state_names = _names(BATCH_PATH_B_STEPS)
 
         save2_idx = state_names.index(StateName.SAVE2_ONLY)
-        # After SAVE2 we expect VERIFY_SAVE_RESULT, VERIFY_NOT_PUBLISHED, WRITE_REPORT, RELEASE_LOCK
+        # SAVE1 证据不能代替 SAVE2，两个阶段分别验证。
         tail = state_names[save2_idx:]
         assert StateName.VERIFY_SAVE_RESULT in tail[:3]
-        assert StateName.VERIFY_NOT_PUBLISHED in tail[:4]
+        assert StateName.VERIFY_SAVE2_NOT_PUBLISHED in tail[:4]
+        assert StateName.VERIFY_SAVE1_NOT_PUBLISHED not in tail
         assert StateName.WRITE_REPORT in tail[-3:]
         assert state_names[-1] == StateName.RELEASE_LOCK
 

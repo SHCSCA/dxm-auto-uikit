@@ -50,7 +50,7 @@ def _authorization_context(*, approved_by: str = "ops-owner") -> dict:
     )
 
 
-def test_batch_task_facts_are_exact_and_path_a_only() -> None:
+def test_batch_task_facts_are_exact_and_reject_incomplete_path_b_scope() -> None:
     facts = _task_facts()
 
     assert verify_exact_batch_draft_save_task_facts(facts) == {
@@ -68,7 +68,12 @@ def test_batch_task_facts_are_exact_and_path_a_only() -> None:
             plan_snapshot_hash="A" * 64,
             path="B",
         )
-    assert raised.value.reason_code == "BATCH_PATH_FORBIDDEN"
+    assert raised.value.reason_code == "REAL_PATH_B_PRODUCT_COUNT_INVALID"
+
+    with pytest.raises(BatchDraftAuthorizationError) as missing_scope:
+        build_batch_draft_save_task_facts(task_id=11, store_id=22, product_ids=[101, 102, 103],
+            plan_snapshot_id=33, plan_snapshot_hash="A" * 64, path="B")
+    assert missing_scope.value.reason_code == "REAL_PATH_B_SCOPE_REQUIRED"
 
 
 def test_batch_task_facts_reject_identity_and_digest_drift() -> None:

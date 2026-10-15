@@ -14,6 +14,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
+from src.core.config_bus import get_config_bus
+
 
 RUNTIME_IDENTITY_SCHEMA_VERSION = "dxm.runtime.identity.v1"
 BUILD_MANIFEST_SCHEMA_VERSION = "dxm.desktop.build.v1"
@@ -178,7 +180,7 @@ class RuntimeIdentity:
         git_probe: Callable[[Path], tuple[str, bool]] | None = None,
         package_version: str = "0.1.0",
     ) -> RuntimeIdentity:
-        env_map = os.environ if env is None else env
+        env_map = get_config_bus().environment if env is None else env
         process_pid = os.getpid() if pid is None else int(pid)
         if process_pid <= 0:
             raise ValueError("backend pid must be positive")

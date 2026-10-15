@@ -1,5 +1,7 @@
 import pytest
 
+from tests.support.action_results import _valid_save_result, _canonical_sha256
+
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
 from src.execution.browser_agent_protocol import build_frozen_product_target_identity
 from src.execution.dxm_adapter import DxmWorkflowAdapter
@@ -556,7 +558,7 @@ def test_legacy_save_success_booleans_never_replace_structured_receipts(network_
             'exact_save_target': True,
             'text': '保存',
             'exact_save_count': 1,
-            'click_method': 'native_exact_save',
+            'click_method': 'playwright_exact_role',
             'save_click_dispatched': True,
             'network_save_success': network_success,
             'page_save_success': page_success,
@@ -622,7 +624,7 @@ def test_save_requires_structured_exact_target_explicit_dispatch_and_no_publish_
                 'exact_save_target': True,
                 'text': '保存并移入待发布',
                 'exact_save_count': 1,
-                'click_method': 'native_exact_save',
+                'click_method': 'playwright_exact_role',
                 'clicked': True,
                 'network_save_success': True,
                 'page_save_success': True,
@@ -727,7 +729,7 @@ def test_save_facts_expose_authorization_target_click_and_both_success_proofs():
         'text': '保存',
         'exact_save_count': 1,
         'clicked': True,
-        'click_method': 'native_exact_save',
+        'click_method': 'playwright_exact_role',
         'network_save_result': {'ok': True, 'code': 0},
         'page_save_result': {'ok': True, 'status_transition': {'kind': 'new_status'}},
         'save_decision': {'network_ok': True, 'page_ok': True},
@@ -787,76 +789,19 @@ def _strict_save_result(
     network_success: bool = True,
     page_success: bool = True,
 ) -> dict:
-    return {
-        'ok': network_success and page_success,
-        'mutation_authorization': {
-            'ok': True,
-            'executed': True,
-            'mutation_action': 'save_only_click',
-            'mutation_id': 'mutation-1',
-            'mutation_status': 'DISPATCHED',
-        },
-        'pre_dispatch_readback': {
-            'ok': True,
-            'required_readback_complete': True,
-            'write_attempted': False,
-            'phase': 'before_ledger_begin_dispatch',
-            'exact_save_target': {'ok': True, 'text': '保存', 'exact_save_count': 1},
-            'identity': target_identity,
-            'current_field_integrity': {'ok': True},
-        },
-        'exact_save_target': True,
-        'text': '保存',
-        'exact_save_count': 1,
-        'click_method': 'native_exact_save',
-        'save_click_dispatched': True,
-        'clicked': True,
-        'network_save_result': {
-            'ok': network_success,
-            'receipt_complete': True,
-            'receipt_count': 1,
-            'url': 'https://www.dianxiaomi.com/api/smtProduct/add.json',
-            'method': 'POST',
-            'status': 200,
-            'code': 0,
-            'message': '保存成功',
-        },
-        'network_audit': {
-            'scope': 'same_origin_write_window',
-            'complete': True,
-            'window_closed': True,
-            'registered_listener_count': 2,
-            'removed_listener_count': 2,
-            'mutation_request_count': 1,
-            'save_request_count': 1,
-            'other_mutation_request_count': 0,
-            'read_only_schema_request_count': 0,
-            'publish_request_count': 0,
-        },
-        'publish_signal': {
-            'detected': False,
-            'kind': 'network_route_classification',
-            'request_count': 0,
-        },
-        'page_save_result': {
-            'ok': page_success,
-            'success_text': '保存成功',
-            'status_transition': {
-                'kind': 'new_or_changed_structured_save_status',
-                'entry': {'text': '保存成功'},
-            },
-        },
-        'save_decision': {
-            'ok': network_success and page_success,
-            'rule': 'page_success_and_network_success',
-            'network_ok': network_success,
-            'page_ok': page_success,
-            'network_receipt_ok': network_success,
-            'network_audit_ok': network_success,
-        },
-        'published': False,
-        'publish_action_clicked': False,
-    }
+    result = _valid_save_result()["evidence"]["observations"]["save_result"]
+    result["ok"] = network_success and page_success
+    result["network_save_success"] = network_success
+    result["page_save_success"] = page_success
+    result["pre_dispatch_readback"]["identity"].update(
+        target_identity=target_identity, expected_store_name=TARGET_STORE,
+        target_identity_sha256=_canonical_sha256(target_identity))
+    result["network_save_result"]["ok"] = network_success
+    result["page_save_result"]["ok"] = page_success
+    result["save_decision"].update(ok=network_success and page_success,
+        network_ok=network_success, page_ok=page_success,
+        network_receipt_ok=network_success, network_audit_ok=network_success)
+    return result
 
 @pytest.mark.parametrize(
     ('network_success', 'page_success', 'expected_complete'),
@@ -887,3 +832,17 @@ def test_save_requires_network_and_page_success(network_success, page_success, e
     assert facts['postconditions']['network_save_success'] is network_success
     assert facts['postconditions']['page_save_success'] is page_success
     assert (facts['recoverability']['kind'] == 'none') is expected_complete
+
+
+@pytest.mark.parametrize("method, exact", [
+    ("playwright_exact_role", True), ("native_exact_save", False), ("dom_exact_save", False),
+])
+def test_adapter_requires_the_same_semantic_save_method_as_action_result(method, exact):
+    target = _frozen_target_identity()
+    save = _strict_save_result(target_identity=target)
+    save["click_method"] = method
+    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
+        "save_only", {"ok": True, "published": False, "save_result": save},
+        before_values={"target_identity": target, "store_name": TARGET_STORE})["contract_facts"]
+    assert facts["postconditions"]["exact_save_target"] is exact
+    assert (facts["recoverability"]["kind"] == "none") is exact

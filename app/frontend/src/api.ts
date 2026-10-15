@@ -1,6 +1,7 @@
-const params = new URLSearchParams(window.location.search)
-const runtimeBase = params.get('apiBase') || (window as any).__DXM_API_BASE__
-export const API_BASE = runtimeBase || ''
+import { frontendConfig } from './config/frontendConfig.ts'
+import { recordFrontendError } from './diagnostics/frontendErrors.ts'
+
+export const API_BASE = frontendConfig.apiBase
 
 export class ApiRequestError extends Error {
   constructor(message: string) {
@@ -9,8 +10,16 @@ export class ApiRequestError extends Error {
   }
 }
 
-const DXM_SESSION_BUSY_ATTEMPTS = 4
-const DXM_SESSION_BUSY_RETRY_DELAYS_MS = [250, 500, 1000] as const
+export class ApiConfigurationError extends Error {
+  readonly reasonCode = 'FRONTEND_API_BASE_INVALID'
+  constructor() {
+    super(frontendConfig.apiConfigurationError || '工作台 API 地址配置无效，请改用本机地址。')
+    this.name = 'ApiConfigurationError'
+  }
+}
+
+const DXM_SESSION_BUSY_ATTEMPTS = frontendConfig.sessionBusy.attempts
+const DXM_SESSION_BUSY_RETRY_DELAYS_MS = frontendConfig.sessionBusy.delaysMs
 
 export function isDxmSessionBusyError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error ?? '')
@@ -20,7 +29,7 @@ export function isDxmSessionBusyError(error: unknown) {
     || text.includes('正在处理')
 }
 
-/** Retry only the read-only DXM session-busy response; never retry other errors. */
+// 只重试只读会话忙响应；真实动作不得使用此重试器。
 export async function withDxmSessionBusyRetry<T>(
   operation: () => Promise<T>,
   maxAttempts = DXM_SESSION_BUSY_ATTEMPTS,
@@ -39,9 +48,7 @@ export async function withDxmSessionBusyRetry<T>(
 }
 
 export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { signal })
-  if (!response.ok) throw await responseError(response, `GET ${path} failed`)
-  return response.json()
+  return requestJson<T>(path, { signal })
 }
 
 export async function getJsonOrDefault<T>(path: string, fallback: T): Promise<T> {
@@ -53,31 +60,41 @@ export async function getJsonOrDefault<T>(path: string, fallback: T): Promise<T>
 }
 
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  return requestJson<T>(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!response.ok) throw await responseError(response, `POST ${path} failed`)
-  return response.json()
 }
 
 export async function patchJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  return requestJson<T>(path, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!response.ok) throw await responseError(response, `PATCH ${path} failed`)
-  return response.json()
 }
 
 export async function deleteJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  return requestJson<T>(path, {
     method: 'DELETE',
   })
-  if (!response.ok) throw await responseError(response, `DELETE ${path} failed`)
-  return response.json()
+}
+
+async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+  const method = init.method ?? 'GET'
+  let status: number | undefined
+  try {
+    if (frontendConfig.apiConfigurationError) throw new ApiConfigurationError()
+    const response = await fetch(`${API_BASE}${path}`, init)
+    status = response.status
+    if (!response.ok) throw await responseError(response, `${method} ${path} failed`)
+    return await response.json()
+  } catch (error) {
+    const route = path.split('?')[0].replace(/\/\d+(?=\/|$)/g, '/:id')
+    recordFrontendError(error, { component: 'api', action: `${method} ${route}`, status })
+    throw error
+  }
 }
 
 async function responseError(response: Response, fallback: string): Promise<ApiRequestError> {
@@ -91,7 +108,7 @@ async function responseError(response: Response, fallback: string): Promise<ApiR
       const text = await response.text()
       if (text.trim()) return new ApiRequestError(safeApiErrorMessage(text.trim(), response.status, fallback))
     } catch {
-      // Keep the caller-facing fallback below.
+      // 非 JSON 响应继续使用下方安全文案。
     }
   }
   return new ApiRequestError(safeApiErrorMessage('', response.status, fallback))

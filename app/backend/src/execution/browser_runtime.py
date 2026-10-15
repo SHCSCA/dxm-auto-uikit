@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.core.config_bus import env_string
+
 import os
 import platform
 import shutil
@@ -20,7 +22,7 @@ def chrome_launch_options(headless: bool) -> dict[str, Any]:
 
 
 def resolve_chrome_executable() -> str | None:
-    env_path = os.getenv("DXM_CHROME_PATH")
+    env_path = env_string("DXM_CHROME_PATH")
     if env_path:
         return env_path
 
@@ -47,9 +49,9 @@ def _chrome_commands() -> tuple[str, ...]:
 def _known_chrome_paths() -> tuple[Path, ...]:
     system = platform.system()
     if system == "Windows":
-        local_app_data = Path(os.getenv("LOCALAPPDATA", ""))
-        program_files = Path(os.getenv("PROGRAMFILES", "C:/Program Files"))
-        program_files_x86 = Path(os.getenv("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
+        local_app_data = Path(env_string("LOCALAPPDATA", ""))
+        program_files = Path(env_string("PROGRAMFILES", "C:/Program Files"))
+        program_files_x86 = Path(env_string("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
         return (
             program_files / "Google/Chrome/Application/chrome.exe",
             program_files_x86 / "Google/Chrome/Application/chrome.exe",

@@ -19,7 +19,7 @@ Gold 指令位于 `docs/product/CODEX-GOLD-工作指令-MVP批量只保存.md`�
 
 ## 权威仓与上游
 
-- 唯一开发 checkout：`D:\Desktop\py\dxm-auto-uikit`。先运行 `git rev-parse --show-toplevel`，不要在 C: 镜像编辑或验收。
+- 当前用户授权开发 checkout：`G:\AI\dxm-auto-uikit`。先运行 `git rev-parse --show-toplevel`；其它机器以用户明确指定的 checkout 为准，不在未核验的镜像编辑或验收。文档中的 `D:\Desktop\py\dxm-auto-uikit` 属于历史环境。
 - 上游 `D:\Desktop\py\DXM-TX` 永久只读，只是产品观察与接口证据源，不是第二生产代码仓。
 - 默认只读其项目自有文档、`contracts/dxm/**` 元数据和根原型结构。2026-08-25 唯一数据例外是用 `scripts/sync-dxm-category-catalog.ps1` 读取 `data/capture/categories` 并输出脱敏 catalog；其它 `data/**`、Cookie、storage state、raw 抓包、真实店铺/商品/模板/联系人样例仍禁止读取或复制。
 - 上游 `PASSIVE_ONLY`、`SAMPLE_ONLY`、目录 `ready=true` 或结构候选都不等于主动调用、写入、保存或 READY 授权。

@@ -30,7 +30,7 @@ const activePlan: LocalPlanTemplate = {
   version: '1.0.0',
   shop_id: '3001',
   category_ids: ['100'],
-  path: 'A',
+  path: 'B',
   fixed_values: { publish_allowed: false },
   fill_rules: { '100': {} },
   dxm_template_refs: [],

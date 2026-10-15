@@ -17,6 +17,8 @@ trap {
   exit 1
 }
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+. (Join-Path $PSScriptRoot 'lib\desktop-smoke-log.ps1')
+. (Join-Path $PSScriptRoot 'lib\packaged-runtime-identity.ps1')
 
 function Resolve-SmokeArtifactPath {
   param(
@@ -81,6 +83,7 @@ if (!(Test-Path $ExePath)) {
 }
 
 $RequiredResources = @(
+  'resources\build-metadata\desktop-build-manifest.json',
   'resources\app\backend\python-runtime\python.exe',
   'resources\app\backend\.venv\Lib\site-packages',
   'resources\tools\probes\l2_readonly_probe_runner.py',
@@ -170,7 +173,7 @@ function Assert-DesktopSmokeLog {
     [string]$ExpectedPythonRoot,
     [string]$Label
   )
-  $LogText = Get-Content -LiteralPath $ExistingLog -Raw -Encoding UTF8
+  $LogText = Read-DesktopSmokeLogText -Path $ExistingLog
   if ($LogText -notmatch 'Starting backend') {
     throw "$Label failed: desktop-main.log does not contain Starting backend. Log: $ExistingLog"
   }
@@ -272,7 +275,11 @@ function Assert-PackagedBackendResourceStatus {
   $PythonRuntimeDir = Join-Path $BackendDir 'python-runtime'
   $PythonPath = Join-Path $PythonRuntimeDir 'python.exe'
   $PythonPackagesDir = Join-Path $BackendDir '.venv\Lib\site-packages'
+  $BuildManifestPath = Join-Path $ResourceRoot 'build-metadata\desktop-build-manifest.json'
+  $BuildManifest = Read-PackagedBuildManifest -Path $BuildManifestPath -ExpectedPackageVersion $DesktopVersion
   $RuntimeDataDir = Join-Path $env:TEMP "dxm-agent-console-runtime-check-$([guid]::NewGuid().ToString('N'))"
+  $WorkflowProfileDir = Join-Path $RuntimeDataDir 'browser_profiles\dxm_workflow'
+  $ProbeInstanceId = "package-probe-$([guid]::NewGuid().ToString('N'))"
   New-Item -ItemType Directory -Force -Path $RuntimeDataDir | Out-Null
   $Port = Get-FreeLoopbackPort
   $ApiBase = "http://127.0.0.1:$Port"
@@ -309,7 +316,7 @@ function Assert-PackagedBackendResourceStatus {
     $StartInfo.EnvironmentVariables['PYTHONNOUSERSITE'] = '1'
     $StartInfo.EnvironmentVariables['DXM_DATA_DIR'] = $RuntimeDataDir
     $StartInfo.EnvironmentVariables['DXM_RESOURCE_ROOT'] = $ResourceRoot
-    $StartInfo.EnvironmentVariables['DXM_RUNTIME_OWNER'] = 'package_probe'
+    Set-PackagedProbeBuildIdentity -Environment $StartInfo.EnvironmentVariables -Manifest $BuildManifest -InstanceId $ProbeInstanceId -WorkflowProfileDir $WorkflowProfileDir
     $StartInfo.EnvironmentVariables['DXM_LAUNCHER_LOG_FILE'] = Join-Path $RuntimeDataDir 'desktop-main.log'
     $StartInfo.EnvironmentVariables['DXM_BACKEND_PORT'] = [string]$Port
     $StartInfo.EnvironmentVariables['DXM_BACKEND_URL'] = $ApiBase
@@ -318,6 +325,7 @@ function Assert-PackagedBackendResourceStatus {
 
     $Process = [System.Diagnostics.Process]::new()
     $Process.StartInfo = $StartInfo
+    $ProbeStartedAt = [DateTimeOffset]::UtcNow
     if (!$Process.Start()) {
       throw 'Could not start packaged backend runtime check process'
     }
@@ -337,6 +345,13 @@ function Assert-PackagedBackendResourceStatus {
     }
     if ([int]$Status.backend.port -ne $Port) {
       throw "Packaged runtime backend port mismatch. Expected $Port, got $($Status.backend.port)"
+    }
+
+    foreach ($Identity in @($Status.runtimeIdentity, $Status.backend.runtimeIdentity)) {
+      Assert-PackagedProbeRuntimeIdentity -Identity $Identity -Manifest $BuildManifest -InstanceId $ProbeInstanceId -BackendProcessId $Process.Id -DataDir $RuntimeDataDir -WorkflowProfileDir $WorkflowProfileDir -ResourceRoot $ResourceRoot -NotBefore $ProbeStartedAt
+    }
+    if ($Status.backend.instanceId -cne $ProbeInstanceId -or $Status.runtimeIdentity.fingerprint -cne $Status.backend.runtimeIdentity.fingerprint) {
+      throw 'Packaged runtime identity copies or backend instanceId mismatch'
     }
 
     Assert-PackagedRuntimeDependencyOk -Dependencies $Status.dependencies -Name 'l2_readonly_probe_runner' -ResourceRoot $ResourceRoot

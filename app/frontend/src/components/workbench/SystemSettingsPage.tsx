@@ -24,7 +24,7 @@ export function SystemSettingsPage({
   runtimeStatus,
   desktopRuntime,
 }: SystemSettingsPageProps) {
-  const releasedMode = workspace.realModeReleasePlan.modes.find((mode) => mode.allowed)
+  const releasedMode = workspace.realModeReleasePlan.modes.find((mode) => mode.mode === 'batch_draft_save' && mode.allowed)
   const backendStatus = runtimeStatus?.backend?.status ?? 'unknown'
   const frontendStatus = runtimeStatus?.frontend?.status ?? (desktopRuntime?.frontendPath ? 'desktop_file' : 'unknown')
   const browserStatus = runtimeStatus?.realBrowser?.browserVisible
@@ -44,9 +44,9 @@ export function SystemSettingsPage({
         <ModuleHead title="运行与安全" meta="真实浏览器、服务状态和安全范围" />
         <div className="settings-summary-grid">
           <div className="settings-summary-card">
-            <span>当前可执行范围</span>
-            <strong>{releasedMode?.label ?? '单商品只保存'}</strong>
-            <small>只保存，不发布；批量、无人值守和发布入口保持关闭。</small>
+            <span>完整产品执行范围</span>
+            <strong>{releasedMode?.label ?? '完整 Path B 尚未放行'}</strong>
+            <small>每次执行仍需当前快照、人工批准和运行时复核；历史单商品诊断不代表产品放行。发布始终禁止。</small>
           </div>
           <div className="settings-summary-card">
             <span>当前任务</span>
@@ -89,7 +89,7 @@ export function SystemSettingsPage({
           <span>普通使用只看上方运行状态</span>
         </summary>
         <RegressionGateGrid gates={workspace.regressionGates} />
-        <p>验收状态用于判断当前版本能否交付受控单商品只保存路径；不扩大为批量、无人值守或发布能力。</p>
+        <p>完整产品需要五项必经能力和 Path B 两阶段真实证据。工程检查通过、历史单商品诊断和配置面板均不能替代产品验收。</p>
       </details>
     </section>
   )

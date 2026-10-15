@@ -2675,6 +2675,37 @@ class Repository:
     def get_task_private(self, task_id: int):
         return self.get_task(task_id, include_private=True)
 
+    def persist_content_finalize_stage(self, task_id: int, job_id: int, *, observation, receipts):
+        """复用证据表事务追加最终输出，未审阅的生产来源继续拒绝。"""
+        from src.batch_edit.content_finalize_store import append_content_finalize_stage
+        from src.services.structured_logging import get_logger, log_exception
+
+        try:
+            with connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                task = self._private_task_from_connection(conn, task_id)
+                job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+                return append_content_finalize_stage(conn, task=task, job=job, observation=observation, receipts=receipts,
+                    screenshot_root=SCREENSHOT_DIR, now=now_iso())
+        except Exception as exc:
+            log_exception(get_logger('content_finalize'), 'content_finalize_persistence_rejected', exc, task_id=task_id, job_id=job_id)
+            raise
+
+    def require_content_finalize_stage(self, task_id: int, job_id: int, *, browser_session_id: str):
+        """SAVE1 消费前只信当前仓储与可重验原始文件，不接受调用方候选。"""
+        from src.batch_edit.content_finalize_store import require_content_finalize_stage
+        from src.services.structured_logging import get_logger, log_exception
+
+        try:
+            with connection() as conn:
+                task = self._private_task_from_connection(conn, task_id)
+                job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+                return require_content_finalize_stage(conn, task=task, job=job, browser_session_id=browser_session_id,
+                                                       screenshot_root=SCREENSHOT_DIR)
+        except Exception as exc:
+            log_exception(get_logger('content_finalize'), 'content_finalize_consumption_rejected', exc, task_id=task_id, job_id=job_id)
+            raise
+
     def persist_path_b_editor_source(self, task_id: int, job_id: int, command, action_result):
         """Append an actual worker outcome, including failure, without changing inputs or claiming SAVE success."""
         from src.batch_edit.frozen_execution_contract import compile_frozen_execution_payload, validate_frozen_execution_defaults
@@ -2766,7 +2797,7 @@ class Repository:
                 elif parsed.state == 'BATCH_TRANSLATE_EXECUTE':
                     from src.batch_edit.translator import validate_translation_wholesale_source
                     from src.execution.mutation_dispatch_ledger import MutationDispatchLedger
-                    from src.execution.batch_dispatch_authority import validate_current_task_against_frozen_authority
+                    from src.execution.content_action_authority import validate_current_translation_authority
 
                     parents = [record for record in records if record.get('command', {}).get('state') == 'BATCH_WHOLESALE_FILL']
                     if len(parents) != 1:
@@ -2788,7 +2819,7 @@ class Repository:
                     row = dict(rows[0])
                     authority = MutationDispatchLedger.validate_translation_source(row, parsed, observed,
                         snapshot_row_authority_sha256=canonical_sha256(snapshot_authority))
-                    decision = validate_current_task_against_frozen_authority(conn, authority)
+                    decision = validate_current_translation_authority(conn, authority, command=parsed, observation=observed)
                     if decision.ok is not True:
                         raise ValueError('TRANSLATION_DISPATCH_AUTHORITY_DRIFT:' + decision.reason_code)
                     ref = observed['evidence_ref']

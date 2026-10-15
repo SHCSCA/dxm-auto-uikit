@@ -262,12 +262,10 @@ def validate_current_task_against_frozen_authority(
     """Compare current persisted task/snapshot facts with a frozen SAVE authority."""
 
     try:
-        canonical = _validated_authority(authority)
-        expected_task = canonical["task_authority"]
-        task = _load_task_by_id(conn, expected_task.get("task_id"))
-        current_task = _task_authority_projection(task)
-        if canonical_sha256(current_task) != canonical_sha256(expected_task):
-            _reject("AUTH_CURRENT_TASK_DRIFT")
+        from src.execution.current_authority_facts import load_current_authority_facts
+
+        canonical, task = load_current_authority_facts(
+            conn, authority, allowed_steps=_BATCH_SAVE_AND_VERIFY_STATES)
         if canonical['execution']['payload'].get('save_stage') == 'SAVE2':
             try:
                 job = next(row for row in task['jobs'] if row['id'] == canonical['command']['payload']['job_id'])
@@ -277,49 +275,6 @@ def validate_current_task_against_frozen_authority(
                     _reject('AUTH_SAVE2_STAGE_FREEZE_DRIFT')
             except (FrozenExecutionContractError, KeyError, StopIteration):
                 _reject('AUTH_SAVE2_STAGE_FREEZE_DRIFT')
-        snapshot_id = canonical["snapshot"]["plan_snapshot_id"]
-        row = conn.execute(
-            "SELECT * FROM plan_snapshots WHERE id=?",
-            (snapshot_id,),
-        ).fetchone()
-        current_snapshot = loads(row["snapshot_json"], {}) if row is not None else None
-        current_row_binding = (
-            {
-                "id": int(row["id"]),
-                "task_id": row["task_id"],
-                "snapshot_hash": row["snapshot_hash"],
-                "local_plan_template_id": row["local_plan_template_id"],
-                "idempotency_key": row["idempotency_key"],
-                "created_at": row["created_at"],
-            }
-            if row is not None
-            else None
-        )
-        if (
-            current_row_binding != canonical["snapshot"].get("row_binding")
-            or canonical_sha256(current_snapshot)
-            != canonical_sha256(canonical["snapshot"]["plan_snapshot"])
-        ):
-            _reject("AUTH_CURRENT_TASK_DRIFT")
-        provenance = conn.execute(
-            """
-            SELECT snapshot_id, snapshot_hash
-              FROM plan_snapshot_idempotency_keys
-             WHERE idempotency_key=?
-            """,
-            (canonical["snapshot"]["row_binding"]["idempotency_key"],),
-        ).fetchone()
-        if (
-            provenance is None
-            or provenance["snapshot_id"] != snapshot_id
-            or provenance["snapshot_hash"]
-            != canonical["snapshot"]["plan_snapshot_hash"]
-        ):
-            _reject("AUTH_CURRENT_TASK_DRIFT")
-        _validate_current_queue_against_frozen_authority(
-            task,
-            canonical["queue"],
-        )
     except DispatchAuthorityError as exc:
         return DispatchAuthorityDecision(False, exc.reason_code)
     frozen = _deep_freeze(canonical)
@@ -729,62 +684,6 @@ def _task_authority_projection(task: Mapping[str, Any]) -> dict[str, Any]:
         "task_payload": deepcopy(dict(payload)),
         "manual_approval": deepcopy(dict(approval)),
     }
-
-
-def _validate_current_queue_against_frozen_authority(
-    task: Mapping[str, Any],
-    frozen_queue: Any,
-) -> None:
-    if not isinstance(frozen_queue, Mapping):
-        _reject("AUTH_CURRENT_QUEUE_DRIFT")
-    frozen_jobs = frozen_queue.get("ordered_jobs")
-    current_jobs = task.get("jobs")
-    if not isinstance(frozen_jobs, list) or not isinstance(current_jobs, list):
-        _reject("AUTH_CURRENT_QUEUE_DRIFT")
-    frozen_identity = [
-        {
-            "ordinal": item.get("ordinal"),
-            "job_id": item.get("job_id"),
-            "product_id": str(item.get("product_id")),
-        }
-        for item in frozen_jobs
-        if isinstance(item, Mapping)
-    ]
-    current_identity = [
-        {
-            "ordinal": ordinal,
-            "job_id": int(item.get("id")),
-            "product_id": str(item.get("product_id")),
-        }
-        for ordinal, item in enumerate(current_jobs, start=1)
-        if isinstance(item, Mapping)
-    ]
-    current_job_id = frozen_queue.get("guard", {}).get("current_job_id")
-    statuses = [str(item.get("status") or "") for item in current_jobs]
-    current_indexes = [
-        index
-        for index, item in enumerate(current_jobs)
-        if item.get("id") == current_job_id
-    ]
-    if (
-        frozen_identity != current_identity
-        or len(current_indexes) != 1
-        or str(task.get("status") or "") != "running"
-    ):
-        _reject("AUTH_CURRENT_QUEUE_DRIFT")
-    current_index = current_indexes[0]
-    if (
-        statuses[current_index] != "running"
-        or statuses.count("running") != 1
-        or any(status not in {"succeeded", "completed"} for status in statuses[:current_index])
-        or any(status != "pending" for status in statuses[current_index + 1 :])
-        or int(task.get("completed_jobs") or 0) != current_index
-        or int(task.get("failed_jobs") or 0) != 0
-    ):
-        _reject("AUTH_CURRENT_QUEUE_DRIFT")
-    step = str(current_jobs[current_index].get("current_step_code") or "")
-    if step not in _BATCH_SAVE_AND_VERIFY_STATES:
-        _reject("AUTH_CURRENT_QUEUE_DRIFT")
 
 
 def _load_snapshot_binding(

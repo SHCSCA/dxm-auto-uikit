@@ -767,8 +767,8 @@ def test_e2_plan_reader_allowlist_contains_only_documented_read_contracts() -> N
         ("POST", "https://www.dianxiaomi.com/api/smtCommManufacture/list.json"),
         ("POST", "https://www.dianxiaomi.com/api/smtCategory/syncQualification.json"),
         ("POST", "https://www.dianxiaomi.com/api/smtProduct/getSmtCommission.json"),
-        ("POST", "https://www.dianxiaomi.com/api/smtProduct/verifyPopChoiceShop.json"),
     }
+    assert not any("verifyPopChoiceShop" in url for _method, url in DXM_E2_PLAN_READ_ALLOWLIST)
     assert all("save" not in url.casefold() and "publish" not in url.casefold() for _method, url in DXM_E2_PLAN_READ_ALLOWLIST)
 
 
@@ -1381,6 +1381,11 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
         "ipmSkuStock": "SKU 库存",
         "aeopSKUProperty": "SKU 属性组合",
         "logisticAttrList": "SKU 物流属性",
+        "packageWeight": "重量（kg）",
+        "packageLength": "包装长度（cm）",
+        "packageWidth": "包装宽度（cm）",
+        "packageHeight": "包装高度（cm）",
+        "originalBox": "是否原箱",
     }
     assert schemas["301"]["price_policy"] == {
         "sku_cargo_not_above_sale": True,
@@ -1406,18 +1411,13 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
         ],
         "support_new_size_attribute": True,
         "commission_rate": 5.0,
-        "pop_choice_shop": {
-            "shopId": "101",
-            "isPopChoice": True,
-            "popChoiceShopId": "901",
-        },
         "source_apis": [
             "/api/smtCommLogisticAttribute/getLogisticAttributeList.json",
             "/api/smtCommProduct/supportNewSizeAttribute.json",
             "/api/smtProduct/getSmtCommission.json",
-            "/api/smtProduct/verifyPopChoiceShop.json",
         ],
     }
+    assert not any("verifyPopChoiceShop" in call[1] for call in api_request.calls)
     assert schemas["301"]["properties"]["attr_5301"]["ui_label_zh"] == "类目 301 材质"
     assert schemas["301"]["properties"]["title"]["ui_binding"] == (
         "dxm_editor:title"
@@ -1522,12 +1522,10 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
         },
         15_000,
     ) in api_request.calls
-    # The category availability response already carries productPropertys in
-    # this fixture, so the account-wide management index is intentionally not
-    # called for a normal one-scope plan sync.
-    assert len(api_request.calls) == 27
+    # 类目响应已包含属性；单范围同步不读全账号索引，也不主动预检半托管资格。
+    assert len(api_request.calls) == 26
     request_trace = result["payload"]["request_trace"]
-    assert len(request_trace) == 25
+    assert len(request_trace) == 24
     assert all(
         set(entry) >= {"label", "path", "status", "outcome", "elapsed_ms"}
         and entry["outcome"] == "ok"
@@ -1852,8 +1850,7 @@ def test_category_tree_proxy_children_and_search_normalize_records(
     monkeypatch.setattr(api_request, "post", post)
 
     children = flow.read_category_children(pcid="200003937")
-    assert children == [
-        {
+    expected_child = {
             "categoryId": "200003937",
             "nameZh": "手工艺品&缝纫用品（半成品）",
             "nameEn": "Arts,Crafts & Sewing",
@@ -1863,7 +1860,12 @@ def test_category_tree_proxy_children_and_search_normalize_records(
             "isleaf": 0,
             "level": 2,
         }
-    ]
+    assert len(children) == 1
+    assert {key: children[0][key] for key in expected_child} == expected_child
+    assert children[0]["catalogNodePathIds"] == ["15", "200003937"]
+    assert children[0]["executableLeaf"] is False
+    assert children[0]["catalogStatus"] == "REFERENCE_MATCHED"
+    assert len(children[0]["catalogSha256"]) == 64
 
     top = flow.read_category_children(pcid="")
     assert top == []
@@ -1874,10 +1876,10 @@ def test_category_tree_proxy_children_and_search_normalize_records(
     assert api_request.calls[2][2] == {"category": "立牌"}
 
     by_id = flow.get_category_by_id(category_id="201393405")
-    assert by_id == {
-        "categoryId": "201393405",
-        "nameZh": "人形立牌",
-    }
+    assert by_id["categoryId"] == "201393405"
+    assert by_id["nameZh"] == "人形立牌"
+    assert by_id["catalogSha256"] == children[0]["catalogSha256"]
+    assert by_id["executableLeaf"] is False
     assert api_request.calls[-1][2] == {"categoryId": "201393405"}
 
 

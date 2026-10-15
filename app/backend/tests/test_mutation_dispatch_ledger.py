@@ -568,7 +568,7 @@ def test_dispatched_save_is_terminal_and_cannot_auto_dispatch_again(ledger_db) -
     assert retry.reason_code == "MUTATION_ALREADY_DISPATCHED"
 
 
-def test_batch_save_protocol_requires_the_frozen_queue_guard():
+def test_batch_save_protocol_requires_the_frozen_queue_guard(ledger_db):
     with pytest.raises(MutationCommandContractError) as exc_info:
         validate_browser_agent_command(_batch_save_command())
 

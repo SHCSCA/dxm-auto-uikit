@@ -43,6 +43,8 @@ extraResources:
     to: tools/probes
   - from: ../../config
     to: config
+  - from: ../../resources/dxm/category-catalog
+    to: resources/dxm/category-catalog
 win:
   executableName: DXM-Agent-Console
   target:

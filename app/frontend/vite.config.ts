@@ -1,15 +1,16 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { developmentBackendTarget, frontendConfig } from './src/config/frontendConfig'
 
-const backendTarget = process.env.DXM_BACKEND_URL || `http://127.0.0.1:${process.env.DXM_BACKEND_PORT || '8000'}`
+const backendTarget = developmentBackendTarget(process.env)
 const backendWsTarget = backendTarget.replace(/^http/, 'ws')
 
 export default defineConfig({
   base: './',
   plugins: [react()],
   server: {
-    host: '127.0.0.1',
-    port: 5173,
+    host: frontendConfig.development.host,
+    port: frontendConfig.development.frontendPort,
     proxy: {
       '/api': {
         target: backendTarget,

@@ -283,11 +283,12 @@ def _update_approval(
 
 
 @pytest.mark.parametrize(
-    ("boundary", "mutate"),
+    ("boundary", "mutate", "reason_code"),
     [
         pytest.param(
             "approval.approved",
             lambda approval: approval.update({"approved": False}),
+            "AUTH_LEASE_NOT_APPROVED",
             id="restart-approval-revoked",
         ),
         pytest.param(
@@ -295,6 +296,7 @@ def _update_approval(
             lambda approval: approval.update(
                 {"expires_at": "2098-01-01T00:00:00.000000Z"}
             ),
+            "AUTH_LEASE_AUTHORITY_MISMATCH",
             id="restart-lease-authority-drift",
         ),
     ],
@@ -303,6 +305,7 @@ def test_class_1_restart_rejects_approval_or_lease_drift(
     authority_case,
     boundary: str,
     mutate: Callable[[dict[str, Any]], None],
+    reason_code: str,
 ) -> None:
     before, verify = _prepare_proven_save(authority_case)
     _update_approval(authority_case, mutate)
@@ -312,7 +315,7 @@ def test_class_1_restart_rejects_approval_or_lease_drift(
         authority_case,
         restarted,
         verify,
-        reason_code="SAVE_AUTHORITY_TASK_DRIFT",
+        reason_code=reason_code,
         before=before,
     )
     assert boundary.startswith("approval.")

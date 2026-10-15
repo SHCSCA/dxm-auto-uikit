@@ -7,6 +7,8 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import Any, BinaryIO
 
+from src.core.config_bus import get_config_bus
+
 from src.services.desktop_parent_channel import (
     PARENT_CHANNEL_PROTOCOL,
     arm_desktop_parent_channel,
@@ -61,7 +63,7 @@ def run_desktop_server(
 ) -> int:
     """Arm exact stdin ownership before any server can import ``src.main``."""
 
-    env = os.environ if environ is None else environ
+    env = get_config_bus().environment if environ is None else environ
     if env.get("DXM_DESKTOP_PARENT_CHANNEL") != PARENT_CHANNEL_PROTOCOL:
         raise DesktopServerConfigurationError(
             f"DXM_DESKTOP_PARENT_CHANNEL must be {PARENT_CHANNEL_PROTOCOL!r}"
@@ -74,8 +76,7 @@ def run_desktop_server(
         channel_kwargs["hard_exit"] = hard_exit
     channel = arm_channel(stream, **channel_kwargs)
 
-    # Parse remaining server inputs only after the START proof, but still before
-    # constructing uvicorn.Config or importing the application target.
+    # 父进程 START 证明通过后才解析服务器配置，应用导入仍由 uvicorn 延后执行。
     port = _backend_port(env)
     if config_factory is None or server_factory is None:
         import uvicorn

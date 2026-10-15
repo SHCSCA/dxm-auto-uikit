@@ -8,9 +8,9 @@ DXM 完整商品编辑工作台：从店小秘真实 draft 列表选择商品，
 
 **0.3.0 开发中，`E3_OPEN / BLOCKED`。不是 `MVP_READY`，不是 `PROD_READY`。**
 
-- backend、frontend、desktop 与根 `package.json` 均为 `0.3.0`；源码 manifest 版本已统一，但尚无同源 0.3.0 portable。
-- 当前没有 `DXM-Agent-Console-Portable-0.3.0.exe`；本地最新历史 portable 为 `0.2.3`，不能代表当前源码。
-- Reader、方案、快照、Path A Runner、BrowserAgent 和四键已有大量代码；当前工作树的完整 backend L0 已达到 `2344 passed / 0 skipped`，但固定提交、同源 portable 与真实三商品证据尚未形成一组放行证据。
+- backend、frontend、desktop 与根 `package.json` 均为 `0.3.0`；源码 manifest 版本已统一；本轮同源构建身份、包文件与隔离检查结果见 `outputs/project-understanding-20261015/delivery-report.json`。
+- 本轮 portable 目标为 `outputs/desktop-build/DXM-Agent-Console-Portable-0.3.0.exe`；历史文档中的 `0.2.3` 不能代表当前源码。
+- Reader、方案、快照、Path A Runner、BrowserAgent 和四键已有大量代码；文档中的 `2344 passed` 等数字属于历史源码，当前工程验证以 [PROGRESS](PROGRESS.md) 的最新记录为准。同源包与真实三商品证据必须分别验收。
 - 视频、翻译、批发、半托管和回滚是每件商品无条件执行的必需能力；当前生产接线未闭合，因此它们是产品放行阻断，不能写成可选扩展或已完成功能。
 - 完整产品成功路径是 Path B。点击“编辑半托管信息”后由店小秘执行原生半托管门，本系统不做资格预检；精确中间“继续发布”仅允许作为进入 `editFromSmt` 的受控转换，最终发布仍永久禁止。
 
@@ -42,13 +42,13 @@ DXM 完整商品编辑工作台：从店小秘真实 draft 列表选择商品，
 权威 checkout：
 
 ```text
-D:\Desktop\py\dxm-auto-uikit
+G:\AI\dxm-auto-uikit
 ```
 
 先检查，再启动：
 
 ```bat
-cd /d D:\Desktop\py\dxm-auto-uikit
+cd /d G:\AI\dxm-auto-uikit
 scripts\start-mvp.bat --check
 scripts\start-mvp.bat
 ```

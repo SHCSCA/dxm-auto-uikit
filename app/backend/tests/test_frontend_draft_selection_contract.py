@@ -40,7 +40,8 @@ def test_draft_selection_builds_reviewable_input_without_starting_a_runner() -> 
     page_source = DRAFT_SELECTION_TSX.read_text(encoding="utf-8")
     state_source = DRAFT_STATE_TS.read_text(encoding="utf-8")
 
-    assert "MIN_DRAFT_SELECTION = 1" in state_source
+    assert "MIN_DRAFT_SELECTION = frontendConfig.draftSelection.minimum" in state_source
+    assert "minimum: 3" in (FRONTEND_SRC / "config/frontendConfig.ts").read_text(encoding="utf-8")
     assert "shopId" in state_source
     assert "productIds" in state_source
     assert "planId" in state_source
@@ -51,7 +52,7 @@ def test_draft_selection_builds_reviewable_input_without_starting_a_runner() -> 
     assert "resetSelectionForShopChange" in page_source
 
 
-def test_batch_save_ui_uses_the_same_one_to_one_hundred_item_contract() -> None:
+def test_batch_save_ui_uses_the_same_three_to_one_hundred_item_contract() -> None:
     batch_source = (
         FRONTEND_SRC / "components" / "workbench" / "BatchSavePlaceholderPage.tsx"
     ).read_text(encoding="utf-8")
@@ -71,15 +72,15 @@ def test_draft_selection_target_category_cascade_feeds_snapshot_request() -> Non
         FRONTEND_SRC / "components" / "workbench" / "BatchSavePlaceholderPage.tsx"
     ).read_text(encoding="utf-8")
 
-    assert "/api/dxm/category/children?" in page_source
-    assert "/api/dxm/category/search?" in page_source
+    assert "resolveCategorySelection" in page_source
+    assert "/api/dxm/category/get?category_id=" in page_source
     assert "targetCategoryId" in state_source
     assert "targetCategoryName" in state_source
     assert "targetCategoryMatch" in state_source
     assert "target_category_id" in batch_source
     assert "target_category_name" in batch_source
     assert "target_category_match" in batch_source
-    assert "统一目标类目" in page_source
+    assert "方案目标末级类目" in page_source
     assert "/start" not in page_source
 
 
@@ -141,14 +142,14 @@ def test_category_and_template_controls_have_operator_facing_fallbacks_and_pagin
     ).read_text(encoding="utf-8")
     styles = STYLES_CSS.read_text(encoding="utf-8")
 
-    assert "mergeCategorySearchLevels" in page_source
-    assert "搜索结果会自动补全可选的三级路径" in page_source
+    assert "resolveCategorySelection" in page_source
+    assert "核实真实叶子和祖先链" in page_source
     assert "draft-selection-target__cascade" in styles
     assert "待复核输入" in page_source
     assert "这三项决定本次批量保存" in page_source
     assert "本地普货方案" in page_source
-    assert "类目编号" in page_source
-    assert "PAGE_SIZES = [20, 50, 100, 200]" in page_source
+    assert "方案目标末级类目" in page_source
+    assert "PAGE_SIZES = frontendConfig.draftSelection.pageSizes" in page_source
     assert "TEMPLATE_PAGE_SIZES" in template_source
     assert "dxm-template-pagination" in template_source
     assert "/api/dxm-template-refs/sync-shop" in template_source

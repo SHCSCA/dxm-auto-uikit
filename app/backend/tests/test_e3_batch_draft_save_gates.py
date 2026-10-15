@@ -941,6 +941,11 @@ def test_prepare_editor_uses_only_formal_frozen_ui_binding_writer(monkeypatch):
     payload = {**body, "payload_hash": canonical_sha256(body)}
     defaults = frozen_execution_defaults(payload)
     flow = object.__new__(DxmLoginFlow)
+    monkeypatch.setattr(flow, "_capture_frozen_execution_values",
+        lambda _page, actual, **kwargs: {"ok": True, "phase": kwargs["phase"],
+            "execution_payload_hash": actual["payload_hash"],
+            "values": [{"field_key": field["field_key"], "value": deepcopy(field["resolved_value"])}
+                for field in actual["fields"]], "reason": None})
     calls: list[tuple[str, list[str] | None]] = []
     ok_result = {
         "ok": True,
@@ -1186,10 +1191,7 @@ def test_save_network_audit_excludes_exact_read_only_schema_posts_from_mutations
 
     page = Page()
     flow = object.__new__(DxmLoginFlow)
-    session = flow._capture_save_network_events(
-        page,
-        {"x": 1, "y": 1, "w": 10, "h": 10},
-    )
+    session = flow._capture_save_network_events(page)
     page.emit(Request("https://www.dianxiaomi.com/api/smtCategory/attributeList.json"))
     page.emit(Request("https://www.dianxiaomi.com/api/smtCategory/childAttributeList.json"))
     page.emit(Request("https://www.dianxiaomi.com/api/smtProduct/add.json"))
@@ -1204,10 +1206,7 @@ def test_save_network_audit_excludes_exact_read_only_schema_posts_from_mutations
     assert flow._save_network_audit_complete(audit, result["publish_signal"]) is True
 
     unknown_page = Page()
-    unknown_session = flow._capture_save_network_events(
-        unknown_page,
-        {"x": 1, "y": 1, "w": 10, "h": 10},
-    )
+    unknown_session = flow._capture_save_network_events(unknown_page)
     unknown_page.emit(
         Request("https://www.dianxiaomi.com/api/unknown/write-looking.json")
     )
@@ -1674,6 +1673,11 @@ def test_batch_save_prefill_stops_before_click_when_frozen_value_readback_drifts
         job=private["jobs"][0],
     )
     flow = object.__new__(DxmLoginFlow)
+    monkeypatch.setattr(flow, "_capture_frozen_execution_values",
+        lambda _page, actual, **kwargs: {"ok": True, "phase": kwargs["phase"],
+            "execution_payload_hash": actual["payload_hash"],
+            "values": [{"field_key": field["field_key"], "value": deepcopy(field["resolved_value"])}
+                for field in actual["fields"]], "reason": None})
     ok_result = {"ok": True, "stage": "ready"}
     monkeypatch.setattr(
         flow,
@@ -1894,9 +1898,8 @@ def test_final_pre_dispatch_guard_rereads_every_frozen_value(
             "ok": True,
             "text": "保存",
             "exact_save_count": 1,
-            "at_point_text": "保存",
-            "rect": {"x": 1, "y": 1, "w": 10, "h": 10},
-            "viewport": {},
+            "click_method": "playwright_exact_role",
+            "locator_index": 0,
         },
     )
     monkeypatch.setattr(
@@ -1955,13 +1958,13 @@ def test_final_pre_dispatch_guard_rereads_every_frozen_value(
     )
     monkeypatch.setattr(flow, "_trace_workflow_event", lambda *_args, **_kwargs: None)
 
-    def guarded_click(_page, _x, _y, **kwargs):
+    def guarded_click(_page, **kwargs):
         return kwargs["pre_dispatch_guard"]().get("ok") is True
 
-    monkeypatch.setattr(flow, "_click_point_with_native_window", guarded_click)
+    monkeypatch.setattr(flow, "_click_exact_save_button", guarded_click)
 
     class Page:
-        url = "https://www.dianxiaomi.com/web/smt/edit"
+        url = "https://www.dianxiaomi.com/web/smt/edit?id=70001"
 
     result = flow._save_only_on_page(
         Page(),
@@ -2293,7 +2296,7 @@ def test_batch_jit_authorization_rejects_command_target_outside_frozen_job(
     assert main._authorize_browser_mutation(
         mode_tampered,
         {"mutation_action": "save_only_click"},
-    ) == {"ok": False, "reason_code": "AUTH_COMMAND_MODE_MISMATCH"}
+    ) == {"ok": False, "reason_code": "AUTH_COMMAND_CONTRACT_INVALID"}
 
     downgraded_params = dict(tampered_params)
     downgraded_params.pop("batch_draft_save_execution", None)
@@ -2894,7 +2897,7 @@ def test_execution_mode_accepts_batch_draft_save():
     assert ExecutionMode.BATCH_DRAFT_SAVE.value == "batch_draft_save"
 
 
-def test_batch_draft_save_task_facts_path_a_only():
+def test_batch_draft_save_task_facts_reject_incomplete_path_b_scope():
     facts = build_batch_draft_save_task_facts(
         task_id=1,
         store_id=2,
@@ -2918,7 +2921,7 @@ def test_batch_draft_save_task_facts_path_a_only():
             plan_snapshot_hash=_snapshot_hash("facts-b"),
             path="B",
         )
-    assert exc.value.reason_code == "BATCH_PATH_FORBIDDEN"
+    assert exc.value.reason_code == "REAL_PATH_B_PRODUCT_COUNT_INVALID"
 
 
 def test_create_task_api_rejects_direct_batch_draft_save(tmp_path, monkeypatch):
@@ -2969,7 +2972,10 @@ def test_path_b_rejected_on_atomic_approval(tmp_path, monkeypatch):
     assert response.status_code == 403
     detail = response.json()["detail"]
     assert isinstance(detail, dict)
-    assert detail["reason_code"] == "BATCH_PATH_B_FORBIDDEN"
+    assert detail["reason_code"] == "PLAN_PATH_EXECUTION_NOT_RELEASED"
+    unchanged = repo.get_task_private(task["id"])
+    assert unchanged["status"] == "draft"
+    assert not unchanged["payload"].get("manual_approval")
 
 
 def test_missing_plan_snapshot_rejected(tmp_path, monkeypatch):

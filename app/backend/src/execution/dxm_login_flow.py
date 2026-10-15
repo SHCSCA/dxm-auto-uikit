@@ -33,6 +33,7 @@ from src.batch_edit.frozen_execution_contract import (
 )
 from src.batch_edit.path_a_section_templates import PATH_A_FILL_CONTEXT_KEY
 from src.batch_edit.scope_contract import canonical_sha256
+from src.core.config_bus import env_string
 from src.core.config import DATA_DIR, SCREENSHOT_DIR, SESSION_DIR
 from src.execution.browser_agent_protocol import mutation_target_hash
 from src.execution.canonical_receipt import (
@@ -42,11 +43,13 @@ from src.execution.canonical_receipt import (
 )
 from src.execution.account_identity import account_context_hash
 from src.execution.product_identity import is_stable_product_id
+from src.execution.save_target_contract import EXACT_SAVE_CLICK_METHOD
 from src.execution.browser_runtime import chrome_launch_options
 from src.execution.dxm_live import DxmLiveClient
 from src.services.agent_console import HUD_INIT_SCRIPT
 from src.services.dxm_draft_reader import DxmDraftReaderError
 from src.services.dxm_editor_model import enrich_dxm_editor_schema
+from src.services.category_catalog import annotate_category_records
 from src.state_machine.save_authorization import (
     SaveOnlyContractError,
     canonical_source_identity,
@@ -1579,7 +1582,7 @@ class DxmLoginFlow:
                 listener(dict(record))
             except Exception:
                 pass
-        trace_file = os.getenv('DXM_WORKFLOW_TRACE_FILE')
+        trace_file = env_string('DXM_WORKFLOW_TRACE_FILE')
         if not trace_file:
             return
         try:
@@ -3984,7 +3987,7 @@ class DxmLoginFlow:
                 elif isinstance(item, (int, float)) and key in ('pcid', 'isleaf', 'level'):
                     record[key] = item
             records.append(record)
-        return records
+        return annotate_category_records(records)
 
     @classmethod
     def _e2_named_template_records(
@@ -10144,7 +10147,7 @@ class DxmLoginFlow:
             return {
                 'ok': True,
                 'dispatched': True,
-                'method': 'playwright_exact_role',
+                'method': EXACT_SAVE_CLICK_METHOD,
                 'accessible_name': accessible_name,
                 'locator_index': selected_index,
                 'semantic_match_count': second_count,
@@ -18649,7 +18652,7 @@ class DxmLoginFlow:
                     and live_save.get('ok') is True
                     and live_save.get('text') == '保存'
                     and live_save.get('exact_save_count') == 1
-                    and live_save.get('click_method') == 'playwright_exact_role'
+                    and live_save.get('click_method') == EXACT_SAVE_CLICK_METHOD
                     and live_save.get('locator_index') == save_state.get('locator_index')
                 )
                 final_pre_dispatch_readback.update({
@@ -18782,7 +18785,7 @@ class DxmLoginFlow:
                 'ok': combined_ok,
                 'reason': combined_reason,
                 'clicked': True,
-                'click_method': 'playwright_exact_role',
+                'click_method': EXACT_SAVE_CLICK_METHOD,
                 'network_events': network_events[:8],
                 'network_save_result': network_result,
                 'network_audit': network_audit,
@@ -18912,7 +18915,7 @@ class DxmLoginFlow:
                     click_result = {
                         **click_result,
                         'clicked': True,
-                        'click_method': 'playwright_exact_role',
+                        'click_method': EXACT_SAVE_CLICK_METHOD,
                         'message': '已点击保存',
                     }
             mutation_authorization = dict(self._last_mutation_authorization_facts or {})
@@ -19082,7 +19085,7 @@ class DxmLoginFlow:
                     'exact_save_count': len(actionable),
                     'semantic_match_count': semantic_match_count,
                     'candidates': candidates,
-                    'click_method': 'playwright_exact_role',
+                    'click_method': EXACT_SAVE_CLICK_METHOD,
                     'published': None,
                 }
             else:
@@ -19093,7 +19096,7 @@ class DxmLoginFlow:
                     'exact_save_count': 1,
                     'semantic_match_count': semantic_match_count,
                     'locator_index': actionable[0]['index'],
-                    'click_method': 'playwright_exact_role',
+                    'click_method': EXACT_SAVE_CLICK_METHOD,
                     'published': None,
                 }
         except Exception as exc:
@@ -19103,7 +19106,7 @@ class DxmLoginFlow:
                 'text': '保存',
                 'exact_save_count': 0,
                 'semantic_match_count': None,
-                'click_method': 'playwright_exact_role',
+                'click_method': EXACT_SAVE_CLICK_METHOD,
                 'published': None,
             }
         self._trace_workflow_event(
@@ -19508,7 +19511,7 @@ class DxmLoginFlow:
             current_url=getattr(page, 'url', None),
             human_step='检查页面弹窗',
         )
-        if os.name == 'nt' and os.getenv('DXM_LOGIN_HEADED') == '1' and not self._is_headless():
+        if os.name == 'nt' and env_string('DXM_LOGIN_HEADED') == '1' and not self._is_headless():
             self._trace_workflow_event(
                 'blocking_modal_check:skipped_visible_browser',
                 context=context,
@@ -19791,7 +19794,7 @@ class DxmLoginFlow:
                 observed.get('ok') is True
                 and observed.get('text') == '保存'
                 and observed.get('exact_save_count') == 1
-                and observed.get('click_method') == 'playwright_exact_role'
+                and observed.get('click_method') == EXACT_SAVE_CLICK_METHOD
                 and isinstance(observed.get('locator_index'), int)
                 and not isinstance(observed.get('locator_index'), bool)
             )
@@ -19830,7 +19833,7 @@ class DxmLoginFlow:
                 selected_index is None
                 or observed.get('ok') is not True
                 or observed.get('exact_save_count') != 1
-                or observed.get('click_method') != 'playwright_exact_role'
+                or observed.get('click_method') != EXACT_SAVE_CLICK_METHOD
                 or observed.get('locator_index') != selected_index
             ):
                 raise MutationAuthorizationError(
@@ -19844,7 +19847,7 @@ class DxmLoginFlow:
             return {
                 'ok': True,
                 'dispatched': True,
-                'method': 'playwright_exact_role',
+                'method': EXACT_SAVE_CLICK_METHOD,
                 'locator_index': selected_index,
             }
 
@@ -19866,7 +19869,7 @@ class DxmLoginFlow:
             if isinstance(dispatched, Mapping) and dispatched.get('dispatched') is True:
                 self._trace_workflow_event(
                     'save_only:exact_semantic_save_click_done',
-                    method='playwright_exact_role',
+                    method=EXACT_SAVE_CLICK_METHOD,
                     result={**target_descriptor, **dict(dispatched)},
                     authorization=(authorization or {}).get('authorization_facts'),
                     human_step='点击保存',
@@ -20390,7 +20393,7 @@ class DxmLoginFlow:
         standalone browser size, so a malformed environment can never stop an
         operator from seeing the real DXM login window.
         """
-        raw = str(os.environ.get('DXM_VISIBLE_BROWSER_BOUNDS') or '').strip()
+        raw = str(env_string('DXM_VISIBLE_BROWSER_BOUNDS') or '').strip()
         if raw:
             try:
                 value = json.loads(raw)
@@ -20581,7 +20584,7 @@ class DxmLoginFlow:
         )
 
     def _visible_cdp_connect_timeout_ms(self) -> int:
-        configured = os.getenv('DXM_VISIBLE_CDP_CONNECT_TIMEOUT_MS') or os.getenv('DXM_WORKFLOW_CDP_CONNECT_TIMEOUT_MS')
+        configured = env_string('DXM_VISIBLE_CDP_CONNECT_TIMEOUT_MS') or env_string('DXM_WORKFLOW_CDP_CONNECT_TIMEOUT_MS')
         if configured:
             try:
                 value = int(str(configured).strip())
@@ -20784,19 +20787,19 @@ class DxmLoginFlow:
         raise RuntimeError(f'真实浏览器 DevTools 端口未就绪: {last_error or port}')
 
     def _workflow_browser_profile_dir(self) -> Path:
-        configured = os.getenv('DXM_WORKFLOW_PROFILE_DIR')
+        configured = env_string('DXM_WORKFLOW_PROFILE_DIR')
         if configured:
             return Path(configured).expanduser().resolve()
         return WORKFLOW_BROWSER_PROFILE_DIR
 
     def _use_persistent_visible_profile(self) -> bool:
-        raw_value = os.getenv('DXM_WORKFLOW_PERSISTENT_PROFILE')
+        raw_value = env_string('DXM_WORKFLOW_PERSISTENT_PROFILE')
         value = str(raw_value or '').strip().lower()
         if value:
             return value in {'1', 'true', 'yes', 'on'}
-        if os.getenv('DXM_DESKTOP', '').strip() == '1':
+        if env_string('DXM_DESKTOP', '').strip() == '1':
             return True
-        if os.getenv('DXM_WORKFLOW_PROFILE_DIR', '').strip():
+        if env_string('DXM_WORKFLOW_PROFILE_DIR', '').strip():
             return True
         return not self._is_headless()
 
@@ -20926,7 +20929,7 @@ class DxmLoginFlow:
     def _ensure_visible_remote_debugging_port(self) -> int:
         if self._remote_debugging_port:
             return self._remote_debugging_port
-        configured = os.getenv('DXM_WORKFLOW_DEVTOOLS_PORT') or os.getenv('DXM_VISIBLE_DEVTOOLS_PORT')
+        configured = env_string('DXM_WORKFLOW_DEVTOOLS_PORT') or env_string('DXM_VISIBLE_DEVTOOLS_PORT')
         if configured:
             try:
                 port = int(str(configured).strip())
@@ -24492,13 +24495,13 @@ class DxmLoginFlow:
 
 
     def _is_headless(self) -> bool:
-        if os.getenv('DXM_LOGIN_HEADLESS') == '1':
+        if env_string('DXM_LOGIN_HEADLESS') == '1':
             return True
-        if os.getenv('DXM_LOGIN_HEADED') == '1':
+        if env_string('DXM_LOGIN_HEADED') == '1':
             return False
         if os.name == 'nt':
             return False
-        return not bool(os.getenv('DISPLAY'))
+        return not bool(env_string('DISPLAY'))
 
     def _mask_secret(self, raw: str) -> str:
         if len(raw) <= 2:

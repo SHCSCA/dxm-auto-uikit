@@ -3,16 +3,14 @@ import type {
   DeliveryWorkspace,
   EditBatchSummary,
   FinalDeliveryCheckSummary,
-  ItemCapabilityStatus,
-  ItemResultBreakdown,
   RegressionGate,
   Report,
   SingleSaveAcceptance,
   Task,
-  TwoStageSaveStatus,
 } from '../../types'
 import { toArtifactUrl } from '../../workspace'
 import { humanOperatorMessage, humanOperatorTitle, humanTaskDisplayName } from './workbenchCopy'
+import { DiagnosticPathNotice } from './DiagnosticPathNotice'
 
 type ResultsPageProps = {
   workspace: DeliveryWorkspace
@@ -37,139 +35,6 @@ function PublishGuardBanner() {
       <strong>⚠ 本系统仅支持草稿保存，禁止任何发布操作</strong>
       <p>最终发布永久禁止：立即发布、保存并发布、上线等按钮均已永久禁用。</p>
     </div>
-  )
-}
-
-/**
- * Capability badge with status color
- */
-function CapabilityBadge({ capability, status }: { capability: string; status: ItemCapabilityStatus[keyof ItemCapabilityStatus] }) {
-  const labels: Record<string, string> = {
-    video: '视频',
-    translation: '翻译',
-    wholesale: '批发',
-    semiManaged: '半托管',
-    rollbackPreparation: '回滚',
-  }
-
-  const statusClass = {
-    pending: 'is-pending',
-    resolving: 'is-pending',
-    success: 'is-success',
-    failed: 'is-failed',
-    unknown: 'is-unknown',
-  }[status] || 'is-unknown'
-
-  return (
-    <span className={`capability-badge ${statusClass}`} title={`${labels[capability] || capability}: ${status}`}>
-      {labels[capability] || capability}
-    </span>
-  )
-}
-
-/**
- * Two-stage save display with 3-proof status
- */
-function TwoStageSaveDisplay({ stage, save }: { stage: 'main_edit' | 'semi_managed'; save: TwoStageSaveStatus }) {
-  const stageLabels = {
-    main_edit: '主编辑SAVE',
-    semi_managed: '半托管SAVE',
-  }
-
-  const proofIcons = {
-    screenshot: save.three_proof_status.screenshot ? '✓' : '✗',
-    network: save.three_proof_status.network ? '✓' : '✗',
-    unpublished: save.three_proof_status.unpublished ? '✓' : '✗',
-  }
-
-  const statusClass = {
-    pending: 'is-pending',
-    succeeded: 'is-success',
-    failed: 'is-failed',
-    unknown: 'is-unknown',
-  }[save.save_status] || 'is-unknown'
-
-  return (
-    <div className={`two-stage-save-item ${statusClass}`}>
-      <span className="two-stage-save-label">{stageLabels[stage]}</span>
-      <div className="three-proof-status">
-        <span className={`proof-item ${save.three_proof_status.screenshot ? 'is-ok' : 'is-missing'}`} title="截图证明">
-          截图 {proofIcons.screenshot}
-        </span>
-        <span className={`proof-item ${save.three_proof_status.network ? 'is-ok' : 'is-missing'}`} title="网络请求证明">
-          网络 {proofIcons.network}
-        </span>
-        <span className={`proof-item ${save.three_proof_status.unpublished ? 'is-ok' : 'is-missing'}`} title="未发布证明">
-          未发布 {proofIcons.unpublished}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-/**
- * Per-item result breakdown row
- */
-function ItemResultRow({ item }: { item: ItemResultBreakdown }) {
-  const statusClass = {
-    pending: 'is-pending',
-    resolving: 'is-resolving',
-    succeeded: 'is-success',
-    failed: 'is-failed',
-    unknown: 'is-unknown',
-    manual_review_required: 'is-manual-review',
-  }[item.status] || 'is-unknown'
-
-  return (
-    <tr className={`item-result-row ${statusClass}`}>
-      <td className="item-ordinal">{item.ordinal}</td>
-      <td className="item-title">{item.product_title}</td>
-      <td className="item-capabilities">
-        <div className="capability-badges">
-          <CapabilityBadge capability="video" status={item.capability_status.video} />
-          <CapabilityBadge capability="translation" status={item.capability_status.translation} />
-          <CapabilityBadge capability="wholesale" status={item.capability_status.wholesale} />
-          <CapabilityBadge capability="semiManaged" status={item.capability_status.semiManaged} />
-          <CapabilityBadge capability="rollbackPreparation" status={item.capability_status.rollbackPreparation} />
-        </div>
-      </td>
-      <td className="item-save-status">
-        <TwoStageSaveDisplay stage="main_edit" save={item.main_edit_save} />
-        <TwoStageSaveDisplay stage="semi_managed" save={item.semi_managed_save} />
-      </td>
-      <td className="item-status">
-        {item.status === 'resolving' && (
-          <div className="resolving-status">
-            <span className="status-badge is-resolving">Resolving</span>
-            {item.current_operation && (
-              <span className="resolving-operation">{item.current_operation}</span>
-            )}
-            <span className="resolving-notice">仅允许急停</span>
-          </div>
-        )}
-        {item.status === 'manual_review_required' && (
-          <div className="manual-review-status">
-            <span className="status-badge is-manual-review">需要人工复核</span>
-            {item.manual_review_required && (
-              <span className="manual-review-flag">manual_review_required=true</span>
-            )}
-            <span className="no-retry-notice">禁止自动重试</span>
-          </div>
-        )}
-        {item.status === 'succeeded' && (
-          <span className="status-badge is-success">成功</span>
-        )}
-        {item.status === 'failed' && (
-          <span className="status-badge is-failed">失败</span>
-        )}
-        {item.status === 'pending' && (
-          <span className="status-badge is-pending">等待中</span>
-        )}
-        {item.status === 'unknown' && (
-          <span className="status-badge is-unknown">未知</span>
-        )}
-      </td>
-    </tr>
   )
 }
 
@@ -257,7 +122,7 @@ export function ResultsPage({
               <div>
                 <span className="eyebrow">真实执行结果</span>
                 <h2>还没有保存结果</h2>
-                <p>这里不会生成演示报告。先读取真实商品箱范围，创建店铺级批次并完成一次批准。</p>
+                <p>这里不会生成演示报告。先选择至少三件真实草稿，使用完整 Path B 方案预览并冻结，再按实际门禁决定是否可执行。</p>
               </div>
             </div>
             <div className="batch-primary-notice">
@@ -290,6 +155,7 @@ export function ResultsPage({
   return (
     <>
       <PublishGuardBanner />
+      <DiagnosticPathNotice mode={selectedTask?.mode} />
       <section className="module-layout" aria-label="结果与问题" data-testid="report-center-section">
         <BusinessResultSummaryCard
           selectedTask={selectedTask}
@@ -369,8 +235,8 @@ function ControlledBatchResults({
         }
       : targetBatch.status === 'draft'
         ? {
-            title: '继续核对并批准批次',
-            detail: '范围和模板已经冻结；核对后一次批准并启动，执行期间不会发布。',
+            title: '查看历史草稿',
+            detail: '旧批次仅供历史查询；新任务从选品、完整 Path B 方案与不可变快照重新建立。',
           }
         : {
             title: '查看本批次保存结果',
@@ -379,115 +245,14 @@ function ControlledBatchResults({
               : '核对逐件保存成功、保存前隔离和未发布状态。',
           }
 
-  // Mock item results for demo
-  const itemResults: ItemResultBreakdown[] = [
-    {
-      ordinal: 1,
-      product_id: 'prod-001',
-      product_title: '示例商品 A',
-      capability_status: {
-        video: 'success',
-        translation: 'success',
-        wholesale: 'pending',
-        semiManaged: 'pending',
-        rollbackPreparation: 'pending',
-      },
-      main_edit_save: {
-        stage: 'main_edit',
-        save_status: 'succeeded',
-        three_proof_status: { screenshot: true, network: true, unpublished: true },
-      },
-      semi_managed_save: {
-        stage: 'semi_managed',
-        save_status: 'pending',
-        three_proof_status: { screenshot: false, network: false, unpublished: false },
-      },
-      status: 'pending',
-      manual_review_required: false,
-    },
-    {
-      ordinal: 2,
-      product_id: 'prod-002',
-      product_title: '示例商品 B',
-      capability_status: {
-        video: 'success',
-        translation: 'success',
-        wholesale: 'success',
-        semiManaged: 'success',
-        rollbackPreparation: 'pending',
-      },
-      main_edit_save: {
-        stage: 'main_edit',
-        save_status: 'succeeded',
-        three_proof_status: { screenshot: true, network: true, unpublished: true },
-      },
-      semi_managed_save: {
-        stage: 'semi_managed',
-        save_status: 'succeeded',
-        three_proof_status: { screenshot: true, network: true, unpublished: true },
-      },
-      status: 'succeeded',
-      manual_review_required: false,
-    },
-    {
-      ordinal: 3,
-      product_id: 'prod-003',
-      product_title: '示例商品 C',
-      capability_status: {
-        video: 'success',
-        translation: 'success',
-        wholesale: 'success',
-        semiManaged: 'resolving',
-        rollbackPreparation: 'pending',
-      },
-      main_edit_save: {
-        stage: 'main_edit',
-        save_status: 'succeeded',
-        three_proof_status: { screenshot: true, network: true, unpublished: true },
-      },
-      semi_managed_save: {
-        stage: 'semi_managed',
-        save_status: 'pending',
-        three_proof_status: { screenshot: false, network: false, unpublished: false },
-      },
-      status: 'resolving',
-      current_operation: '等待半托管国家配置加载',
-      manual_review_required: false,
-    },
-    {
-      ordinal: 4,
-      product_id: 'prod-004',
-      product_title: '示例商品 D',
-      capability_status: {
-        video: 'failed',
-        translation: 'failed',
-        wholesale: 'unknown',
-        semiManaged: 'unknown',
-        rollbackPreparation: 'unknown',
-      },
-      main_edit_save: {
-        stage: 'main_edit',
-        save_status: 'failed',
-        three_proof_status: { screenshot: false, network: false, unpublished: false },
-      },
-      semi_managed_save: {
-        stage: 'semi_managed',
-        save_status: 'unknown',
-        three_proof_status: { screenshot: false, network: false, unpublished: false },
-      },
-      status: 'manual_review_required',
-      manual_review_required: true,
-    },
-  ]
-
   return (
     <section className="module-layout batch-results-page" aria-label="结果与问题" data-testid="report-center-section">
       <article className="module-card span-3 batch-result-primary">
         <div className="module-head">
           <div>
-            <span className="eyebrow">受控商品箱整批结果</span>
+            <span className="eyebrow">历史商品箱批次结果</span>
             <h2>{batchResultStatus(targetBatch)}</h2>
-            <p>这是范围冻结、一次批准、严格串行的受控批次结果。旧版批量保存、无人值守和发布仍不可用。</p>
+            <p>这里只展示后端返回的历史事实。历史保存记录不能作为当前完整 Path B、MVP_READY 或 PROD_READY 的证明。</p>
           </div>
           <span className={`batch-status-badge is-${batchResultTone(targetBatch)}`}>批次 #{targetBatch.id}</span>
         </div>
@@ -498,25 +263,9 @@ function ControlledBatchResults({
           <span><strong>{uncertain}</strong><small>结果不确定待对账</small></span>
         </div>
 
-        {/* Per-item breakdown table */}
-        <div className="batch-item-results">
-          <h3>商品执行详情</h3>
-          <table className="item-results-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>商品标题</th>
-                <th>能力状态</th>
-                <th>SAVE 状态</th>
-                <th>执行状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {itemResults.map((item) => (
-                <ItemResultRow key={item.product_id} item={item} />
-              ))}
-            </tbody>
-          </table>
+        <div className="batch-item-results" role="status">
+          <h3>完整商品逐项回执</h3>
+          <p>此历史摘要未提供五项必经能力和两次保存的独立回执，不能判定完整 Path B 成功。请查看真实任务证据；缺失数据保持未证明。</p>
         </div>
 
         <div className={`batch-primary-notice ${targetBatch.execution.manual_review_required ? 'is-danger' : ''}`}>

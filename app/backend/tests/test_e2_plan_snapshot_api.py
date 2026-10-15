@@ -726,11 +726,9 @@ def test_path_b_is_configurable_but_execution_freeze_remains_fail_closed(
         "/api/plan-snapshots/preview",
         json=_snapshot_request(created.json()["id"]),
     )
-    # Path B is allowed at preview time; execution is blocked separately by
-    # BATCH_PATH_B_FORBIDDEN in the execution endpoint.
-    assert preview.status_code == 200, preview.text
-    assert preview.json()["path"] == "B"
-    assert preview.json()["publish_allowed"] is False
+    # 可保存配置不等于具有完整执行权威；旧方案不能绕过 v3 必经能力合同。
+    assert preview.status_code == 409, preview.text
+    assert preview.json()["detail"]["reason_code"] == "SEMI_MANAGED_PLAN_AUTHORITY_MISSING"
 
 
 def test_new_single_category_scope_contract_rejects_legacy_multi_category_payload(

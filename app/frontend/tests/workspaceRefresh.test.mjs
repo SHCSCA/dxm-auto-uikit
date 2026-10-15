@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
+import { frontendConfig } from '../src/config/frontendConfig.ts'
 
 // Exercise the actual hooks without starting Electron or changing production APIs.
 const source = ts.createSourceFile('App.tsx', readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
@@ -19,6 +20,7 @@ test('a pending delivery check cannot withhold templates or workspace readiness'
   const refs = [{ id: 'reference-from-api' }]
   const state = {}
   const context = {
+    frontendConfig,
     useCallback: (callback) => callback,
     selectedTaskId: null,
     workspaceRefreshGenerationRef: { current: 0 },
@@ -52,6 +54,7 @@ test('workspace polling waits for a slow refresh and stops scheduling on unmount
   let finishRefresh
   let cleanup
   const context = {
+    frontendConfig,
     workspaceHasRunningTask: true,
     workspaceHasRunningBatch: false,
     agentConsole: null,

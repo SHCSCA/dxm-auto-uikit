@@ -3,9 +3,10 @@ import type {
   DxmDraftProduct,
   DxmDraftShopsResponse,
 } from './types'
+import { frontendConfig } from './config/frontendConfig.ts'
 
-export const MIN_DRAFT_SELECTION = 1
-export const MAX_DRAFT_SELECTION = 100
+export const MIN_DRAFT_SELECTION = frontendConfig.draftSelection.minimum
+export const MAX_DRAFT_SELECTION = frontendConfig.draftSelection.maximum
 
 export type DraftTaskInput = {
   shopId: string

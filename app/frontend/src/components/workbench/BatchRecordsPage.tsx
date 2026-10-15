@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getJson, postJson } from '../../api'
-import type { EditBatchDetail, EditBatchItem, EditBatchProgressSummary, EditBatchStopRequest, EditBatchSummary } from '../../types'
+import { getJson } from '../../api'
+import { frontendConfig } from '../../config/frontendConfig'
+import type { EditBatchDetail, EditBatchItem, EditBatchProgressSummary, EditBatchSummary } from '../../types'
 
 type BatchRecordsPageProps = {
   initialBatchId: number | null
@@ -21,8 +22,6 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
   const [detail, setDetail] = useState<EditBatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
-  const [stopping, setStopping] = useState(false)
-  const [stopRequestedBy, setStopRequestedBy] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pollingNotice, setPollingNotice] = useState<string | null>(null)
 
@@ -32,7 +31,6 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
     if (!silent) {
       setDetailLoading(true)
       setError(null)
-      setStopRequestedBy('')
     }
     try {
       const nextDetail = await getJson<EditBatchDetail>(`/api/edit-batches/${batchId}`)
@@ -95,7 +93,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
     if (!detail || !POLLING_STATUSES.has(detail.status)) return
     const timer = window.setInterval(() => {
       void openBatch(detail.id, { silent: true })
-    }, 2000)
+    }, frontendConfig.polling.approvalMs)
     return () => window.clearInterval(timer)
   }, [detail?.id, detail?.status, openBatch])
 
@@ -118,41 +116,6 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
       : pollingNotice
         ? { tone: 'warning', text: pollingNotice }
         : null
-
-  async function requestStop() {
-    if (!detail || detail.status !== 'running' || stopping) return
-    const requestedBy = stopRequestedBy.trim()
-    if (!requestedBy) {
-      setError('请先填写停止申请人。')
-      return
-    }
-    if (requestedBy.length > 200) {
-      setError('停止请求未提交：停止申请人不能超过 200 字。')
-      return
-    }
-    setStopping(true)
-    setError(null)
-    try {
-      const nextDetail = await postJson<EditBatchDetail>(`/api/edit-batches/${detail.id}/stop`, {
-        requested_by: requestedBy,
-      } satisfies EditBatchStopRequest)
-      setDetail(nextDetail)
-      setBatches((current) => current.map((batch) => batch.id === nextDetail.id
-        ? {
-            ...batch,
-            status: nextDetail.status,
-            updated_at: nextDetail.updated_at,
-            execution: nextDetail.execution,
-            progress: nextDetail.progress,
-          }
-        : batch))
-      setStopRequestedBy('')
-    } catch (caught) {
-      setError(humanRecordsError(caught, '停止请求未提交'))
-    } finally {
-      setStopping(false)
-    }
-  }
 
   return (
     <section className="module-layout batch-records-page" aria-label="批次记录">
@@ -224,8 +187,8 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
 
             {detail.status === 'draft' ? (
               <div className="batch-draft-boundary">
-                <span><strong>等待批准</strong><small>范围和模板已冻结，尚未开始处理商品。</small></span>
-                <button className="button button--primary" type="button" onClick={() => onOpenBatch(detail.id)}>继续批准</button>
+                <span><strong>历史草稿仅供查询</strong><small>旧批次不能批准或启动；请重新选品并冻结完整 Path B 任务。</small></span>
+                <button className="button button--primary" type="button" onClick={onCreateBatch}>准备完整 Path B 任务</button>
               </div>
             ) : detail.status === 'approved' ? (
               <div className="batch-draft-boundary">
@@ -253,28 +216,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
                   <span><strong>{safeStopped}</strong><small>保存前安全停止</small></span>
                   <span><strong>{uncertain}</strong><small>结果不确定待对账</small></span>
                 </div>
-                {detail.status === 'running' && (
-                  <div className="batch-stop-form">
-                    <label htmlFor="batch-stop-requested-by">
-                      <span>需要安全停止？填写申请人后提交</span>
-                      <input
-                        id="batch-stop-requested-by"
-                        value={stopRequestedBy}
-                        maxLength={200}
-                        onChange={(event) => setStopRequestedBy(event.target.value)}
-                        placeholder="姓名或值班标识"
-                      />
-                    </label>
-                    <button
-                      className="button button--quiet batch-stop-action"
-                      type="button"
-                      onClick={() => { void requestStop() }}
-                      disabled={stopping}
-                    >
-                      {stopping ? '正在提交停止…' : '安全停止批次'}
-                    </button>
-                  </div>
-                )}
+                {detail.status === 'running' && <small>这是旧批次只读记录；请在正式任务控制面核对实际 Worker 状态，不从历史接口派发控制动作。</small>}
                 {detail.status === 'stop_requested' && <small className="batch-stop-pending">停止请求已提交；当前商品确认结束后不会再派发下一件。</small>}
               </div>
             ) : null}
