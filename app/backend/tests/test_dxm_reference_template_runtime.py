@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from playwright.sync_api import sync_playwright
 
 from src.execution.dxm_login_flow import DxmLoginFlow
@@ -32,14 +33,21 @@ REFERENCE_TEMPLATE_HTML = """
 """
 
 
-def _flow(tmp_path) -> DxmLoginFlow:
-    return DxmLoginFlow(object(), state_file=tmp_path / "runtime-state.json")
+def _flow(tmp_path, monkeypatch) -> DxmLoginFlow:
+    flow = DxmLoginFlow(object(), state_file=tmp_path / "runtime-state.json")
+
+    def reject_desktop_operation(*_args, **_kwargs):
+        pytest.fail("合成无头页面测试不得访问原生桌面窗口")
+
+    monkeypatch.setattr(flow, "_force_foreground_dxm_window", reject_desktop_operation)
+    monkeypatch.setattr(flow, "_click_point_with_native_window", reject_desktop_operation)
+    return flow
 
 
 def test_attribute_reference_template_selects_exact_visible_option(
-    tmp_path,
+    tmp_path, monkeypatch,
 ) -> None:
-    flow = _flow(tmp_path)
+    flow = _flow(tmp_path, monkeypatch)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1000, "height": 700})
@@ -65,9 +73,9 @@ def test_attribute_reference_template_selects_exact_visible_option(
         browser.close()
 
 def test_duplicate_exact_reference_options_fail_closed_without_click(
-    tmp_path,
+    tmp_path, monkeypatch,
 ) -> None:
-    flow = _flow(tmp_path)
+    flow = _flow(tmp_path, monkeypatch)
     html = REFERENCE_TEMPLATE_HTML.replace(
         '<div class="ant-select-item-option" role="option" style="height: 32px;">普货属性模板</div>',
         (

@@ -45,6 +45,7 @@ from src.execution.account_identity import account_context_hash
 from src.execution.product_identity import is_stable_product_id
 from src.execution.save_target_contract import EXACT_SAVE_CLICK_METHOD
 from src.execution.browser_runtime import chrome_launch_options
+from src.execution.browser_page_focus import bring_controlled_page_to_front
 from src.execution.dxm_live import DxmLiveClient
 from src.services.agent_console import HUD_INIT_SCRIPT
 from src.services.dxm_draft_reader import DxmDraftReaderError
@@ -22527,29 +22528,7 @@ class DxmLoginFlow:
 
 
     def _bring_page_to_front_for_click(self, page: Page) -> bool:
-        native_front = self._force_foreground_dxm_window()
-        if native_front:
-            return True
-        try:
-            self._trace_workflow_event('click_rect:bring_to_front_start', human_step='切换到店小秘窗口')
-            bring_to_front = getattr(page, 'bring_to_front', None)
-            if callable(bring_to_front):
-                bring_to_front()
-            time.sleep(0.25)
-            self._trace_workflow_event(
-                'click_rect:bring_to_front_done',
-                native_front=native_front,
-                human_step='切换到店小秘窗口',
-            )
-            return True
-        except Exception as exc:
-            self._trace_workflow_event(
-                'click_rect:bring_to_front_failed',
-                error=str(exc)[:240],
-                native_front=native_front,
-                human_step='切换到店小秘窗口',
-            )
-            return native_front
+        return bring_controlled_page_to_front(page)
 
     @staticmethod
     def _window_handle_to_int(value: Any) -> int:
