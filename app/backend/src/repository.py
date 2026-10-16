@@ -2699,6 +2699,38 @@ class Repository:
     def require_content_observation(self, task_id, job_id, *, source_sha256):
         return self._content_observation_transaction('require_observation', task_id, job_id, source_sha256=source_sha256)
 
+    def _native_video_input_transaction(self, operation, task_id, job_id, **values):
+        from src.batch_edit import native_video_input_source, native_video_input_freeze
+        from src.services.structured_logging import get_logger, log_exception
+        module = native_video_input_freeze if operation in {'append_input_freeze', 'require_input_freeze'} else native_video_input_source
+        try:
+            with connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                task = self._private_task_from_connection(conn, task_id)
+                job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+                return getattr(module, operation)(conn, task=task, job=job,
+                    screenshot_root=SCREENSHOT_DIR, now=now_iso(), **values)
+        except Exception as exc:
+            log_exception(get_logger('native_video.input_source'), 'native_video_input_transaction_rejected', exc,
+                task_id=task_id, job_id=job_id, operation=operation)
+            raise
+
+    def reserve_native_video_inputs(self, task_id, job_id, command):
+        return self._native_video_input_transaction('reserve_inputs', task_id, job_id, command=command)
+
+    def persist_native_video_inputs(self, task_id, job_id, command, action_result):
+        return self._native_video_input_transaction('persist_inputs', task_id, job_id, command=command, action_result=action_result)
+
+    def require_native_video_inputs(self, task_id, job_id, *, source_sha256):
+        return self._native_video_input_transaction('require_inputs', task_id, job_id, source_sha256=source_sha256)
+
+    def persist_native_video_input_freeze(self, task_id, job_id, *, source_sha256):
+        return self._native_video_input_transaction('append_input_freeze', task_id, job_id, source_sha256=source_sha256)
+
+    def require_native_video_input_freeze(self, task_id, job_id, *, freeze_sha256, generation_command=None):
+        return self._native_video_input_transaction('require_input_freeze', task_id, job_id,
+            freeze_sha256=freeze_sha256, generation_command=generation_command)
+
     def persist_content_finalize_stage(self, task_id: int, job_id: int, *, observation=None, observation_source_sha256=None, receipts):
         """复用证据表事务追加最终输出，未审阅的生产来源继续拒绝。"""
         from src.batch_edit.content_finalize_store import append_content_finalize_stage

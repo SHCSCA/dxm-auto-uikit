@@ -4,6 +4,7 @@ from copy import deepcopy
 from hashlib import sha256
 
 from src.core.config_bus import get_config_bus
+from src.execution.native_video_http_transport import origin_response_headers
 from src.services.structured_logging import get_logger, log_event, log_exception
 
 
@@ -14,17 +15,21 @@ REVIEWED_VIDEO_SCRIPTS = {
     'const-BvIXJGkR.js': (5783, '4E5DE1A9D5557DBF1236D54C2CBC97C8E37CDBC03828DD0EC4304361132AED0C'),
     'index-BA-XYm54.js': (5801, 'D0D279941260EACE1E2852E157E84784560350674C5B174B23BBA1B6773031C4'),
     'index-DxrHWTJK.js': (19043, 'F94C2FAC920C0A542960F419C9BF1BFC4ADEDD8C8FFA96218A2F5D23EE3B1637'),
+    'advancedTranslate-i7-t4onH.js': (16451, '1917182F8581149E0C35E0B9EFD7B5D91D59EEC2BA181EEF2F800FB8F4622F16'),
+    'index-DZIZdaK7.js': (1478089, '2438F643E9E3C919E97395BA01514E39CD6269823A83978EEB76907F78383831'),
 }
 _LOGGER = get_logger('native_video.static_capture')
 
 
 class PassiveNativeVideoScriptCapture:
-    def __init__(self, page, *, expected_page_url):
+    def __init__(self, page, *, expected_page_url, expect_navigation=False):
         self.page, self.frame = page, page.main_frame
         self.expected_page_url = expected_page_url
+        self.expect_navigation = expect_navigation
         self.document_bound = False
         self.document_invalid = False
         self.listeners, self.requests, self.resources, self.issues = [], {}, {}, set()
+        self.finished_bodies, self.draining = [], False
         self.active = self.closed = False
         self.event_count = self.body_read_count = 0
         try:
@@ -42,7 +47,7 @@ class PassiveNativeVideoScriptCapture:
         if self.active or self.closed:
             raise RuntimeError('NATIVE_VIDEO_STATIC_CAPTURE_REUSED')
         try:
-            self.document_bound = str(self.page.url) == self.expected_page_url
+            self.document_bound = not self.expect_navigation and str(self.page.url) == self.expected_page_url
             for event, handler in (('request', self._request), ('requestfinished', self._finished),
                                    ('requestfailed', self._failed), ('framenavigated', self._navigated)):
                 self.listeners.append((event, handler))
@@ -119,20 +124,46 @@ class PassiveNativeVideoScriptCapture:
                 return
             resource = self.resources[name]
             resource['request_finished'] = True
+            self.finished_bodies.append((request, name))
+        except Exception as exc:
+            log_exception(_LOGGER, 'native_video_static_finish_observation_failed', exc)
+            self._issue('NATIVE_VIDEO_STATIC_RESPONSE_OBSERVATION_FAILED')
+
+    def _read_body(self, request, name):
+        try:
+            if (self.document_invalid or str(self.page.url) != self.expected_page_url
+                    or self.page.main_frame is not self.frame):
+                self._issue('NATIVE_VIDEO_STATIC_DOCUMENT_CHANGED')
+                return
             response = request.response()
+            resource = self.resources[name]
             size, expected_hash = REVIEWED_VIDEO_SCRIPTS[name]
             if response is None or response.request is not request or response.status != 200:
                 self._issue('NATIVE_VIDEO_STATIC_RESPONSE_INVALID')
                 return
             headers = {key.lower(): value for key, value in response.headers.items()}
+            origin = origin_response_headers(request)
+            if origin is not None:
+                if (origin.get('valid') is not True or origin.get('status') != 200
+                        or origin.get('url') != request.url or not isinstance(origin.get('headers'), dict)):
+                    self._issue('NATIVE_VIDEO_STATIC_PROXY_ORIGIN_UNPROVEN')
+                    return
+                headers = {key.lower(): value for key, value in origin['headers'].items()}
             if (headers.get('content-type', '').split(';')[0].strip().lower()
                     not in {'application/javascript', 'text/javascript'}
                     or headers.get('content-encoding', 'identity').lower() != 'identity'
                     or headers.get('content-length') != str(size)):
                 self._issue('NATIVE_VIDEO_STATIC_BODY_BOUNDS_UNPROVEN')
                 return
+            if (self.document_invalid or str(self.page.url) != self.expected_page_url
+                    or self.page.main_frame is not self.frame):
+                self._issue('NATIVE_VIDEO_STATIC_DOCUMENT_CHANGED')
+                return
             self.body_read_count += 1
             body = response.body()
+            if self.document_invalid or str(self.page.url) != self.expected_page_url or self.page.main_frame is not self.frame:
+                self._issue('NATIVE_VIDEO_STATIC_DOCUMENT_CHANGED')
+                return
             actual_hash = sha256(body).hexdigest().upper()
             resource.update({'size': len(body), 'sha256': actual_hash,
                              'matches_reviewed': len(body) == size and actual_hash == expected_hash})
@@ -141,6 +172,18 @@ class PassiveNativeVideoScriptCapture:
         except Exception as exc:
             log_exception(_LOGGER, 'native_video_static_body_observation_failed', exc)
             self._issue('NATIVE_VIDEO_STATIC_RESPONSE_OBSERVATION_FAILED')
+
+    def _drain_finished(self):
+        if self.draining or not self.active:
+            return
+        self.draining = True
+        try:
+            # Playwright 同步读体会处理其它事件；回调只登记，统一由 owner 调用栈复读。
+            while self.finished_bodies and not self.issues:
+                request, name = self.finished_bodies.pop(0)
+                self._read_body(request, name)
+        finally:
+            self.draining = False
 
     def _failed(self, request):
         try:
@@ -152,6 +195,7 @@ class PassiveNativeVideoScriptCapture:
             self._issue('NATIVE_VIDEO_STATIC_FAILURE_OBSERVATION_FAILED')
 
     def snapshot(self):
+        self._drain_finished()
         missing = sorted(set(REVIEWED_VIDEO_SCRIPTS) - set(self.resources))
         complete = (self.document_bound and not self.document_invalid
                     and not missing and not self.requests and not self.issues
@@ -168,6 +212,7 @@ class PassiveNativeVideoScriptCapture:
         if self.closed:
             return
         self.closed = True
+        self._drain_finished()
         operations, self.listeners = self.listeners, []
         for event, handler in operations:
             try:

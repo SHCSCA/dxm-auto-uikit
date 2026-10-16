@@ -34,6 +34,8 @@ from src.execution.browser_agent_protocol import (
     browser_agent_command_sha256,
     validate_browser_agent_command,
     is_content_observation,
+    is_native_video_observation,
+    is_readonly_content_observation,
     canonical_frozen_target_identity,
     canonical_mutation_target_payload,
     command_post_dispatch_page,
@@ -1092,7 +1094,7 @@ class BrowserAgentRuntime:
         missing = [key for key, value in required.items() if not str(value or "").strip()]
         if missing:
             raise RuntimeError(f"BROWSER_AGENT_COMMAND_INVALID: missing {', '.join(missing)}")
-        if command.action == 'observe_content_finalize':
+        if command.action in {'observe_content_finalize', 'observe_native_video_inputs'}:
             validate_browser_agent_command(command)
         if command.runtime_id != self._runtime_id:
             raise RuntimeError("BROWSER_AGENT_RUNTIME_BINDING_MISMATCH")
@@ -1318,7 +1320,7 @@ class BrowserAgentRuntime:
                 },
             )
             if isinstance(result, dict) and result.get("ok") is not True:
-                if (_is_batch_save_command(command) or command.state in CONTENT_MUTATION_COMMANDS) and not is_content_observation(command) and not _mark_batch_save_unknown(
+                if (_is_batch_save_command(command) or command.state in CONTENT_MUTATION_COMMANDS) and not is_readonly_content_observation(command) and not _mark_batch_save_unknown(
                     self._mutation_ledger,
                     command,
                     phase="post_save_action_result",
@@ -1330,7 +1332,7 @@ class BrowserAgentRuntime:
                 updater(self._build_hud(command, status="success"))
             return result
         except Exception as exc:
-            if (_is_batch_save_command(command) or command.state in CONTENT_MUTATION_COMMANDS) and not is_content_observation(command):
+            if (_is_batch_save_command(command) or command.state in CONTENT_MUTATION_COMMANDS) and not is_readonly_content_observation(command):
                 try:
                     _mark_batch_save_unknown(
                         self._mutation_ledger,
@@ -1406,6 +1408,13 @@ class BrowserAgentRuntime:
                     "successful action result target_identity/store_name do not match the command"
                 )
         observations = contract_facts.get("evidence_observations", {})
+        if is_native_video_observation(command):
+            from src.batch_edit.native_video_observation_contract import command_binding
+            raw_observation = observations.get('native_video_input_observation', {})
+            expected_context = {**dict(context.as_mapping()), 'command_action': command.action}
+            if (raw_observation.get('command') != command_binding(expected_context)
+                    or contract_facts['before_values'].get('defaults') != command.params.get('defaults')):
+                _raise_action_result_contract_failure('native video inputs do not belong to the actual read-only command')
         if is_content_observation(command):
             from src.batch_edit.content_observation_contract import command_binding
             raw_observation = observations.get('content_finalize_observation', {})
@@ -1614,6 +1623,8 @@ class BrowserAgentRuntime:
         mutation_context: Any,
         operation: Any,
     ) -> dict[str, Any]:
+        if is_native_video_observation(command):
+            return {'ok': False, 'executed': False, 'reason': 'VIDEO_INPUT_OBSERVATION_MUTATION_FORBIDDEN', 'command_id': command.command_id}
         if is_content_observation(command):
             return {'ok': False, 'executed': False, 'reason': 'CONTENT_OBSERVATION_MUTATION_FORBIDDEN', 'command_id': command.command_id}
         context = lease.context
@@ -2975,6 +2986,7 @@ def _safe_file_part(value: Any) -> str:
 def _defer_page_hud_until_after_action(command: BrowserAgentCommand) -> bool:
     return command.action in {
         'observe_content_finalize',
+        'observe_native_video_inputs',
         "check_login_state",
         "open_draft_box",
         "open_editor",

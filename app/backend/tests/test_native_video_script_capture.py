@@ -13,18 +13,23 @@ from tests.support.native_video_script_case import (
 )
 
 
-def test_exact_finished_request_resources_match_without_authority_or_raw_body(monkeypatch):
+@pytest.mark.parametrize('drain', ['snapshot', 'close'])
+def test_exact_finished_request_resources_match_without_authority_or_raw_body(monkeypatch, drain):
     case = make_case(monkeypatch)
     case.capture.start()
     for request in case.requests.values():
         case.page.emit("request", request)
         assert request.response_reads == request.response_value.reads == 0
         case.page.emit("requestfinished", request)
-        assert request.response_reads == request.response_value.reads == 1
+        assert request.response_reads == request.response_value.reads == 0
+    if drain == 'snapshot':
+        pending = case.capture.snapshot()
+        assert pending['reviewed_resources_match'] and not pending['window_closed']
     case.capture.close()
     result = case.capture.snapshot()
     assert result["window_closed"] and result["reviewed_resources_match"]
     assert result["body_read_count"] == 2 and not result["issues"]
+    assert all(request.response_reads == request.response_value.reads == 1 for request in case.requests.values())
     assert all(resource["request_finished"] and resource["matches_reviewed"] for resource in result["resources"])
     assert_no_authority(result)
     assert not any(body.decode() in json.dumps(result) for body in SCRIPTS.values())
@@ -154,6 +159,7 @@ def test_configuration_bus_freezes_budget_and_limit_stops_further_reads(monkeypa
         case = make_case(monkeypatch)
     assert case.capture.max_events == 4
     case.capture.start(); complete(case)
+    assert case.capture.snapshot()['body_read_count'] == 2
     request = next(iter(case.requests.values())); case.page.emit("requestfinished", request)
     case.capture.close()
     assert_incomplete(case, "EVENT_LIMIT")
@@ -173,6 +179,7 @@ def test_main_document_reload_or_navigation_cannot_stitch_resources_across_docum
     case = make_case(monkeypatch); first, second = case.requests.values()
     case.capture.start()
     case.page.emit("request", first); case.page.emit("requestfinished", first)
+    assert case.capture.snapshot()['body_read_count'] == 1
     case.page.url = case.page.main_frame.url = next_url
     case.page.emit("framenavigated", case.page.main_frame)
     case.page.emit("request", second); case.page.emit("requestfinished", second)

@@ -27,6 +27,14 @@ CONTENT_MUTATION_COMMANDS = {
 def is_content_observation(command) -> bool:
     return command.state == 'BATCH_TRANSLATE_EXECUTE' and command.action == 'observe_content_finalize'
 
+
+def is_native_video_observation(command) -> bool:
+    return command.state == 'BATCH_VIDEO_SELECT' and command.action == 'observe_native_video_inputs'
+
+
+def is_readonly_content_observation(command) -> bool:
+    return is_content_observation(command) or is_native_video_observation(command)
+
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
     **{(state, action): {mutation: 1} for state, (action, mutation) in CONTENT_MUTATION_COMMANDS.items()},
     ("FIRST_SAVE_INTENT", "first_save_intent"): {
@@ -605,6 +613,8 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
     pair = (str(command.state or ""), str(command.action or ""))
     if command.action == 'observe_content_finalize' and not is_content_observation(command):
         raise MutationCommandContractError('CONTENT_OBSERVATION_COMMAND_INVALID', '最终读回不得迁移到其它步骤')
+    if command.action == 'observe_native_video_inputs' and not is_native_video_observation(command):
+        raise MutationCommandContractError('VIDEO_INPUT_OBSERVATION_COMMAND_INVALID', '视频输入观察不得迁移到其它步骤')
     plan = MUTATION_COMMAND_PLANS.get(pair)
     verification_pair = (
         pair[0] in _BATCH_SAVE_VERIFICATION_STATES
@@ -626,15 +636,19 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         command.execution_payload_hash,
     )
     if plan is None:
-        if is_content_observation(command):
+        if is_readonly_content_observation(command):
             from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
-            allowed = {'defaults', 'product_query', 'store_name', 'shop_id', 'target_identity', 'translation_source_sha256'}
+            source_key = 'translation_source_sha256' if is_content_observation(command) else 'first_fill_source_sha256'
+            allowed = {'defaults', 'product_query', 'store_name', 'shop_id', 'target_identity', source_key}
             if (command.execution_mode != 'batch_draft_save' or command.expected_page != 'editor'
                     or command.pre_dispatch_page not in (None, 'editor') or command.post_dispatch_page not in (None, 'editor')
                     or set(command.params) != allowed
-                    or _SHA256_RE.fullmatch(str(command.params.get('translation_source_sha256', ''))) is None):
-                raise MutationCommandContractError('CONTENT_OBSERVATION_COMMAND_INVALID', '最终读回只允许精确只读命令参数')
-            validate_frozen_execution_defaults(command.params['defaults'])
+                    or _SHA256_RE.fullmatch(str(command.params.get(source_key, ''))) is None):
+                reason = 'CONTENT_OBSERVATION_COMMAND_INVALID' if is_content_observation(command) else 'VIDEO_INPUT_OBSERVATION_COMMAND_INVALID'
+                raise MutationCommandContractError(reason, '内容观察只允许精确只读命令参数')
+            payload = validate_frozen_execution_defaults(command.params['defaults'])
+            if is_native_video_observation(command) and (payload.get('execution_path') != 'B' or payload.get('save_stage', 'SAVE1') != 'SAVE1'):
+                raise MutationCommandContractError('VIDEO_INPUT_OBSERVATION_COMMAND_INVALID', '视频输入观察仅用于主阶段 Path B')
         elif mutation_adjacent:
             raise MutationCommandContractError(
                 "MUTATION_COMMAND_SCOPE_INVALID",

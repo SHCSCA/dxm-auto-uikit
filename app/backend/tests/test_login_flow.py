@@ -4051,6 +4051,10 @@ def test_ensure_page_replaces_closed_page_in_existing_context(tmp_path):
 
 
 def test_ensure_page_recreates_context_when_previous_context_closed(monkeypatch, tmp_path):
+    from src.execution import managed_browser_context
+    # 本例只验登录生命周期，传输认证由真实上下文套件证明。
+    prepared = []
+    monkeypatch.setattr(managed_browser_context, 'prepare_native_video_transport', lambda context: prepared.append(context))
     flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
 
     class ClosedPage:
@@ -4101,6 +4105,7 @@ def test_ensure_page_recreates_context_when_previous_context_closed(monkeypatch,
     assert flow._context is browser.contexts[0]
     assert browser.contexts[0].created_pages == [page]
     assert browser.contexts[0].kwargs['ignore_https_errors'] is True
+    assert prepared == [flow._context]
 
 
 def test_ensure_page_uses_persistent_context_for_visible_browser_profile(monkeypatch, tmp_path):
@@ -4200,6 +4205,10 @@ def test_ensure_page_uses_persistent_context_for_visible_browser_profile(monkeyp
 
 
 def test_ensure_page_detaches_browser_session_created_on_another_thread(monkeypatch, tmp_path):
+    from src.execution import managed_browser_context
+    # 本例只验跨线程脱离，不将合成 context 认证为可信传输。
+    prepared = []
+    monkeypatch.setattr(managed_browser_context, 'prepare_native_video_transport', lambda context: prepared.append(context))
     # Cross-thread detachment is independent of the visible CDP façade. Keep
     # this fixture on the in-process headless path so it tests only detachment.
     monkeypatch.setenv('DXM_LOGIN_HEADLESS', '1')
@@ -4280,6 +4289,7 @@ def test_ensure_page_detaches_browser_session_created_on_another_thread(monkeypa
     assert isinstance(page, FreshPage)
     assert flow._browser_session_thread_id is not None
     assert flow.recent_workflow_events()[0]['event'] == 'browser_session:detached_cross_thread_reuse'
+    assert prepared == [flow._context]
 
 
 def test_ensure_page_can_use_persistent_profile_when_requested(monkeypatch, tmp_path):
@@ -6231,6 +6241,10 @@ def test_click_rect_center_skips_dom_runtime_when_cdp_input_succeeds(monkeypatch
 
 
 def test_visible_workflow_browser_honors_explicit_persistent_profile_opt_out(monkeypatch, tmp_path):
+    from src.execution import managed_browser_context
+    # 本例只验显式 profile 策略，不以 fake 配置冒充传输证明。
+    prepared = []
+    monkeypatch.setattr(managed_browser_context, 'prepare_native_video_transport', lambda context: prepared.append(context))
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
     profile_dir = tmp_path / 'dxm-workflow-profile'
@@ -6299,6 +6313,7 @@ def test_visible_workflow_browser_honors_explicit_persistent_profile_opt_out(mon
     assert '--new-window' in calls['launch_kwargs']['args']
     assert '--disable-session-crashed-bubble' in calls['launch_kwargs']['args']
     assert '--hide-crash-restore-bubble' in calls['launch_kwargs']['args']
+    assert prepared == [flow._context]
 
 
 def test_browser_readiness_gate_rejects_title_and_body_without_business_dom_marker(tmp_path):

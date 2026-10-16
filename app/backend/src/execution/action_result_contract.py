@@ -222,6 +222,9 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
         'observe_content_finalize': MappingProxyType({
             'BATCH_TRANSLATE_EXECUTE': _contract('editor', 'content_fields_observed', 'content_readback_stable', 'content_zero_write_proven')
         }),
+        'observe_native_video_inputs': MappingProxyType({
+            'BATCH_VIDEO_SELECT': _contract('editor', 'native_video_inputs_observed', 'native_video_defaults_stable', 'native_video_zero_write_proven')
+        }),
         "fill_media_assets": MappingProxyType(
             {
                 "FILL_MEDIA": _contract(
@@ -1529,7 +1532,13 @@ def _validate_success_evidence_semantics(
     execution_mode: str | None = None,
     expected_execution_payload: Mapping[str, Any] | None = None,
 ) -> None:
-    if envelope['action'] == 'observe_content_finalize':
+    if envelope['action'] == 'observe_native_video_inputs':
+        from src.execution.native_video_observation_result import validate_native_video_observation_result
+        try:
+            validate_native_video_observation_result(envelope, execution_mode=execution_mode, expected_payload=expected_execution_payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            _reject(f'native video input observation is unproven: {exc}')
+    elif envelope['action'] == 'observe_content_finalize':
         from src.execution.content_observation_result import validate_content_observation_result
         try:
             validate_content_observation_result(envelope, execution_mode=execution_mode, expected_payload=expected_execution_payload)

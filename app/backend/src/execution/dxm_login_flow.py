@@ -572,6 +572,10 @@ class DxmLoginFlow:
         from src.execution.content_observation_flow import observe_content_finalize
         return observe_content_finalize(self, **kwargs)
 
+    def observe_native_video_inputs(self, **kwargs):
+        from src.execution.native_video_observation_flow import observe_native_video_inputs
+        return observe_native_video_inputs(self, **kwargs)
+
     def translate_editor_content(self, *, defaults, product_query, store_name, shop_id, target_identity):
         from src.batch_edit.translator import (
             NativeTranslationNetwork, native_translation_fields, native_translation_texts,
@@ -1663,6 +1667,8 @@ class DxmLoginFlow:
             pass
 
     def _goto_with_live_hud(self, page: Page, url: str, *, wait_until: str = 'domcontentloaded', timeout: int = 45000) -> None:
+        from src.execution.native_video_lifetime import begin_native_video_lifetime
+        begin_native_video_lifetime(self, page, url)
         self._trace_workflow_event('goto:start', url=url, current_url=getattr(page, 'url', None), wait_until=wait_until, timeout=timeout)
         self._attach_live_hud_runtime_hooks(page)
         self._trace_workflow_event('goto:attached_hud', url=url, current_url=getattr(page, 'url', None))
@@ -1672,6 +1678,8 @@ class DxmLoginFlow:
         self._trace_workflow_event('goto:reapplied_hud', url=url, current_url=page.url)
 
     def _goto_sterile(self, page: Page, url: str, *, wait_until: str = 'domcontentloaded', timeout: int = 45000) -> None:
+        from src.execution.native_video_lifetime import begin_native_video_lifetime
+        begin_native_video_lifetime(self, page, url)
         self._trace_workflow_event('goto:sterile_start', url=url, current_url=getattr(page, 'url', None), wait_until=wait_until, timeout=timeout)
         page.goto(url, wait_until=wait_until, timeout=timeout)
         self._trace_workflow_event('goto:sterile_finished', url=url, current_url=page.url)
@@ -20500,8 +20508,8 @@ class DxmLoginFlow:
         return current
 
     def _new_browser_context(self, browser: Browser) -> BrowserContext:
-        context = browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
-        return context
+        from src.execution.managed_browser_context import create_managed_browser_context
+        return create_managed_browser_context(browser)
 
     def _launch_visible_persistent_context_over_cdp(self, profile_dir: Path, launch_kwargs: dict[str, Any]) -> Page:
         executable_path = str(launch_kwargs.get('executable_path') or '').strip()
@@ -20598,7 +20606,7 @@ class DxmLoginFlow:
         self._context = selected_context or fallback_context or (
             contexts[0]
             if contexts
-            else self._browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
+            else self._new_browser_context(self._browser)
         )
         self._bind_browser_context_generation(self._context)
         self._trace_workflow_event(
@@ -20879,6 +20887,11 @@ class DxmLoginFlow:
         return page
 
     def _close_browser_session(self) -> None:
+        from src.execution.native_video_lifetime import close_native_video_lifetime
+        if self._browser_session_thread_id in (None, threading.get_ident()):
+            close_native_video_lifetime(self)
+        else:
+            self._native_video_lifetime = None
         # Revoke the authorization generation before any potentially failing close call.
         self._clear_browser_context_generation()
         if self._browser_session_thread_id is not None and self._browser_session_thread_id != threading.get_ident():
@@ -24075,6 +24088,8 @@ class DxmLoginFlow:
         current_url = str(getattr(page, 'url', '') or '')
         current_id = (parse_qs(urlparse(current_url).query).get('id') or [''])[0]
         if not (self._is_dxm_editor_url(current_url) and current_id == product_id):
+            from src.execution.native_video_lifetime import begin_native_video_lifetime
+            begin_native_video_lifetime(self, page, edit_url)
             page.goto(edit_url, wait_until='domcontentloaded', timeout=45000)
         page.wait_for_url('**/web/smt/edit**', timeout=15000)
         try:

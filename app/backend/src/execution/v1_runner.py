@@ -71,6 +71,7 @@ from src.execution.batch_command_contract import (
     validate_path_b_formal_lineage,
 )
 from src.execution.dxm_live import DxmLiveClient
+from src.execution.native_video_input_runner import run_native_video_input_observation
 from src.execution.batch_dispatch_authority import content_action_lease, content_action_execution_payload
 from src.execution.e3_authority_contract import (
     authorization_lease_authority_fingerprint,
@@ -131,6 +132,7 @@ FROZEN_TARGET_STATES = frozenset(
         StateName.OPEN_EDIT_PAGE,
         StateName.VERIFY_EDIT_OWNERSHIP,
         StateName.PREPARE_ROLLBACK,
+        StateName.BATCH_VIDEO_SELECT,
         StateName.BATCH_WHOLESALE_FILL,
         StateName.FILL_BASE_INFO,
         StateName.FILL_VARIANTS,
@@ -467,6 +469,7 @@ WORKFLOW_BROWSER_ACTION_STATES = {
     StateName.OPEN_EDIT_PAGE,
     StateName.VERIFY_EDIT_OWNERSHIP,
     StateName.PREPARE_ROLLBACK,
+    StateName.BATCH_VIDEO_SELECT,
     StateName.BATCH_WHOLESALE_FILL,
     StateName.FILL_BASE_INFO,
     StateName.FILL_VARIANTS,
@@ -493,6 +496,7 @@ WORKFLOW_EXPECTED_PAGE_BY_STATE = {
     StateName.OPEN_EDIT_PAGE: "editor",
     StateName.VERIFY_EDIT_OWNERSHIP: "editor",
     StateName.PREPARE_ROLLBACK: "editor",
+    StateName.BATCH_VIDEO_SELECT: "editor",
     StateName.BATCH_WHOLESALE_FILL: "editor",
     StateName.FILL_BASE_INFO: "editor",
     StateName.FILL_VARIANTS: "editor",
@@ -3813,6 +3817,8 @@ class V1TaskRunner:
         defaults: dict[str, Any],
         command: BrowserAgentCommand | None = None,
     ) -> dict[str, Any] | None:
+        if state_name == StateName.BATCH_VIDEO_SELECT:
+            return run_native_video_input_observation(self, task=task, job=job)
         if self.browser_agent_runtime is None:
             return None
         spec = self._workflow_action_worker_request(task, job, state_name, defaults)
@@ -5500,7 +5506,8 @@ class V1TaskRunner:
         *,
         prior_results: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
-        if self.workflow_adapter is None:
+        native_video_inputs = state_name == StateName.BATCH_VIDEO_SELECT
+        if self.workflow_adapter is None and not native_video_inputs:
             return None
         task_id = int(task["id"])
         job_id = int(job["id"])
@@ -5509,17 +5516,19 @@ class V1TaskRunner:
         runtime_setting = self._workflow_action_runtime_from_env()
         execution_mode = str(task.get("mode") or "").strip()
         batch_draft_save = execution_mode == "batch_draft_save"
-        if self._requires_persistent_browser_agent() or batch_draft_save:
+        if (self._requires_persistent_browser_agent() or batch_draft_save) and (
+            not native_video_inputs or self.browser_agent_runtime is not None
+        ):
             self._require_persistent_browser_agent_ready(
                 execution_mode=execution_mode
             )
-        if runtime_setting == "browser_agent" and self.browser_agent_runtime is None:
+        if not native_video_inputs and runtime_setting == "browser_agent" and self.browser_agent_runtime is None:
             raise V1ExecutionError(
                 "E901",
                 "自动浏览器未配置",
                 "当前已指定使用持久在线真实浏览器，但后端没有装配自动浏览器运行时；系统已停止任务，不会保存或发布。",
             )
-        use_browser_agent_runtime = batch_draft_save or self._use_browser_agent_runtime()
+        use_browser_agent_runtime = native_video_inputs or batch_draft_save or self._use_browser_agent_runtime()
         use_process_runtime = (not use_browser_agent_runtime) and self._use_process_workflow_runtime()
         runtime_name = "browser_agent" if use_browser_agent_runtime else "process" if use_process_runtime else "thread"
         if should_log_browser_action:
@@ -5529,7 +5538,13 @@ class V1TaskRunner:
                 "runtime": runtime_name,
             })
         loop = asyncio.get_running_loop()
-        if use_browser_agent_runtime:
+        if native_video_inputs:
+            # 独立只读命令由来源 helper 预约；不进入通用写命令或历史进程路径。
+            future = loop.run_in_executor(
+                None, self._run_workflow_action_browser_agent, task, job, state_name, defaults
+            )
+            wait_timeout = self.workflow_action_timeout_seconds + 10
+        elif use_browser_agent_runtime:
             command_spec = self._workflow_action_worker_request(
                 task,
                 job,
@@ -5666,6 +5681,7 @@ class V1TaskRunner:
                     if str(task.get("mode") or "") == "batch_draft_save"
                     and state_name
                     in {
+                        StateName.BATCH_VIDEO_SELECT,
                         StateName.SAVE_ONLY,
                         StateName.FIRST_SAVE_INTENT,
                         StateName.SAVE2_ONLY,
