@@ -36,6 +36,13 @@ class NativeVideoTransport:
             if (impl._routes != [self.http_route] or impl._web_socket_routes != [self.ws_route]):
                 self.invalid = True
                 raise RuntimeError('VIDEO_OBSERVATION_CONTEXT_ROUTE_PRECEDENCE_UNPROVEN')
+            for page in self.context.pages:
+                page_impl = getattr(page, '_impl_obj', None)
+                http = getattr(page_impl, '_routes', None)
+                websocket = getattr(page_impl, '_web_socket_routes', None)
+                if type(http) is not list or http or type(websocket) is not list or websocket:
+                    self.invalid = True
+                    raise RuntimeError('VIDEO_OBSERVATION_PAGE_ROUTE_PRECEDENCE_UNPROVEN')
 
     def install(self):
         self._policy()
@@ -114,8 +121,6 @@ class NativeVideoTransport:
             raise RuntimeError('VIDEO_OBSERVATION_TRANSPORT_OWNER_UNBOUND')
         if self.connected_before_scope:
             raise RuntimeError('VIDEO_OBSERVATION_PRIOR_WEBSOCKET_UNPROVEN')
-        if any(getattr(getattr(item, '_impl_obj', None), '_routes', []) for item in self.context.pages):
-            raise RuntimeError('VIDEO_OBSERVATION_PAGE_ROUTE_PRECEDENCE_UNPROVEN')
         self.active = (page, reject, handler)
         return self.active
 

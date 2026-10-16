@@ -10,7 +10,7 @@
 - 仓储沿现有证据表预约命令、重读 Worker 原请求/结果与截图、验证当次 scope/快照/队列/首 FILL，再追加输入来源和冻结摘要。原 snapshot、保存 lease 与 mutation ledger 不改写，不新增写入授权。生成前的仓储消费校验与活 owner 复核函数已具备，但 SUBMIT 生产 builder/JIT 尚未接入；调用方 observation 字典仍不能解锁默认输入解析。
 - 生成网络采集仅被动保存实际生成/轮询 Request、Response、完成事件及私有原字节，独立复读输入、UUID 与范围；`wire_complete` 不表示生成成功。浏览器时间可能重叠，物理完成先后固定为 `unproven`，真实成功码语义仍为 `unreviewed`，成功消费继续拒绝。RPC 期间发生导航、关闭、owner/会话替换、来源变化或外部冻结字典改变均必须拒绝；再次观察失败先撤销旧候选。
 - 新的受管 context 工厂在首个页面创建前固定阻断后续 Service Worker 注册和下载，并安装单例 HTTP/WS 路由；只读窗口按精确原生请求、同页 owner 与原始响应来源代理首跳，拒绝重定向、popup 外页请求、策略漂移或路由遮盖。dialog 被关闭并判观察失败；任何窗口失败后保持传输拒绝。现有外部 CDP context 缺可信创建政策，不能事后追认为已防护，仍在观察前拒绝。
-- 分层测试记录：传输防护 `32 passed`、被动网络合同 `99 passed`、脚本与代理来源 `57 passed`，最终 JIT/Flow/lifetime/导航及三项登录 fixture 合跑 `84 passed`；各集合有重叠，不能相加成全量数字。完整 backend 将绑定冻结后的源码独立运行，未完成前不沿用上一轮 `2372 passed`。
+- 分层测试记录：传输防护 `34 passed`、被动网络合同 `99 passed`、脚本与代理来源 `57 passed`，最终 JIT/Flow/lifetime/导航及三项登录 fixture 合跑 `84 passed`；各集合有重叠，不能相加成全量数字。最后复核补齐了页面级 HTTP/WS 路由优先级及 RPC 回入漂移的两个先红反例；此前刚启动的全量测试已停止并保留部分日志，完整 backend 将绑定修复后的冻结源码重新运行，未完成前不沿用上一轮 `2372 passed`。
 - 用户已授权启动真实应用并手动登录。已启动本 checkout 源码 Electron 和受管可见浏览器；启动时工作树为 dirty，后续代码变更尚未重载，不能用该运行时证明最新实现。最近公开状态为 `LOGIN_REQUIRED / reader_ready=false`，没有执行真实生成、投放、翻译、保存或发布。
 - 首次后台启动未显示工作台主窗口，随后通过应用自身的单实例 focus 唤起；已在同一 Electron PID 确认非零窗口句柄及 `DXM Agent Console` 标题，没有重启后端或替换用户登录页面。
 - 本轮分层回归和最终源码身份以 `outputs/native-video-production-20261016/` 及 `outputs/project-understanding-20261016/native-video-input-*.xml` 为准。部分正例显式隔离首 FILL 前序，只证明来源分层，不证明完整生产 FILL。六步计划仍在进行；当前仍为 `E3_OPEN / BLOCKED`，没有新 portable 或真实三商品验收。

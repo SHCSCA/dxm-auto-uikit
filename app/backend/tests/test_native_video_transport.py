@@ -7,6 +7,7 @@ import pytest
 
 from src.execution.native_video_transport import (prepare_native_video_transport,
     bind_native_video_transport, require_native_video_transport)
+from src.execution.native_video_http_transport import NativeVideoSafeRoute, origin_response_headers
 
 
 class SyntheticContext:
@@ -31,7 +32,7 @@ class SyntheticContext:
 class SyntheticPage:
     def __init__(self, context):
         self.context = context
-        self._impl_obj = SimpleNamespace(_routes=[])
+        self._impl_obj = SimpleNamespace(_routes=[], _web_socket_routes=[])
         context.pages.append(self)
 
 
@@ -154,3 +155,43 @@ def test_later_context_route_precedence_is_refused_and_close_releases_registry(r
     assert not transport.bindings and transport.active is None and transport.invalid
     with pytest.raises(RuntimeError, match='NOT_PREPARED'):
         require_native_video_transport(page)
+
+
+def test_page_websocket_route_cannot_override_the_context_observation_guard():
+    context = SyntheticContext()
+    transport = prepare_native_video_transport(context)
+    page = SyntheticPage(context)
+    bind_native_video_transport(page)
+    page._impl_obj._web_socket_routes.append(object())
+    with pytest.raises(RuntimeError, match='VIDEO_OBSERVATION_PAGE_ROUTE_PRECEDENCE_UNPROVEN'):
+        transport.activate(page, lambda reason: None, lambda route: None)
+    assert transport.active is None and transport.invalid is True
+
+
+def test_page_http_route_added_during_fetch_prevents_fulfill_and_origin_authority():
+    context = SyntheticContext()
+    transport = prepare_native_video_transport(context)
+    page = SyntheticPage(context)
+    binding = bind_native_video_transport(page)
+    transport.activate(page, lambda reason: None, lambda route: None)
+    calls, issues = [], []
+
+    class Request:
+        url = 'https://www.dianxiaomi.com/api/picToVideo/getCountInfo.json'
+
+    response = SimpleNamespace(status=200, url=Request.url, headers={'content-length': '2'},
+        body=lambda: b'{}', dispose=lambda: calls.append('dispose'))
+
+    def fetch(**_kwargs):
+        # 模拟同步 RPC 泵事件期间新增页面路由，不授予任何业务读取资格。
+        page._impl_obj._routes.append(object())
+        return response
+
+    route = SimpleNamespace(request=Request(), fetch=fetch,
+        fulfill=lambda **_kwargs: calls.append('fulfill'), abort=lambda: calls.append('abort'))
+    NativeVideoSafeRoute(route, issues.append, binding.require_live).continue_()
+    assert 'fulfill' not in calls and calls == ['abort', 'dispose']
+    assert origin_response_headers(route.request)['valid'] is False
+    assert issues == ['HTTP_READ_PROXY_FAILED'] and transport.invalid is True
+    transport.deactivate(page)
+    assert transport.active is None
