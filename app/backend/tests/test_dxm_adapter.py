@@ -1,6 +1,7 @@
 import pytest
 
 from tests.support.action_results import _valid_save_result, _canonical_sha256
+from tests.test_content_observation_flow import observation_case
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
 from src.execution.browser_agent_protocol import build_frozen_product_target_identity
@@ -439,10 +440,26 @@ def test_failed_stage_sets_ok_false():
 
 
 @pytest.mark.parametrize('action', tuple(ACTION_RESULT_CONTRACTS))
-def test_every_business_action_exposes_exact_contract_fact_keys_and_registry_postconditions(action):
-    adapter = DxmWorkflowAdapter(FakeLoginFlow())
-
-    result = adapter._result(action, {'ok': True})
+def test_every_business_action_exposes_exact_contract_fact_keys_and_registry_postconditions(action, request, monkeypatch):
+    if action == 'observe_content_finalize':
+        case = request.getfixturevalue('observation_case')
+        adapter = case['runtime'].adapter
+        produced = []
+        original = adapter._result
+        def capture_adapter_result(*args, **kwargs):
+            result = original(*args, **kwargs)
+            produced.append(result)
+            return result
+        # 从独立双读 producer 的实际 Adapter 返回值取样，保留真实 Worker 调用与精确合同事实。
+        monkeypatch.setattr(adapter, '_result', capture_adapter_result)
+        case['runtime'].run(case['command'], timeout_seconds=10)
+        assert len(produced) == 1
+        result = produced[0]
+        assert result['ok'] is True
+        assert result['contract_facts']['after_values']['content_observation']['values'] == case['flow']._page.values
+    else:
+        adapter = DxmWorkflowAdapter(FakeLoginFlow())
+        result = adapter._result(action, {'ok': True})
 
     assert set(result['contract_facts']) == {
         'before_values',

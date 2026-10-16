@@ -173,7 +173,8 @@ def _legacy_runtime_adapter_contract_bridge(monkeypatch, tmp_path):
     def _execute_with_legacy_contract(adapter, action, params=None):
         raw = original_execute(adapter, action, params)
         if (
-            getattr(adapter, "preserve_raw_contract", False)
+            action == 'observe_content_finalize'
+            or getattr(adapter, "preserve_raw_contract", False)
             or not isinstance(raw, dict)
             or "contract_facts" in raw
             or "ok" not in raw
@@ -284,6 +285,18 @@ def _legacy_runtime_adapter_contract_bridge(monkeypatch, tmp_path):
         "_adapter_browser_session_id",
         _session_id_with_legacy_fallback,
     )
+
+
+def test_legacy_contract_bridge_cannot_fabricate_independent_content_observation_facts():
+    class IncompleteObservationAdapter:
+        def observe_content_finalize(self, **kwargs):
+            return {'ok': True, 'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=70001'}
+    result = browser_agent_worker.execute_browser_agent_action(IncompleteObservationAdapter(), 'observe_content_finalize',
+        {'store_name': _TEST_STORE_NAME, 'target_identity': _TEST_FROZEN_TARGET})
+    assert 'contract_facts' not in result
+    assert 'mandatory_capability_receipts' not in result
+    with pytest.raises(RuntimeError, match='contract_facts must contain exactly'):
+        browser_agent_worker._require_raw_action_result_contract(result)
 
 
 def test_browser_agent_command_protocol_roundtrips_caller_owned_execution_identity():
