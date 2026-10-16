@@ -41,6 +41,10 @@ extraResources:
       - "!Lib/site-packages/__editable__.*"
   - from: ../../tools/probes
     to: tools/probes
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
   - from: ../../config
     to: config
   - from: ../../resources/dxm/category-catalog

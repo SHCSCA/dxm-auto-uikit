@@ -2,6 +2,14 @@
 
 # 当前进度
 
+## 2026-10-16 桌面交付包的探针缓存过滤与来源检查
+
+- 为当前检查链补做同源桌面交付时，`2ed7e7f` 的首个 portable 虽构建成功，实际资源清单却发现 `tools/probes` 为 35 文件、Git 为 32 文件；多出的三个 ignored `.pyc` 来自本机 `__pycache__`。旧验包仅扫描后端目录，不能证明工具资源无缓存；该候选被明确拒绝，不作为交付结果，原 manifest、哈希与清单单独保留。
+- 统一 `electron-builder.yml` 现为工具资源过滤字节码和缓存目录；`Assert-PackagedRuntimeClean` 同时核对后端与工具目录。真实 electron-builder 复制器和实际 PowerShell 函数的回归先得到 `4 failed / 3 passed`，修复后相关集合 `122 passed`；最后仅将合成源码注释改为中文后，新增七项再次通过。集合有重叠，不相加为全量回归。
+- 本次不修改后端业务源码，其 Git 子树仍为 `83ff6f81bd017a835d5e026b86292d42c2597f71`，与完整后端 `3076 passed` 所绑定的干净 `2ed7e7f` 相同。该全量记录仍属于原提交；当前打包配置、验包函数和新增打包回归使用各自实际证据，不冒称新提交已经重跑后端全量。
+- 新的包来源检查覆盖桌面 ASAR、161 个后端 Python 文件、前端 dist，以及全部工具/config/catalog 的 tracked 文件集合，再单独以包内 Python 导入五个延迟模块、构造只读 guard 并核对驱动与依赖路径。最终冻结构建、隔离可见性验包及当前包哈希以 `outputs/portable-delivery-stage5-20261016/` 为准；不能用被拒候选或旧包替代。
+- 本阶段只完善交付包约束，未执行真实登录或业务写入。真实默认值、完整 FILL、生成/投放、终封与两次保存仍未闭合；文档自检仍缺指定上游原型，完整六步目标继续 `E3_OPEN / BLOCKED`。
+
 ## 2026-10-16 受管只读编辑检查接线修复
 
 - 离线实际 Chromium 已复现旧 `editor-inspection` 的接线冲突：临时页各安装一条 HTTP/WS 路由后，原受管 context 校验拒绝 `VIDEO_OBSERVATION_PAGE_ROUTE_PRECEDENCE_UNPROVEN`；旧 guard 对三条原生视频读取也全部阻断。复现没有导航或外网请求，记录位于 `outputs/managed-inspection-stage4-20261016/reproduce-legacy-guard.json`。

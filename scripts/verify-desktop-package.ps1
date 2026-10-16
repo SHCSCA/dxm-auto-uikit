@@ -216,8 +216,14 @@ function Assert-PackagedRuntimeClean {
     [string]$ExePath
   )
   $BackendResourcePath = Join-Path (Split-Path $ExePath) 'resources\app\backend'
-  $BytecodeFiles = @(Get-ChildItem -LiteralPath $BackendResourcePath -Recurse -Force -Filter '*.pyc' -ErrorAction SilentlyContinue)
-  $BytecodeDirs = @(Get-ChildItem -LiteralPath $BackendResourcePath -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+  # 工具目录同样包含可执行 Python，不能遗漏构建前遗留的缓存。
+  $PythonResourcePaths = @($BackendResourcePath, (Join-Path (Split-Path $ExePath) 'resources\tools\probes'))
+  $BytecodeFiles = @($PythonResourcePaths | ForEach-Object {
+    Get-ChildItem -LiteralPath $_ -Recurse -Force -Filter '*.pyc' -ErrorAction SilentlyContinue
+  })
+  $BytecodeDirs = @($PythonResourcePaths | ForEach-Object {
+    Get-ChildItem -LiteralPath $_ -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue
+  })
   if ($BytecodeFiles.Count -gt 0 -or $BytecodeDirs.Count -gt 0) {
     throw "Packaged runtime generated Python bytecode cache. *.pyc=$($BytecodeFiles.Count), __pycache__=$($BytecodeDirs.Count). Runtime must keep the免安装版 directory clean."
   }
