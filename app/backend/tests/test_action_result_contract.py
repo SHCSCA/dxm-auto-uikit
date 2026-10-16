@@ -19,6 +19,7 @@ from tests.support.action_results import (
     _valid_unpublished_result, _path_a_execution_payload, _as_path_a_editor,
     _canonical_sha256, _bind_batch_save_verification_context,
 )
+from tests.test_content_observation_flow import observation_case
 
 
 def test_batch_path_a_save_and_unpublished_proof_are_native_editor_contracts():
@@ -161,6 +162,7 @@ def test_registry_covers_precheck_and_all_supported_browser_actions():
         "prepare_rollback": {"PREPARE_ROLLBACK": "editor"},
         "validate_editor_wholesale": {"BATCH_WHOLESALE_FILL": "editor"},
         "translate_editor_content": {"BATCH_TRANSLATE_EXECUTE": "editor"},
+        "observe_content_finalize": {"BATCH_TRANSLATE_EXECUTE": "editor"},
         "first_save_intent": {"FIRST_SAVE_INTENT": "semi_managed"},
         "save_only": {"SAVE_ONLY": "semi_managed", "SAVE2_ONLY": "semi_managed"},
         "verify_not_published": {
@@ -196,8 +198,41 @@ def test_registry_covers_precheck_and_all_supported_browser_actions():
     ],
 )
 def test_every_registered_state_action_pair_enforces_its_declared_contract(
-    action, state
+    action, state, request
 ):
+    if action == 'observe_content_finalize':
+        case = request.getfixturevalue('observation_case')
+        value = case['runtime'].run(case['command'], timeout_seconds=10)
+        expected = {'expected_action': action, 'expected_state': state, 'expected_page': 'editor',
+            'execution_mode': 'batch_draft_save', 'expected_execution_payload': case['payload'],
+            'expected_runtime_id': case['runtime'].runtime_id, 'expected_browser_session_id': case['flow'].session}
+        assert validate_action_result_envelope(value, **expected) == value
+        # 完整正例来自独立双读 producer，经 Adapter 和真实 Worker 合同，不用通用布尔摘要补齐。
+        root = ('evidence', 'observations', 'content_finalize_observation')
+        def at(document, path):
+            for key in path:
+                document = document[key]
+            return document
+        for path in ((), ('page_identity',), root, root + ('command',), root + ('observation',),
+                     root + ('before',), root + ('after',), root + ('effect_facts',),
+                     root + ('observation', 'evidence_ref')):
+            for key in at(value, path):
+                changed = deepcopy(value)
+                del at(changed, path)[key]
+                with pytest.raises(ActionResultContractError):
+                    validate_action_result_envelope(changed, **expected)
+        for key in value['postconditions']:
+            for invalid in (False, None, 1):
+                changed = deepcopy(value)
+                changed['postconditions'][key] = invalid
+                with pytest.raises(ActionResultContractError):
+                    validate_action_result_envelope(changed, **expected)
+        for key in at(value, root + ('observation', 'values')):
+            changed = deepcopy(value)
+            at(changed, root + ('observation', 'values'))[key] = 'caller-replacement'
+            with pytest.raises(ActionResultContractError):
+                validate_action_result_envelope(changed, **expected)
+        return
     value = _valid_registered_result(action, state)
     evidence_contracts = {
         "PREPARE_ROLLBACK": "rollback preparation is unproven",
