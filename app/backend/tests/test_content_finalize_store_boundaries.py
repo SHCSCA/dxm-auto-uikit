@@ -47,7 +47,8 @@ def test_duplicate_rows_are_not_coalesced_into_one_success(store_connection, tmp
 
 def test_tampered_persisted_hash_and_wrong_session_are_rejected_before_consumption(store_connection, tmp_path):
     body = {"schema": "dxm.persisted_content_finalize.v1", "candidate": {
-        "observation": {"browser_session_id": "other-session"}}, "source_sha256s": [], "created_at": "2026-08-31T00:04:00Z"}
+        "observation": {"browser_session_id": "other-session"}}, "source_sha256s": [], "created_at": "2026-08-31T00:04:00Z",
+        'observation_source_sha256': 'B' * 64}
     insert(store_connection, {**body, "record_sha256": "A" * 64})
     with pytest.raises(FrozenExecutionContractError) as failure:
         require(store_connection, tmp_path)

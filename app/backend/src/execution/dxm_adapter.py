@@ -40,6 +40,7 @@ _CONTRACT_SOURCE_KEYS = (
     'rollback_preparation',
     'wholesale_observation',
     'translation_observation',
+    'content_finalize_observation',
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
     {
@@ -48,6 +49,7 @@ _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
         'prepare_rollback',
         'validate_editor_wholesale',
         'translate_editor_content',
+        'observe_content_finalize',
         'fill_editor_required_defaults',
         'fill_editor_variants',
         'fill_media_assets',
@@ -777,6 +779,11 @@ class DxmWorkflowAdapter:
             'defaults': dict(defaults), 'product_query': product_query, 'store_name': store_name,
             'target_identity': target, 'shop_id': shop_id})
 
+    def observe_content_finalize(self, defaults=None, product_query=None, store_name=None, target_identity=None, shop_id=None):
+        from src.execution.content_observation_adapter import observe_with_adapter
+        return observe_with_adapter(self, defaults=defaults, product_query=product_query,
+            store_name=store_name, target_identity=target_identity, shop_id=shop_id)
+
     def translate_editor_content(self, defaults=None, product_query=None, store_name=None, target_identity=None, shop_id=None):
         from src.batch_edit.translator import validate_editor_translation_observation, build_editor_translation_receipt
         from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
@@ -1317,6 +1324,12 @@ class DxmWorkflowAdapter:
                 postconditions = {name: True for name in required_names}
             except (KeyError, TypeError, ValueError):
                 postconditions = {name: False for name in required_names}
+        if action == 'observe_content_finalize':
+            from src.batch_edit.content_observation_contract import validate_observation
+            validate_observation(sources.get('content_finalize_observation'),
+                payload=before_values['defaults']['_frozen_execution_payload'], target_identity=before_values['target_identity'],
+                shop_id=before_values['shop_id'], context=self._execution_evidence_context)
+            postconditions = {name: True for name in required_names}
         if action == 'fill_semi_managed_defaults' and self._contains_deferred_validation(sources):
             postconditions = {name: False for name in required_names}
 
@@ -1420,6 +1433,8 @@ class DxmWorkflowAdapter:
 
     @staticmethod
     def _after_values(action: str, sources: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
+        if action == 'observe_content_finalize':
+            return {'content_observation': deepcopy(sources.get('content_finalize_observation', {}).get('observation', {}))}
         if action == 'prepare_rollback':
             return {'preimage_readback': dict(sources.get('rollback_preparation') or {})}
         if action == 'validate_editor_wholesale':

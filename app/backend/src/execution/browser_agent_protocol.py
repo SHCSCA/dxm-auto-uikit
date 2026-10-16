@@ -23,6 +23,10 @@ CONTENT_MUTATION_COMMANDS = {
     "BATCH_TRANSLATE_EXECUTE": ("translate_editor_content", "translate_language_click"),
 }
 
+
+def is_content_observation(command) -> bool:
+    return command.state == 'BATCH_TRANSLATE_EXECUTE' and command.action == 'observe_content_finalize'
+
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
     **{(state, action): {mutation: 1} for state, (action, mutation) in CONTENT_MUTATION_COMMANDS.items()},
     ("FIRST_SAVE_INTENT", "first_save_intent"): {
@@ -599,6 +603,8 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
     """Return the exact inner-mutation ordinal plan or fail closed."""
 
     pair = (str(command.state or ""), str(command.action or ""))
+    if command.action == 'observe_content_finalize' and not is_content_observation(command):
+        raise MutationCommandContractError('CONTENT_OBSERVATION_COMMAND_INVALID', '最终读回不得迁移到其它步骤')
     plan = MUTATION_COMMAND_PLANS.get(pair)
     verification_pair = (
         pair[0] in _BATCH_SAVE_VERIFICATION_STATES
@@ -620,7 +626,16 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         command.execution_payload_hash,
     )
     if plan is None:
-        if mutation_adjacent:
+        if is_content_observation(command):
+            from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
+            allowed = {'defaults', 'product_query', 'store_name', 'shop_id', 'target_identity', 'translation_source_sha256'}
+            if (command.execution_mode != 'batch_draft_save' or command.expected_page != 'editor'
+                    or command.pre_dispatch_page not in (None, 'editor') or command.post_dispatch_page not in (None, 'editor')
+                    or set(command.params) != allowed
+                    or _SHA256_RE.fullmatch(str(command.params.get('translation_source_sha256', ''))) is None):
+                raise MutationCommandContractError('CONTENT_OBSERVATION_COMMAND_INVALID', '最终读回只允许精确只读命令参数')
+            validate_frozen_execution_defaults(command.params['defaults'])
+        elif mutation_adjacent:
             raise MutationCommandContractError(
                 "MUTATION_COMMAND_SCOPE_INVALID",
                 "mutation state and command action do not form an allowed pair",

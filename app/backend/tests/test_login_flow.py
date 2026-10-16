@@ -3640,7 +3640,7 @@ def test_check_visible_login_state_uses_execution_browser_with_saved_cookies(mon
         '_goto_sterile',
         lambda page_arg, url, **_kwargs: visited.append((page_arg, url)),
     )
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: foreground_calls.append('front') or True)
+    monkeypatch.setattr(page, 'bring_to_front', lambda: foreground_calls.append('front'), raising=False)
     monkeypatch.setattr(
         flow,
         '_visible_reader_session_status',
@@ -4779,7 +4779,6 @@ def test_click_rect_center_prefers_browser_input_before_dom_click(monkeypatch, t
     cdp = FakeCdp()
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: False)
     page = FakePage(cdp)
 
     flow._click_rect_center(page, {'x': 100, 'y': 200, 'w': 40, 'h': 20})
@@ -4832,7 +4831,6 @@ def test_click_rect_center_prefers_cdp_before_native_window_click(monkeypatch, t
 
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: True)
     monkeypatch.setattr(
         flow,
         '_click_point_with_native_window',
@@ -4874,7 +4872,6 @@ def test_click_rect_center_falls_back_to_native_window_click_when_cdp_fails(monk
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
     native_calls = []
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: True)
     monkeypatch.setattr(flow, '_click_point_with_native_window', lambda page, x, y: native_calls.append((page, x, y)) or True)
 
     page = FakePage()
@@ -6216,7 +6213,6 @@ def test_click_rect_center_skips_dom_runtime_when_cdp_input_succeeds(monkeypatch
     cdp = FakeCdp()
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: False)
     page = FakePage(cdp)
 
     flow._click_rect_center(page, {'x': 100, 'y': 200, 'w': 40, 'h': 20})

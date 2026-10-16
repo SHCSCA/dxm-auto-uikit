@@ -1,6 +1,7 @@
 param(
   [int]$WaitSeconds = 25,
   [switch]$CheckPortable,
+  [switch]$AllowVisibleWindow,
   [int]$PortableMinTempFreeMB = 1024,
   [string]$CapturePath = "",
   [string]$PortableCapturePath = "",
@@ -20,6 +21,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 . (Join-Path $PSScriptRoot 'lib\desktop-smoke-log.ps1')
 . (Join-Path $PSScriptRoot 'lib\packaged-runtime-identity.ps1')
 . (Join-Path $PSScriptRoot 'lib\desktop-smoke-process.ps1')
+. (Join-Path $PSScriptRoot 'lib\desktop-visible-smoke.ps1')
 
 function Resolve-SmokeArtifactPath {
   param(
@@ -75,6 +77,7 @@ $VisibleSmokePath = Resolve-SmokeArtifactPath -Path $VisibleSmokePath
 $SmokeUserDataDir = [System.IO.Path]::GetFullPath($SmokeUserDataDir)
 $VisibleSmokeUserDataDir = [System.IO.Path]::GetFullPath($VisibleSmokeUserDataDir)
 $PortableSmokeUserDataDir = [System.IO.Path]::GetFullPath($PortableSmokeUserDataDir)
+$VisibleSmokeVerification = Initialize-VisibleDesktopSmoke -Path $VisibleSmokePath -AllowVisibleWindow:$AllowVisibleWindow
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"
@@ -205,22 +208,6 @@ function Assert-CredentialSmoke {
   }
   if ($Result.available -ne $true -or $Result.saved -ne $true -or $Result.loaded -ne $true -or $Result.cleared -ne $true -or $Result.restored -ne $true) {
     throw "Credential smoke did not prove save/load/clear/restore: $($Result | ConvertTo-Json -Compress)"
-  }
-}
-
-function Assert-VisibleSmoke {
-  param(
-    [string]$Path
-  )
-  if (!(Test-Path -LiteralPath $Path)) {
-    throw "Visible smoke result was not created: $Path"
-  }
-  $Result = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
-  if ($Result.ok -ne $true -or $Result.windowVisible -ne $true) {
-    throw "Visible smoke did not prove a visible Electron window: $($Result | ConvertTo-Json -Compress)"
-  }
-  if (-not $Result.backendPort -or -not ([string]$Result.apiBase).StartsWith('http://127.0.0.1:')) {
-    throw "Visible smoke did not include backend runtime details: $($Result | ConvertTo-Json -Compress)"
   }
 }
 
@@ -394,20 +381,6 @@ Write-Host "Packaged smoke passed. Log: $ExistingLog"
 Write-Host "QA capture: $CapturePath"
 Write-Host "Credential smoke passed. Result: $CredentialSmokePath"
 
-$VisibleProcess = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-visible-smoke=$VisibleSmokePath", "--qa-user-data-dir=$VisibleSmokeUserDataDir") -WindowStyle Hidden -PassThru
-if (!$VisibleProcess.WaitForExit($WaitSeconds * 1000)) {
-  Stop-DesktopSmokeProcess -Process $VisibleProcess -Label 'visible-smoke-timeout'
-  throw "Visible window smoke timed out after $WaitSeconds seconds"
-}
-if ($VisibleProcess.ExitCode -ne 0) {
-  throw "Visible window smoke failed: exit code $($VisibleProcess.ExitCode)"
-}
-Assert-VisibleSmoke -Path $VisibleSmokePath
-$VisibleLog = Get-DesktopSmokeLog -UserDataDir $VisibleSmokeUserDataDir
-Assert-DesktopSmokeLog -ExistingLog $VisibleLog -ExpectedPythonRoot (Split-Path $ExePath) -Label 'Visible window smoke'
-Assert-PackagedRuntimeClean -ExePath $ExePath
-Write-Host "Visible window smoke passed. Result: $VisibleSmokePath"
-
 if ($CheckPortable -and (Test-Path $PortableExePath)) {
   Write-Host "Portable exe: $PortableExePath"
   Assert-PortableTempSpace -RequiredMB $PortableMinTempFreeMB
@@ -432,3 +405,13 @@ if ($CheckPortable -and (Test-Path $PortableExePath)) {
 } else {
   Write-Host "Portable smoke skipped. Current delivery target is the verified directory免安装版: outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe"
 }
+
+$VisibleSmokeVerification = Invoke-VisibleDesktopSmoke -ExePath $ExePath -VisibleSmokePath $VisibleSmokePath -UserDataDir $VisibleSmokeUserDataDir -WaitSeconds $WaitSeconds -AllowVisibleWindow:$AllowVisibleWindow -VerifyLog {
+  $VisibleLog = Get-DesktopSmokeLog -UserDataDir $VisibleSmokeUserDataDir
+  Assert-DesktopSmokeLog -ExistingLog $VisibleLog -ExpectedPythonRoot (Split-Path $ExePath) -Label 'Visible window smoke'
+} -VerifyRuntime { Assert-PackagedRuntimeClean -ExePath $ExePath }
+if ($VisibleSmokeVerification.ok -ne $true) {
+  [Console]::Error.WriteLine("PENDING_PERMISSION: VISIBLE_WINDOW_PERMISSION_REQUIRED; hidden smoke completed, visible window acceptance remains unverified.")
+  exit $VisibleSmokeVerification.exitCode
+}
+Write-Host "Visible window smoke passed. Result: $VisibleSmokePath"

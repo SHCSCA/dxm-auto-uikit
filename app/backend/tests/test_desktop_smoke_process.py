@@ -54,11 +54,18 @@ def test_cleanup_failure_logs_the_owned_pid_and_propagates(method):
     assert records[0]["fields"]["label"] == "owned-failure"
 
 
-def test_verifier_hides_every_helper_and_never_enumerates_or_kills_other_instances():
+def test_verifier_hides_default_helpers_and_delegates_only_explicit_visible_launch():
     source = (REPO_ROOT / "scripts" / "verify-desktop-package.ps1").read_text(encoding="utf-8-sig")
+    visible = (REPO_ROOT / "scripts" / "lib" / "desktop-visible-smoke.ps1").read_text(encoding="utf-8-sig")
     launches = [line for line in source.splitlines() if "Start-Process " in line]
-    assert len(launches) == 3
+    assert len(launches) == 2
     assert all("-WindowStyle Hidden" in line for line in launches)
-    assert "Get-Process" not in source and "taskkill" not in source and "Stop-Process" not in source
-    for owned in ("$Process", "$VisibleProcess", "$PortableProcess"):
+    assert "-WindowStyle Normal" in visible
+    assert "if (!$AllowVisibleWindow)" in visible
+    assert "Invoke-VisibleDesktopSmoke" in source
+    assert "-AllowVisibleWindow:$AllowVisibleWindow" in source
+    for combined in (source, visible):
+        assert "Get-Process" not in combined and "taskkill" not in combined and "Stop-Process " not in combined
+    for owned in ("$Process", "$PortableProcess"):
         assert "Stop-DesktopSmokeProcess -Process " + owned in source
+    assert "Stop-DesktopSmokeProcess -Process $VisibleProcess" in visible

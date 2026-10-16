@@ -14,13 +14,18 @@ def _reject(code, detail):
     raise FrozenExecutionContractError(code, detail)
 
 
-def _candidate_sources(conn, *, task, job, observation, receipts, screenshot_root):
+def _candidate_sources(conn, *, task, job, observation_source_sha256, receipts, screenshot_root, observation=None):
     from src.execution.batch_dispatch_authority import snapshot_row_authority_in_transaction
 
     if (not task or not job or task.get("mode") != "batch_draft_save"
             or task.get("payload", {}).get("plan_snapshot", {}).get("path") != "B"
             or job.get("task_id") != task.get("id")):
         _reject("CONTENT_FINALIZE_TASK_IDENTITY_INVALID", "最终输出必须绑定同一 Path B 任务与商品")
+    if observation is not None:
+        _reject('CONTENT_FINALIZE_OBSERVATION_SOURCE_REQUIRED', '调用方观察字典不能替代独立 Worker 持久来源')
+    from src.batch_edit.content_observation_source import require_observation
+    source = require_observation(conn, task=task, job=job, source_sha256=observation_source_sha256, screenshot_root=screenshot_root)
+    observation = source['observation']
     candidate = build_content_finalize_stage_freeze(task, job, observation=observation, receipts=receipts)
     if validate_evidence_ref(candidate["observation"]["evidence_ref"], screenshot_root=screenshot_root).get("ok") is not True:
         _reject("CONTENT_FINALIZE_SCREENSHOT_DRIFT", "最终读回截图缺失或摘要不符")
@@ -45,7 +50,7 @@ def _candidate_sources(conn, *, task, job, observation, receipts, screenshot_roo
     return candidate, records
 
 
-def append_content_finalize_stage(conn, *, task, job, observation, receipts, screenshot_root, now):
+def append_content_finalize_stage(conn, *, task, job, observation=None, observation_source_sha256=None, receipts, screenshot_root, now):
     """仅在同一事务内重新核实所有实际来源后追加封存；不改原快照与原值。"""
     if not task or not job or task.get("status") != "running" or job.get("status") != "running" or job.get("current_step_code") != "BATCH_TRANSLATE_EXECUTE":
         _reject("CONTENT_FINALIZE_STATE_INVALID", "最终输出只能在真实翻译完成的同一运行商品中封存")
@@ -53,13 +58,15 @@ def append_content_finalize_stage(conn, *, task, job, observation, receipts, scr
                             (task["id"], job["id"], EVIDENCE_TYPE)).fetchall()
     if existing:
         _reject("CONTENT_FINALIZE_STAGE_ALREADY_RECORDED", "最终输出封存不允许覆盖或重复追加")
-    candidate, sources = _candidate_sources(conn, task=task, job=job, observation=observation, receipts=receipts,
+    candidate, sources = _candidate_sources(conn, task=task, job=job, observation=observation,
+                                            observation_source_sha256=observation_source_sha256, receipts=receipts,
                                             screenshot_root=screenshot_root)
     body = {"schema": "dxm.persisted_content_finalize.v1", "candidate": candidate,
-            "source_sha256s": [source["source_sha256"] for source in sources], "created_at": now}
+            "source_sha256s": [source["source_sha256"] for source in sources],
+            'observation_source_sha256': observation_source_sha256, "created_at": now}
     record = {**body, "record_sha256": canonical_sha256(body)}
     conn.execute("INSERT INTO job_evidences(task_id,job_id,evidence_type,file_path,meta_json,created_at) VALUES(?,?,?,?,?,?)",
-                 (task["id"], job["id"], EVIDENCE_TYPE, observation["evidence_ref"]["path"], dumps(record), now))
+                 (task["id"], job["id"], EVIDENCE_TYPE, candidate['observation']["evidence_ref"]["path"], dumps(record), now))
     return record
 
 
@@ -74,14 +81,14 @@ def require_content_finalize_stage(conn, *, task, job, browser_session_id, scree
     if len(rows) != 1:
         _reject("CONTENT_FINALIZE_STAGE_DUPLICATE", "同商品出现多条最终封存记录")
     record = loads(rows[0]["meta_json"], {})
-    if (not isinstance(record, dict) or set(record) != {"schema", "candidate", "source_sha256s", "created_at", "record_sha256"}
+    if (not isinstance(record, dict) or set(record) != {"schema", "candidate", "source_sha256s", "created_at", "record_sha256", 'observation_source_sha256'}
             or record["schema"] != "dxm.persisted_content_finalize.v1"
             or canonical_sha256({key: value for key, value in record.items() if key != "record_sha256"}) != record["record_sha256"]):
         _reject("CONTENT_FINALIZE_STAGE_RECORD_DRIFT", "持久最终输出记录的结构或摘要已改变")
     candidate = record["candidate"]
     if not isinstance(candidate, dict) or candidate.get("observation", {}).get("browser_session_id") != browser_session_id:
         _reject("CONTENT_FINALIZE_SOURCE_SESSION_DRIFT", "最终输出不是当前浏览器会话产生")
-    expected, sources = _candidate_sources(conn, task=task, job=job, observation=candidate.get("observation"),
+    expected, sources = _candidate_sources(conn, task=task, job=job, observation_source_sha256=record['observation_source_sha256'],
         receipts=candidate.get("receipts"), screenshot_root=screenshot_root)
     if expected != candidate or record["source_sha256s"] != [source["source_sha256"] for source in sources]:
         _reject("CONTENT_FINALIZE_STAGE_RECORD_DRIFT", "最终输出或动作前序来源在封存后变化")

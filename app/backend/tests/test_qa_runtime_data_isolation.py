@@ -78,7 +78,8 @@ def test_final_delivery_check_runs_browser_qa_backend_with_isolated_data_dir():
     assert "Start-BackgroundCommandWithEnvironment" in script
     backend_pytest_section = script[script.index('-Name "Backend pytest"') - 400:script.index('-Name "Frontend production build"')]
     assert "DXM_DATA_DIR" in backend_pytest_section
-    assert '-TimeoutSeconds 600' in backend_pytest_section
+    assert '-TimeoutSeconds $BackendTestTimeoutSeconds' in backend_pytest_section
+    assert '[ValidateRange(60, 3600)][int]$BackendTestTimeoutSeconds = 900' in script
     qa_backend_section = script[script.index('-Name "QA backend service"') - 400:script.index('Wait-HttpReady -Name "QA backend service"')]
     assert "DXM_DATA_DIR" in qa_backend_section
     assert "pytestRuntimeDataDir" in script
@@ -384,6 +385,7 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
 def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate():
     script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
     smoke_script = (REPO_ROOT / "scripts" / "verify-desktop-package.ps1").read_text(encoding="utf-8")
+    visible_script = (REPO_ROOT / "scripts" / "lib" / "desktop-visible-smoke.ps1").read_text(encoding="utf-8")
 
     assert "[switch]$CheckPortableDesktop" in script
     assert "-CheckPortableDesktop" in script
@@ -400,8 +402,13 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "$CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath" in smoke_script
     assert "$VisibleSmokePath = Resolve-SmokeArtifactPath -Path $VisibleSmokePath" in smoke_script
     assert 'Get-DesktopSmokeLog -UserDataDir $PortableSmokeUserDataDir' in smoke_script
-    assert '"--qa-visible-smoke=$VisibleSmokePath"' in smoke_script
-    assert 'Assert-VisibleSmoke -Path $VisibleSmokePath' in smoke_script
+    assert '--qa-visible-smoke={0}' in visible_script
+    assert 'Assert-VisibleSmoke -Path $VisibleSmokePath' in visible_script
+    assert '[switch]$AllowVisibleWindow' in script
+    assert '[switch]$AllowVisibleWindow' in smoke_script
+    assert '$packagedDesktopSmokeArgs += "-AllowVisibleWindow"' in script
+    assert 'Invoke-VisibleDesktopSmoke' in smoke_script
+    assert 'PENDING_PERMISSION' in visible_script
     assert '"--qa-user-data-dir=$PortableSmokeUserDataDir"' in smoke_script
     assert "$packagedDesktopSmokeArgs" in script
     assert '$packagedDesktopSmokeArgs += "-CheckPortable"' in script

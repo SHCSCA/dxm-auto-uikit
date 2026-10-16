@@ -17,56 +17,9 @@ from enum import StrEnum
 from typing import Any
 
 from src.batch_edit.path_a_section_templates import VideoGenerationConfig
-
-
-# Values and limits from the current native ImgToVideoModal/const components.
-NATIVE_VIDEO_TRANSITIONS = {0: '无转场效果', 1: '自然', 2: '舒缓', 3: '动感', 4: '切换', 5: '柔和', 6: '覆盖'}
-
-
-def validate_native_video_generation_rule(rule):
-    """Validate an explicit shared rule. Never adopt the native modal defaults."""
-    if (not isinstance(rule, dict) or set(rule) != {'image_selection', 'image_count', 'transition', 'music'}
-            or rule['image_selection'] != 'first_product_images'
-            or type(rule['image_count']) is not int or not 2 <= rule['image_count'] <= 8
-            or type(rule['transition']) is not int or rule['transition'] not in NATIVE_VIDEO_TRANSITIONS):
-        raise ValueError('VIDEO_SHARED_GENERATION_RULE_INVALID')
-    music = rule['music']
-    if not isinstance(music, dict) or not (
-            music == {'mode': 'none'} or (set(music) == {'mode', 'id'} and music['mode'] == 'library'
-            and isinstance(music['id'], str) and music['id'].strip() == music['id'] and bool(music['id']))):
-        raise ValueError('VIDEO_SHARED_MUSIC_RULE_INVALID')
-
-
-def resolve_native_video_inputs(config, product_images, music_catalog):
-    """Resolve first-N current product images and a stable library choice, without generating.
-
-    The production caller must bind these inputs to frozen product data and a
-    current native catalog response. This result is not execution authority.
-    """
-    from copy import deepcopy
-    from urllib.parse import urlsplit
-    from src.batch_edit.plan_template_contract import validate_editor_actions
-
-    validate_editor_actions({'video': config})
-    rule = config.get('generation_rule')
-    validate_native_video_generation_rule(rule)
-    if not isinstance(product_images, list) or any(not isinstance(value, str) for value in product_images):
-        raise ValueError('VIDEO_PRODUCT_IMAGE_LIST_INVALID')
-    selected = product_images[:rule['image_count']]
-    if (len(selected) < 2 or len(set(selected)) != len(selected) or any(
-            value != value.strip() or urlsplit(value).scheme not in {'http', 'https'} or not urlsplit(value).netloc
-            or ',' in value or urlsplit(value).username is not None or urlsplit(value).password is not None for value in selected)):
-        raise ValueError('VIDEO_SOURCE_IMAGES_INVALID')
-    music = {'mode': 'none'}
-    if rule['music']['mode'] == 'library':
-        if not isinstance(music_catalog, list) or any(not isinstance(item, dict) for item in music_catalog):
-            raise ValueError('VIDEO_MUSIC_CATALOG_REQUIRED')
-        choices = [item for item in music_catalog if str(item.get('id', '')) == rule['music']['id']]
-        if len(choices) != 1 or not isinstance(choices[0].get('fileUrl'), str) or not choices[0]['fileUrl'].strip():
-            raise ValueError('VIDEO_MUSIC_ID_NOT_UNIQUE')
-        music = {'mode': 'library', 'record': deepcopy(choices[0])}
-    return {'images': list(selected), 'transition': rule['transition'],
-            'transition_label': NATIVE_VIDEO_TRANSITIONS[rule['transition']], 'music': music}
+from src.batch_edit.native_video_inputs import (
+    NATIVE_VIDEO_TRANSITIONS, resolve_native_video_inputs, validate_native_video_generation_rule,
+)
 
 
 class VideoGenerationError(StrEnum):

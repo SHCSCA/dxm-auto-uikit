@@ -2,6 +2,8 @@ param(
   [switch]$SkipBrowserQA,
   [switch]$RequireCleanWorktree,
   [switch]$CheckPortableDesktop,
+  [switch]$AllowVisibleWindow,
+  [ValidateRange(60, 3600)][int]$BackendTestTimeoutSeconds = 900,
   [switch]$Help,
   [string]$ExpectedRealDxmWriteReadiness = "BLOCKED",
   [string]$ExpectedRealDxmSingleSaveEndToEnd = "pending_live_dxm_validation",
@@ -49,6 +51,8 @@ if ($Help) {
   Write-Host "Options:"
   Write-Host "  -RequireCleanWorktree  Require pre/post git status to be clean for source package acceptance."
   Write-Host "  -CheckPortableDesktop  Also verify the portable no-install desktop exe during packaged desktop smoke."
+  Write-Host "  -AllowVisibleWindow    Explicitly authorize visible window QA; the hidden default remains PENDING_PERMISSION and cannot pass full acceptance."
+  Write-Host "  -BackendTestTimeoutSeconds <60..3600>  Backend test budget in seconds; default 900."
   Write-Host "  -SkipBrowserQA         Developer-only shortcut; do not use for formal delivery acceptance."
   Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default BLOCKED."
   Write-Host "  -ExpectedRealDxmSingleSaveEndToEnd <pending_live_dxm_validation|passed>  Expected single-save real DXM end-to-end state; default pending_live_dxm_validation."
@@ -1150,7 +1154,7 @@ $commands += Invoke-CapturedCommandWithEnvironment `
   -FilePath $pythonExe `
   -Arguments @("-m", "pytest", "-q") `
   -WorkingDirectory $backendDir `
-  -TimeoutSeconds 600 `
+  -TimeoutSeconds $BackendTestTimeoutSeconds `
   -Environment @{ DXM_DATA_DIR = $pytestRuntimeDataDir }
 $commands += Invoke-CapturedCommand `
   -Name "Frontend production build" `
@@ -1190,6 +1194,9 @@ $packagedDesktopSmokeArgs = @(
 )
 if ($CheckPortableDesktop) {
   $packagedDesktopSmokeArgs += "-CheckPortable"
+}
+if ($AllowVisibleWindow) {
+  $packagedDesktopSmokeArgs += "-AllowVisibleWindow"
 }
 $packagedDesktopSmokeCommand = Invoke-CapturedCommand `
   -Name "Packaged desktop smoke" `
@@ -1506,6 +1513,7 @@ $result = [pscustomobject]@{
   requireCleanWorktree = [bool]$RequireCleanWorktree
   sourcePackageCheck = $sourcePackageCheck
   checkPortableDesktop = [bool]$CheckPortableDesktop
+  allowVisibleWindow = [bool]$AllowVisibleWindow
   gateEvidenceCheck = if ($gateEvidenceOk) { "PASS" } else { "FAIL" }
   deliverableMode = "DXM semi-managed automation workbench"
   realDxmWrites = if ($realDxmWriteReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($realDxmWriteReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 draft-box pass, followed by L3 manual canary evidence" }
@@ -1542,6 +1550,7 @@ $result = [pscustomobject]@{
     portableDesktopSmokeUserDataDir = $portableDesktopSmokeUserDataDir
     packagedDesktopCredentialSmoke = $packagedDesktopCredentialSmokePath
     packagedDesktopVisibleSmoke = $packagedDesktopVisibleSmokePath
+    packagedDesktopVisibleSmokeVerification = "$packagedDesktopVisibleSmokePath.verification.json"
     packagedDesktopVisibleSmokeUserDataDir = $packagedDesktopVisibleSmokeUserDataDir
     l2AllowlistReviewTemplateMarkdown = $l2AllowlistReviewTemplateMarkdownPath
     l2AllowlistReviewTemplateJson = $l2AllowlistReviewTemplateJsonPath

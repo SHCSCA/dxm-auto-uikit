@@ -219,6 +219,9 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
             {"BATCH_TRANSLATE_EXECUTE": _contract("editor", *NATIVE_TRANSLATION_POSTCONDITIONS,
                 page_by_execution_mode={"batch_draft_save": "editor"})}
         ),
+        'observe_content_finalize': MappingProxyType({
+            'BATCH_TRANSLATE_EXECUTE': _contract('editor', 'content_fields_observed', 'content_readback_stable', 'content_zero_write_proven')
+        }),
         "fill_media_assets": MappingProxyType(
             {
                 "FILL_MEDIA": _contract(
@@ -1526,7 +1529,13 @@ def _validate_success_evidence_semantics(
     execution_mode: str | None = None,
     expected_execution_payload: Mapping[str, Any] | None = None,
 ) -> None:
-    if state in {'FILL_BASE_INFO', 'FILL_VARIANTS', 'FILL_COMPLIANCE'}:
+    if envelope['action'] == 'observe_content_finalize':
+        from src.execution.content_observation_result import validate_content_observation_result
+        try:
+            validate_content_observation_result(envelope, execution_mode=execution_mode, expected_payload=expected_execution_payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            _reject(f'final content observation is unproven: {exc}')
+    elif state in {'FILL_BASE_INFO', 'FILL_VARIANTS', 'FILL_COMPLIANCE'}:
         facts = derive_frozen_main_fill_facts(
             envelope['action'], before_values=envelope['before_values'],
             editor_result=envelope['evidence']['observations'].get('editor_action_result'),

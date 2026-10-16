@@ -568,6 +568,10 @@ class DxmLoginFlow:
             'mandatory_capability_receipts': {'wholesale': build_editor_wholesale_receipt(validated)},
         }
 
+    def observe_content_finalize(self, **kwargs):
+        from src.execution.content_observation_flow import observe_content_finalize
+        return observe_content_finalize(self, **kwargs)
+
     def translate_editor_content(self, *, defaults, product_query, store_name, shop_id, target_identity):
         from src.batch_edit.translator import (
             NativeTranslationNetwork, native_translation_fields, native_translation_texts,
@@ -2033,7 +2037,7 @@ class DxmLoginFlow:
                 human_step='检查执行浏览器登录态',
             )
             self._goto_sterile(page, home_url, wait_until='domcontentloaded', timeout=45000)
-            self._force_foreground_dxm_window()
+            bring_controlled_page_to_front(page)
             page.wait_for_timeout(3000)
             login_check = self._inspect_visible_login_state(page)
             visible_logged_in = login_check.get('logged_in') is True
@@ -8619,6 +8623,7 @@ class DxmLoginFlow:
         execution_payload: Mapping[str, Any],
         *,
         phase: str,
+        reject_redirects: bool = False,
     ) -> dict[str, Any]:
         """Read the current editor category and live read-only Schema before writes."""
 
@@ -8748,6 +8753,9 @@ class DxmLoginFlow:
             return {ok: false, reason: String(error?.message || error || 'category_schema_read_failed'), candidates};
           }
         }'''
+        if reject_redirects:
+            # 独立最终读回禁止 Schema POST 重定向，避免浏览器携带请求体进入未审阅第二跳。
+            script = script.replace("credentials: 'same-origin',", "credentials: 'same-origin', redirect: 'error',")
         try:
             observed = page.evaluate(script)
         except Exception as exc:  # noqa: BLE001 - fail closed before any field write.
@@ -23202,214 +23210,6 @@ class DxmLoginFlow:
             )
             return None
 
-    def _force_foreground_dxm_window(self) -> bool:
-        if os.name != 'nt':
-            return False
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-            candidates: list[dict[str, Any]] = []
-
-            class Rect(ctypes.Structure):
-                _fields_ = [
-                    ('left', ctypes.c_long),
-                    ('top', ctypes.c_long),
-                    ('right', ctypes.c_long),
-                    ('bottom', ctypes.c_long),
-                ]
-
-            user32.IsWindowVisible.argtypes = [wintypes.HWND]
-            user32.IsWindowVisible.restype = wintypes.BOOL
-            user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-            user32.GetWindowTextLengthW.restype = ctypes.c_int
-            user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-            user32.GetWindowTextW.restype = ctypes.c_int
-            user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(Rect)]
-            user32.GetWindowRect.restype = wintypes.BOOL
-            user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-            user32.GetClassNameW.restype = ctypes.c_int
-            viewport_metrics = {}
-            page = getattr(self, '_page', None)
-            if page is not None:
-                viewport_metrics = self._browser_viewport_metrics_for_native_click(page)
-
-            def collect(hwnd, _lparam):
-                length = user32.GetWindowTextLengthW(hwnd)
-                title = ''
-                if length > 0:
-                    buffer = ctypes.create_unicode_buffer(length + 1)
-                    user32.GetWindowTextW(hwnd, buffer, length + 1)
-                    title = buffer.value or ''
-                class_buffer = ctypes.create_unicode_buffer(256)
-                user32.GetClassNameW(hwnd, class_buffer, 256)
-                class_name = class_buffer.value or ''
-                rect = Rect()
-                if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                    return True
-                width = int(rect.right - rect.left)
-                height = int(rect.bottom - rect.top)
-                visible = bool(user32.IsWindowVisible(hwnd))
-                titled_dxm = '店小秘' in title and ('Chrome' in title or 'Edge' in title or '店小秘--' in title)
-                agent_chrome_shell = (
-                    not title
-                    and class_name.startswith('Chrome_WidgetWin_')
-                    and 1000 <= width <= 2200
-                    and 650 <= height <= 1400
-                )
-                if titled_dxm or agent_chrome_shell:
-                    hwnd_int = self._window_handle_to_int(hwnd)
-                    if not hwnd_int:
-                        return True
-                    candidates.append({
-                        'hwnd': hwnd_int,
-                        'title': title,
-                        'class': class_name,
-                        'visible': visible,
-                        'width': width,
-                        'height': height,
-                        'rect': {'left': int(rect.left), 'top': int(rect.top), 'width': width, 'height': height},
-                    })
-                return True
-
-            user32.EnumWindows(enum_proc(collect), 0)
-            if not candidates:
-                self._trace_workflow_event('click_rect:native_front_skipped', reason='dxm_window_not_found', human_step='切换到店小秘窗口')
-                return False
-
-            def score(item: dict[str, Any]) -> tuple[int, int, int, int, int]:
-                title = str(item.get('title') or '')
-                return (
-                    self._window_position_match_score(item.get('rect') or {}, viewport_metrics),
-                    20 if '店小秘--数据采集' in title else 0,
-                    10 if '店小秘' in title else 0,
-                    5 if item.get('visible') else 0,
-                    int(item.get('width') or 0) * int(item.get('height') or 0),
-                )
-
-            candidate = sorted(candidates, key=score, reverse=True)[0]
-            hwnd = self._window_handle_to_int(candidate.get('hwnd'))
-            if not hwnd:
-                self._trace_workflow_event('click_rect:native_front_skipped', reason='dxm_window_handle_missing', human_step='切换到店小秘窗口')
-                return False
-            title = str(candidate.get('title') or candidate.get('class') or '')
-            hwnd_value = wintypes.HWND(hwnd)
-            hwnd_topmost = wintypes.HWND(-1)
-            hwnd_notopmost = wintypes.HWND(-2)
-            try:
-                user32.SwitchToThisWindow.argtypes = [wintypes.HWND, wintypes.BOOL]
-                user32.SwitchToThisWindow.restype = None
-            except Exception:
-                pass
-            user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-            user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-            user32.IsWindowVisible.argtypes = [wintypes.HWND]
-            user32.IsWindowVisible.restype = wintypes.BOOL
-            user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-            user32.GetWindowTextLengthW.restype = ctypes.c_int
-            user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-            user32.GetWindowTextW.restype = ctypes.c_int
-            user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(Rect)]
-            user32.GetWindowRect.restype = wintypes.BOOL
-            user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
-            user32.ShowWindow.restype = wintypes.BOOL
-            user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
-            user32.SetWindowPos.restype = wintypes.BOOL
-            user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-            user32.SetForegroundWindow.restype = wintypes.BOOL
-            user32.BringWindowToTop.argtypes = [wintypes.HWND]
-            user32.BringWindowToTop.restype = wintypes.BOOL
-            user32.SetActiveWindow.argtypes = [wintypes.HWND]
-            user32.SetActiveWindow.restype = wintypes.HWND
-            user32.SetFocus.argtypes = [wintypes.HWND]
-            user32.SetFocus.restype = wintypes.HWND
-            user32.GetForegroundWindow.argtypes = []
-            user32.GetForegroundWindow.restype = wintypes.HWND
-            kernel32.GetCurrentThreadId.argtypes = []
-            kernel32.GetCurrentThreadId.restype = wintypes.DWORD
-            sw_restore = 9
-            swp_nomove = 0x0002
-            swp_nosize = 0x0001
-            swp_showwindow = 0x0040
-            flags = swp_nomove | swp_nosize | swp_showwindow
-            rect = Rect()
-            user32.GetWindowRect(hwnd_value, ctypes.byref(rect))
-            width = int(rect.right - rect.left)
-            height = int(rect.bottom - rect.top)
-            window_rect = {'left': int(rect.left), 'top': int(rect.top), 'width': width, 'height': height}
-            virtual_screen = self._win32_virtual_screen(user32)
-            offscreen_or_minimized = self._window_needs_restore_to_primary_screen(
-                window_rect,
-                virtual_screen=virtual_screen,
-            )
-            current_thread = kernel32.GetCurrentThreadId()
-            foreground_before = user32.GetForegroundWindow()
-            foreground_before_int = self._window_handle_to_int(foreground_before)
-            foreground_thread = user32.GetWindowThreadProcessId(wintypes.HWND(foreground_before_int), None) if foreground_before_int else 0
-            target_thread = user32.GetWindowThreadProcessId(hwnd_value, None)
-            attached_foreground = bool(foreground_thread and user32.AttachThreadInput(current_thread, foreground_thread, True))
-            attached_target = bool(target_thread and user32.AttachThreadInput(current_thread, target_thread, True))
-            try:
-                user32.ShowWindow(hwnd_value, sw_restore)
-                if offscreen_or_minimized:
-                    user32.SetWindowPos(hwnd_value, hwnd_topmost, 80, 80, 1600, 950, swp_showwindow)
-                else:
-                    user32.SetWindowPos(hwnd_value, hwnd_topmost, 0, 0, 0, 0, flags)
-                time.sleep(0.05)
-                try:
-                    user32.SwitchToThisWindow(hwnd_value, True)
-                except Exception:
-                    pass
-                user32.BringWindowToTop(hwnd_value)
-                user32.SetForegroundWindow(hwnd_value)
-                user32.SetActiveWindow(hwnd_value)
-                user32.SetFocus(hwnd_value)
-                time.sleep(0.05)
-                user32.SetWindowPos(hwnd_value, hwnd_notopmost, 0, 0, 0, 0, flags)
-            finally:
-                if attached_target:
-                    user32.AttachThreadInput(current_thread, target_thread, False)
-                if attached_foreground:
-                    user32.AttachThreadInput(current_thread, foreground_thread, False)
-            foreground = self._window_handle_to_int(user32.GetForegroundWindow())
-            after_rect_raw = Rect()
-            user32.GetWindowRect(hwnd_value, ctypes.byref(after_rect_raw))
-            after_window_rect = {
-                'left': int(after_rect_raw.left),
-                'top': int(after_rect_raw.top),
-                'width': int(after_rect_raw.right - after_rect_raw.left),
-                'height': int(after_rect_raw.bottom - after_rect_raw.top),
-            }
-            restore_check = self._window_restore_succeeded(
-                window_rect,
-                after_window_rect,
-                virtual_screen=virtual_screen,
-            )
-            ok = foreground == hwnd and restore_check.get('ok') is True
-            self._trace_workflow_event(
-                'click_rect:native_front_done',
-                ok=ok,
-                title=title[:160],
-                foreground=foreground,
-                foreground_before=foreground_before_int,
-                hwnd=hwnd,
-                offscreen_or_minimized=bool(offscreen_or_minimized),
-                window_rect=window_rect,
-                restored_window_rect=after_window_rect,
-                restore_check=restore_check,
-                virtual_screen=virtual_screen,
-                viewport=viewport_metrics,
-                attached_foreground=attached_foreground,
-                attached_target=attached_target,
-                human_step='切换到店小秘窗口',
-            )
-            return ok
-        except Exception as exc:
-            self._trace_workflow_event('click_rect:native_front_failed', error=str(exc)[:240], human_step='切换到店小秘窗口')
-            return False
 
     def _click_point_with_native_window(
         self,

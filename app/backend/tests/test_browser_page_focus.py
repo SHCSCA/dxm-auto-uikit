@@ -62,7 +62,7 @@ def test_flow_focus_never_enters_global_native_window_branch(tmp_path, monkeypat
         if fails:
             raise RuntimeError("page unavailable")
 
-    monkeypatch.setattr(flow, "_force_foreground_dxm_window", reject_native)
+    monkeypatch.setattr(flow, "_force_foreground_dxm_window", reject_native, raising=False)
     monkeypatch.setattr(flow, "_click_point_with_native_window", reject_native)
     assert flow._bring_page_to_front_for_click(SimpleNamespace(bring_to_front=focus)) is not fails
     assert calls == ["focus"]

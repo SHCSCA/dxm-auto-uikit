@@ -39,7 +39,7 @@ def _flow(tmp_path, monkeypatch) -> DxmLoginFlow:
     def reject_desktop_operation(*_args, **_kwargs):
         pytest.fail("合成无头页面测试不得访问原生桌面窗口")
 
-    monkeypatch.setattr(flow, "_force_foreground_dxm_window", reject_desktop_operation)
+    monkeypatch.setattr(flow, "_force_foreground_dxm_window", reject_desktop_operation, raising=False)
     monkeypatch.setattr(flow, "_click_point_with_native_window", reject_desktop_operation)
     return flow
 

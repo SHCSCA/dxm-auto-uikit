@@ -59,6 +59,13 @@ def index_content_sources(records, *, task, job, candidate):
 
 def validate_content_sources(conn, *, task, job, candidate, records, screenshot_root, snapshot_authority):
     """复核当前已审阅的生产来源；视频和最终读回未绑定时始终关闭封存。"""
+    indexed = validate_known_content_sources(conn, task=task, job=job, candidate=candidate, records=records,
+        screenshot_root=screenshot_root, snapshot_authority=snapshot_authority)
+    require_reviewed_video_source(indexed)
+
+
+def validate_known_content_sources(conn, *, task, job, candidate, records, screenshot_root, snapshot_authority):
+    """供独立只读观察核验已存在的填写、批发和翻译来源，不证明视频成功。"""
     from src.execution.action_result_contract import validate_action_result_envelope
     from src.execution.browser_agent_protocol import BrowserAgentCommand
     from src.execution.browser_agent_worker import load_browser_agent_action_source
@@ -98,7 +105,7 @@ def validate_content_sources(conn, *, task, job, candidate, records, screenshot_
             receipt = envelope["evidence"]["observations"].get("mandatory_capability_receipts", {}).get(capability)
             if receipt != candidate["receipts"][capability]:
                 _reject("CONTENT_FINALIZE_RECEIPT_SOURCE_DRIFT", "候选回执不是已持久化命令实际产生的回执")
-    require_reviewed_video_source(indexed)
+    return indexed
 
 
 def require_reviewed_video_source(indexed):

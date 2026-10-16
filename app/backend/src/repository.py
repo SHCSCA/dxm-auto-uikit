@@ -2675,7 +2675,31 @@ class Repository:
     def get_task_private(self, task_id: int):
         return self.get_task(task_id, include_private=True)
 
-    def persist_content_finalize_stage(self, task_id: int, job_id: int, *, observation, receipts):
+    def _content_observation_transaction(self, operation, task_id, job_id, **values):
+        from src.batch_edit import content_observation_source
+        from src.services.structured_logging import get_logger, log_exception
+        try:
+            with connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                task = self._private_task_from_connection(conn, task_id)
+                job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+                return getattr(content_observation_source, operation)(conn, task=task, job=job,
+                    screenshot_root=SCREENSHOT_DIR, **values, **({} if operation == 'require_observation' else {'now': now_iso()}))
+        except Exception as exc:
+            log_exception(get_logger('content_observation'), 'content_observation_source_rejected', exc,
+                task_id=task_id, job_id=job_id, operation=operation)
+            raise
+
+    def reserve_content_observation(self, task_id, job_id, command):
+        return self._content_observation_transaction('reserve_observation', task_id, job_id, command=command)
+
+    def persist_content_observation(self, task_id, job_id, command, action_result):
+        return self._content_observation_transaction('persist_observation', task_id, job_id, command=command, action_result=action_result)
+
+    def require_content_observation(self, task_id, job_id, *, source_sha256):
+        return self._content_observation_transaction('require_observation', task_id, job_id, source_sha256=source_sha256)
+
+    def persist_content_finalize_stage(self, task_id: int, job_id: int, *, observation=None, observation_source_sha256=None, receipts):
         """复用证据表事务追加最终输出，未审阅的生产来源继续拒绝。"""
         from src.batch_edit.content_finalize_store import append_content_finalize_stage
         from src.services.structured_logging import get_logger, log_exception
@@ -2685,7 +2709,8 @@ class Repository:
                 conn.execute('BEGIN IMMEDIATE')
                 task = self._private_task_from_connection(conn, task_id)
                 job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
-                return append_content_finalize_stage(conn, task=task, job=job, observation=observation, receipts=receipts,
+                return append_content_finalize_stage(conn, task=task, job=job, observation=observation,
+                    observation_source_sha256=observation_source_sha256, receipts=receipts,
                     screenshot_root=SCREENSHOT_DIR, now=now_iso())
         except Exception as exc:
             log_exception(get_logger('content_finalize'), 'content_finalize_persistence_rejected', exc, task_id=task_id, job_id=job_id)

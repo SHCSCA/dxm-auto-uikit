@@ -3921,6 +3921,10 @@ class V1TaskRunner:
                 state_name == StateName.FILL_BASE_INFO and task.get("mode") == "batch_draft_save"):
             validated_result["browser_agent_command"] = command.to_payload()
         validated_result.setdefault("browser_agent_command", command.to_payload())
+        if action_name == 'translate_editor_content' and editor_source is not None and validated_result.get('ok') is True:
+            from src.execution.content_observation_runner import run_content_observation
+            validated_result['content_observation_source_sha256'] = run_content_observation(self, task=task, job=job,
+                translation_command=command, translation_source_sha256=editor_source['source_sha256'])
         return validated_result
 
     def _build_browser_agent_command(

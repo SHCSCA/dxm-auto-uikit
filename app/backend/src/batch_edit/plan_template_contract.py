@@ -64,7 +64,7 @@ def validate_editor_actions(actions: Any, field_values: Mapping[str, Any] | None
             _reject("LOCAL_PLAN_EDITOR_ACTIONS_INVALID", f"{name} requires every explicit configuration field and enabled=true")
         if name == "video":
             if 'generation_rule' in config:
-                from src.batch_edit.video_generator import validate_native_video_generation_rule
+                from src.batch_edit.native_video_inputs import validate_native_video_generation_rule
                 try:
                     validate_native_video_generation_rule(config['generation_rule'])
                 except ValueError as exc:
