@@ -1276,76 +1276,8 @@ class DxmLoginFlow:
         return state
 
     def get_live_state(self) -> dict[str, Any]:
-        """Return a Reader-usable state from the visible-session owner thread.
-
-        The persisted login result is only a claim.  A disconnected CDP browser
-        can keep that claim green until Playwright processes its next command,
-        so live-status must verify the exact session object used by Reader.
-        This method is intentionally cheap and performs no navigation or DXM
-        request; callers dispatch it through the single visible-session owner.
-        """
-
-        if self.state_file.exists():
-            state = json.loads(self.state_file.read_text(encoding='utf-8'))
-        else:
-            state = self._default_state()
-        if state.get('logged_in') is not True or state.get('reader_ready') is not True:
-            page = self._promote_dxm_page_from_connected_browser()
-            if page is not None and self._page_looks_logged_in(page):
-                reader_status = self._visible_reader_session_status()
-                if reader_status.get('reader_ready') is True:
-                    verified = {
-                        **state,
-                        'ok': True,
-                        'stage': 'login_success',
-                        'reason_code': 'LOGIN_READER_READY',
-                        'logged_in': True,
-                        'reader_ready': True,
-                        'browser_session_id': reader_status.get('browser_session_id'),
-                        'account_ref': reader_status.get('account_ref'),
-                        'page_url': str(getattr(page, 'url', '') or ''),
-                        'message': '登录成功，当前真实可见浏览器已可直接读取店铺与草稿。',
-                        'next_action': '返回工作台进入采集箱选品；本阶段不会保存或发布。',
-                        'requires_user_action': False,
-                        'updated_at': now_iso(),
-                    }
-                    self._write_state(verified)
-                    return verified
-            return state
-        try:
-            page, _context, browser_session_id = self._draft_reader_session()
-        except DxmDraftReaderError as exc:
-            revoked = {
-                **state,
-                'ok': False,
-                'stage': 'session_unavailable',
-                'reason_code': str(exc.reason_code or 'BROWSER_SESSION_UNAVAILABLE'),
-                'logged_in': False,
-                'reader_ready': False,
-                'browser_session_id': None,
-                'account_ref': None,
-                'message': str(exc),
-                'next_action': '从工作台重新连接店小秘；登录成功后 Reader 会复用同一个真实可见会话。',
-                'requires_user_action': True,
-                'updated_at': now_iso(),
-            }
-            self._write_state(revoked)
-            return revoked
-        verified = {
-            **state,
-            'ok': True,
-            'stage': 'login_success',
-            'reason_code': 'LOGIN_READER_READY',
-            'logged_in': True,
-            'reader_ready': True,
-            'browser_session_id': browser_session_id,
-            'page_url': str(getattr(page, 'url', '') or state.get('page_url') or ''),
-            'requires_user_action': False,
-            'updated_at': now_iso(),
-        }
-        if verified != state:
-            self._write_state(verified)
-        return verified
+        from src.execution.live_session_state import get_live_session_state
+        return get_live_session_state(self)
 
     def update_live_hud(self, hud: dict[str, Any]) -> dict[str, Any]:
         self._latest_live_hud = dict(hud)

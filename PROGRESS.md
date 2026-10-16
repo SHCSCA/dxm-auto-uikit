@@ -2,6 +2,14 @@
 
 # 当前进度
 
+## 2026-10-16 真实桌面启动与登录后会话复核
+
+- 用户再次明确由系统负责启动。已核对 `a9fc201` 同源 portable 的 SHA256，并直接启动真实可见桌面；主窗口与后端均已就绪，`/health` 的 clean Git、buildId 与已验包一致。此次启动成功取代下方旧启动审批拒绝作为当前事实，后续不再要求用户运行启动命令。
+- 既有受管手动登录入口实际返回 `MANAGED_MANUAL_LOGIN_REQUIRED / browser_visible=true`；用户随后确认已登录，并明确一直在新窗口操作、未关闭窗口。只读活体复核却返回 HTTP 500，统一日志按 request_id 精确投影得到 `MANAGED_MANUAL_LOGIN_STOPPED`，末帧为原 pin 校验；具体首次失效条件尚未证明，不能归因用户关窗。
+- 受管 pin 校验现拆为小模块，失效时先记录首次布尔边界，再撤销代次并抛类型化错误；活体状态沿原 Flow 薄委托，将该错误投影为稳定的 `session_unavailable / MANAGED_MANUAL_LOGIN_STOPPED`，清除旧账号/会话与登录、Reader 资格。原 pin 不重绑、不恢复；Reader helper 内部吞成 false 的失效也须在返回前复核，不能留下旧绿状态。
+- 实际 Worker/API 的初始状态与旧绿缓存两例先得到 `2 failed`，修复后 `2 passed`；另加 Reader RPC 期间代次漂移后，三例 `3 passed`。原登录与受管链回归为 `361 passed`；新增实际离线 Chromium 对同页导航、同 context 新标签替换原页的两例为 `2 passed`，不证明现场登录。首个测试收集环境错误单独保留，不冒充行为红测。独立外部 CDP 合成实验四次均在建立连接前失败，未进入 pin，不能用作现场根因或登录成功证据。各集合有重叠，最终源码冻结及后续交付以 `outputs/managed-session-stage6-20261016/` 的实际记录为准。
+- 脱敏现场记录位于上述目录的 `real-session-observation.json`。已证明桌面启动，不等于已证明认证 Reader；尚未开始商品检查、生成、投放、翻译或保存。具体首次失效条件仍未核实，完整六步目标继续 `E3_OPEN / BLOCKED`。
+
 ## 2026-10-16 桌面交付包的探针缓存过滤与来源检查
 
 - 为当前检查链补做同源桌面交付时，`2ed7e7f` 的首个 portable 虽构建成功，实际资源清单却发现 `tools/probes` 为 35 文件、Git 为 32 文件；多出的三个 ignored `.pyc` 来自本机 `__pycache__`。旧验包仅扫描后端目录，不能证明工具资源无缓存；该候选被明确拒绝，不作为交付结果，原 manifest、哈希与清单单独保留。

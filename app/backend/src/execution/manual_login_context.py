@@ -20,19 +20,11 @@ class ManualLoginContext:
         self.context = None
         self.session_id = None
         self.stopped = False
+        self._first_invalid_checks = None
 
     def require_context(self, flow):
-        if (self.stopped or self.context is None or flow._context is not self.context
-                or flow._browser is not self.browser or flow._browser_session_thread_id != self.owner_thread
-                or (flow._page is not None and getattr(flow._page, 'context', None) is not self.context)
-                or self.session_id is None or flow.browser_session_id() != self.session_id
-                or threading.get_ident() != self.owner_thread
-                or flow._is_playwright_object_closed(self.context)
-                or not flow._is_browser_connected(self.browser)):
-            self.stopped = True
-            flow._clear_browser_context_generation()
-            raise RuntimeError('MANAGED_MANUAL_LOGIN_STOPPED')
-        return self.context
+        from src.execution.manual_login_session import require_manual_login_context
+        return require_manual_login_context(self, flow)
 
     def _closed(self, *_args):
         self.stopped = True
