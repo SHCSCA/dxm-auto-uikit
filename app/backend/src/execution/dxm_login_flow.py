@@ -738,6 +738,8 @@ class DxmLoginFlow:
             EDITOR_CONTENT_ACTION_SURFACE_SCRIPT,
         )
         from src.services.dxm_plan_reader import DxmPlanReader
+        from src.execution.native_video_script_capture import PassiveNativeVideoScriptCapture
+        from src.execution.native_video_diagnostic import observe_video_input_diagnostic, video_diagnostic_summary
 
         if observe_dialog is not None and observe_dialog not in EDITOR_DIALOG_REVEAL_BINDINGS:
             raise DxmDraftReaderError('EDITOR_INSPECTION_DIALOG_INVALID', '只允许观察翻译或视频入口弹窗。')
@@ -763,6 +765,8 @@ class DxmLoginFlow:
         overlay_dom = None
         entry_probe = None
         content_surface = None
+        video_inputs = None
+        video_sources = None
         page.on('pageerror', lambda error: page_errors.append(str(error)[:1000]) if len(page_errors) < 20 else None)
         try:
             guard.install(page)
@@ -773,6 +777,9 @@ class DxmLoginFlow:
             page.route_web_socket('**/*', block_websocket)
             cdp = context.new_cdp_session(page)
             cdp.send('Network.setBypassServiceWorker', {'bypass': True})
+            if observe_dialog == 'video':
+                video_sources = PassiveNativeVideoScriptCapture(page,
+                    expected_page_url=f'https://www.dianxiaomi.com/web/smt/edit?id={product_id}').start()
             page.goto(f'https://www.dianxiaomi.com/web/smt/edit?id={product_id}', wait_until='domcontentloaded', timeout=30000)
             title_loaded = False
             form_loaded = False
@@ -866,8 +873,15 @@ class DxmLoginFlow:
                     dom = page.evaluate(EDITOR_READONLY_DOM_SCRIPT)
                     overlay_dom = page.evaluate(EDITOR_READONLY_OVERLAYS_SCRIPT)
                     content_surface = page.evaluate(EDITOR_CONTENT_ACTION_SURFACE_SCRIPT, observe_dialog)
+                    if observe_dialog == 'video':
+                        video_inputs = observe_video_input_diagnostic(page, screenshot_dir=SCREENSHOT_DIR,
+                            describe_evidence=self._evidence_descriptor)
         finally:
-            page.close()
+            try:
+                if video_sources is not None:
+                    video_sources.close()
+            finally:
+                page.close()
         after = self.read_e2_product_details(shop_id=shop_id, product_ids=[product_id])
         if after != before:
             raise DxmDraftReaderError('EDITOR_INSPECTION_DATA_DRIFT', '只读检查期间商品或会话变化，不能用作执行依据。')
@@ -890,10 +904,15 @@ class DxmLoginFlow:
             result.update({'dialogObservation': dialog_observation, 'beforeDom': before_dom,
                            'overlayDom': overlay_dom, 'entryProbe': entry_probe, 'contentSurface': content_surface})
             result['ok'] = result['ok'] and dialog_observation['ok']
+        if observe_dialog == 'video':
+            result['videoStaticSources'] = video_sources.snapshot() if video_sources is not None else None
+            if video_inputs is not None:
+                result['videoInputDiagnostic'] = video_inputs
+                result['videoInputSummary'] = video_diagnostic_summary(video_inputs)
         path = DATA_DIR / 'editor_readonly_inspection' / f'{uuid.uuid4().hex}.json'
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
-        return {key: value for key, value in result.items() if key not in {'dom', 'beforeDom', 'overlayDom', 'entryProbe', 'contentSurface'}} | {'artifact': self._evidence_descriptor(path)}
+        return {key: value for key, value in result.items() if key not in {'dom', 'beforeDom', 'overlayDom', 'entryProbe', 'contentSurface', 'videoInputDiagnostic'}} | {'artifact': self._evidence_descriptor(path)}
 
     def _path_b_capability_command_context(
         self,
