@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from playwright.sync_api import expect
 
 from test_frontend_e1_browser import browser, vite_origin
@@ -97,4 +98,55 @@ def test_pending_manual_open_cannot_reacquire_old_login_from_fresh_runtime_poll(
         'reason_code': 'MANAGED_MANUAL_LOGIN_REQUIRED', 'logged_in': False,
         'reader_ready': False, 'browser_visible': True})
     expect(access.get_by_text('等待手动登录', exact=True).first).to_be_visible()
+    page.close()
+
+
+@pytest.mark.parametrize('action, clear_account', [('退出登录', False), ('切换账号', True)])
+def test_logout_and_account_switch_discard_cached_and_inflight_old_shops(browser, vite_origin, action, clear_account):
+    page = browser.new_page()
+    page.add_init_script("""window.__syntheticCredentialClears = 0;
+        window.dxmDesktop = {clearDxmCredential: async () => {
+            window.__syntheticCredentialClears += 1; return {ok: true, available: true};
+        }};""")
+    state = {'old_login': True}; access = _open(page, vite_origin, state)
+    held = []; shop_requests = []; logout_requests = []
+
+    def shops(route):
+        shop_requests.append(route.request)
+        if len(shop_requests) == 1:
+            _json(route, _shops('old'))
+        else:
+            held.append(route)
+
+    def logout(route):
+        logout_requests.append((route.request.method, route.request.post_data_json))
+        state['old_login'] = False
+        _json(route, {'ok': True, 'stage': 'logged_out', 'logged_in': False,
+            'reader_ready': False, 'message': '合成旧账号会话已退出'})
+
+    page.route('**/api/dxm/draft-reader/shops', shops)
+    page.route('**/api/dxm/logout', logout)
+    selector = page.get_by_role('combobox', name='选择当前店铺', exact=True)
+    page.get_by_title('重新读取真实店铺', exact=True).click()
+    expect(selector).to_have_value('old')
+    access.get_by_placeholder('输入 DXM 账号').fill('synthetic-previous-account')
+    access.get_by_placeholder('仅本次登录使用').fill('synthetic-previous-password')
+    with page.expect_request('**/api/dxm/draft-reader/shops'):
+        page.get_by_title('重新读取真实店铺', exact=True).click()
+    access.get_by_role('button', name=action, exact=True).click()
+    expect(access.get_by_text('已退出登录', exact=True).first).to_be_visible()
+    expect(selector).to_have_value('')
+    expect(selector.locator('option[value="old"]')).to_have_count(0)
+    expect(access.get_by_placeholder('仅本次登录使用')).to_have_value('')
+    expect(access.get_by_placeholder('输入 DXM 账号')).to_have_value('' if clear_account else 'synthetic-previous-account')
+    assert page.evaluate('window.__syntheticCredentialClears') == int(clear_account)
+    assert logout_requests == [('POST', {})]
+    assert len(held) == 1
+    # 旧快照已清空后，再释放旧账号请求，确保其不能重建店铺或选中项。
+    with page.expect_response('**/api/dxm/draft-reader/shops'):
+        _json(held[0], _shops('old'))
+    _settle(page)
+    expect(selector).to_have_value('')
+    expect(selector.locator('option[value="old"]')).to_have_count(0)
+    expect(access.get_by_text('已登录，继续下一步', exact=True)).to_have_count(0)
     page.close()

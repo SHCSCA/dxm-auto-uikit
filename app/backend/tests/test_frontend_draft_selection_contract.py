@@ -224,7 +224,6 @@ def test_logged_in_access_exposes_logout_and_account_switch() -> None:
     assert "onLogoutDxm" in access_source
     assert "status === 'logged_out'" in access_source
     assert "dxm_account_switch_failed" in app_source
-    assert "setDxmShopsSnapshot(null)" in app_source
 
 
 def test_local_plan_workspace_exposes_safe_delete_and_renders_backend_editor_json() -> None:

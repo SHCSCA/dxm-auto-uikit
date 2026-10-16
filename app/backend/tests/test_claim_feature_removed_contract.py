@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src.main import app
@@ -12,11 +13,14 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_business_claim_routes_are_not_part_of_the_api() -> None:
-    route_paths = {route.path for route in app.routes}
-
-    assert "/api/acquisition/claim-requests" not in route_paths
-    assert "/api/acquisition/claimed-products" not in route_paths
-    assert "/api/dxm/workflow/claim-product" not in route_paths
+    # 公开路由合同覆盖子 Router；实际请求也必须证明旧业务入口不存在。
+    route_paths = set(app.openapi()['paths'])
+    client = TestClient(app)
+    for removed_path in ('/api/acquisition/claim-requests', '/api/acquisition/claimed-products',
+                         '/api/dxm/workflow/claim-product'):
+        assert removed_path not in route_paths
+        assert client.get(removed_path).status_code == 404
+        assert client.post(removed_path, json={}).status_code == 404
 
 
 def test_claim_only_is_not_an_execution_mode() -> None:

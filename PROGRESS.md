@@ -9,8 +9,9 @@
 - 显式关闭后重开只在冷启动边界解除已停止的 pin，引导失败恢复拒绝边界，普通 ensure 不会重回旧会话。新窗口开始引导前先持久化未登录 opening；引导、导航和聚焦三个并发窗口中，实际状态 API 均不能显示旧登录或 Reader 资格。窗口打开最终仍只返回等待手动登录。
 - 实际工作台已增加无需填写凭据的“手动登录”入口，沿原 API、配置与错误日志链调用；等待时允许原检测入口。旧店铺请求、旧返回值、错误、finally 和退避重试由独立小模块按会话代次隔离；pending 时的轮询只能显示未登录。实际挂载反例先红后绿；一轮测试因 Request 事件早于 route callback 的断言同步问题失败，已保留原件并改为等待实际页面读到新店铺，未放宽生产校验。
 - 新增 11 分区只读控件 inventory，使用原冻结 Schema 的 `ui_section`、原生精确身份、完整 option 值与双读检查，公共结果只出摘要。该 producer 尚未挂到 Flow；模板实际应用、复杂组件恢复、税率独立分区及完整 FILL 仍缺证，所有执行、能力和完整性标志保持 false。
-- 本阶段已完成独立联合回归 `509 passed / 149.39s`、inventory `44 passed`；后续手动登录含实际离线 Chromium、Worker owner、重开与 opening 竞态为 `43 passed`，API/排他竞态及原 Worker 回归为 `87 passed`。最终前端 Node `56 passed`、挂载 Chromium `28 passed`；完整构建输出保存在 `outputs/project-understanding-20261016/manual-login-ui-races-build-v2.log`。Desktop Node `104 passed`。各集合有重叠，不能相加；本阶段最终完整 backend、源码身份和包验证以 `outputs/managed-login-stage2-20261016/` 为准，原 `2718 passed` 只绑定下节 `3f56163`。
-- 真实应用退出的事实不变，尚无当前在线登录、Reader、商品或完整 Path B 证据。本阶段未操作真实生成、投放、翻译、保存或发布，工程继续 `E3_OPEN / BLOCKED`。
+- 本阶段已完成独立联合回归 `509 passed / 149.39s`、inventory `44 passed`；后续手动登录含实际离线 Chromium、Worker owner、重开与 opening 竞态为 `43 passed`，API/排他竞态及原 Worker 回归为 `87 passed`。最终前端 Node `56 passed`、挂载 Chromium `30 passed / 48.33s`、typecheck 与 Vite 成功，含退出/切账号两个实际页面回归；完整输出为 `outputs/project-understanding-20261016/frontend-logout-build.log` 与同名 JUnit。Desktop Node `104 passed`。各集合有重叠，不能相加；本阶段最终完整 backend、源码身份和包验证以 `outputs/managed-login-stage2-20261016/` 为准，原 `2718 passed` 只绑定下节 `3f56163`。
+- 冻结提交 `2cfb57a` 首次完整 backend 为 `2836 passed / 2 failed / 0 skipped`、`500 warnings / 702.61s`。两失败均已独立复现：旧路由检查假设所有 `app.routes` 对象都有 `.path`；旧退出测试要求清理店铺代码仍内联。前者改用公开 OpenAPI 与实际 GET/POST 404，后者以实际挂载 App 的退出/切账号旧响应隔离行为覆盖；不修改生产放行条件。失败日志、源码身份及该提交构建产物单独保留，不计为最终通过。
+- 上轮真实应用已退出；后续继续按用户已授权的真实应用手动登录推进，当前在线状态须以同 HEAD 健康检查及本阶段运行记录为准，不能沿用旧进程或旧 CDP 资格。尚无已认证 Reader、商品或完整 Path B 证据。本阶段未操作真实生成、投放、翻译、保存或发布，工程继续 `E3_OPEN / BLOCKED`。
 
 ## 2026-10-16 原生视频默认输入来源与追加冻结接线
 
