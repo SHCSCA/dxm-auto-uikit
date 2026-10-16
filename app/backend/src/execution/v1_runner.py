@@ -4120,6 +4120,15 @@ class V1TaskRunner:
             request,
             step_label=self._workflow_step_label(state_name),
         )
+        if state_name == StateName.BATCH_VIDEO_SUBMIT:
+            try:
+                command = BrowserAgentCommand(**self.repo.bind_native_video_input_freeze_for_generation(
+                    int(task['id']), int(job['id']), command.to_payload()))
+            except Exception as exc:
+                from src.services.structured_logging import get_logger, log_exception
+                log_exception(get_logger('native_video.input_binding'), 'native_video_generation_input_binding_rejected', exc,
+                    task_id=task.get('id'), job_id=job.get('id'))
+                raise V1ExecutionError('UNKNOWN', '视频生成输入未能复验，已停止', str(exc)) from exc
         if mutation_scope or (state_name.value, action_name) not in MUTATION_COMMAND_PLANS:
             try:
                 validate_browser_agent_command(command)

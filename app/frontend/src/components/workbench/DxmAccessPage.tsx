@@ -26,6 +26,8 @@ type DxmAccessPageProps = {
   onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
   onClearSavedDxmCredential: () => void
   onOpenDxmLogin: () => void
+  onManualDxmLogin: () => void
+  manualLoginDisabledReason: string
   onContinueDxmLogin: () => void
   onLogoutDxm: () => void
   onSwitchDxmAccount: () => void
@@ -45,6 +47,8 @@ export function DxmAccessPage({
   onDxmLoginDraftChange,
   onClearSavedDxmCredential,
   onOpenDxmLogin,
+  onManualDxmLogin,
+  manualLoginDisabledReason,
   onContinueDxmLogin,
   onLogoutDxm,
   onSwitchDxmAccount,
@@ -76,8 +80,8 @@ export function DxmAccessPage({
         <ModuleHead title="登录真实店小秘" meta="只做登录，不保存、不发布" />
         <div className="dxm-access-steps" aria-label="登录步骤">
           <span className={dxmLoginDraft.username && dxmLoginDraft.password ? 'is-done' : 'is-current'}>
-            <b>1 填写店小秘账号和店小秘密码</b>
-            <small>可勾选记住账号密码；凭据只做本机加密保存。</small>
+            <b>1 选择登录方式</b>
+            <small>可直接手动登录，也可在下方填写凭据并选择本机加密保存。</small>
           </span>
           <span className={dxmLoggedIn ? 'is-done' : 'is-current'}>
             <b>2 打开真实登录页</b>
@@ -87,6 +91,13 @@ export function DxmAccessPage({
             <b>3 验证码完成后检测登录状态</b>
             <small>验证码、二次确认和账号选择都在真实浏览器内处理。</small>
           </span>
+        </div>
+        <div className="operator-inline-form__actions">
+          <button className="button button--secondary" type="button" onClick={onManualDxmLogin}
+            disabled={Boolean(manualLoginDisabledReason)} title={manualLoginDisabledReason || undefined}>
+            手动登录
+          </button>
+          <small>{manualLoginDisabledReason || '无需在工作台填写账号密码；请在真实浏览器内登录，完成后检测登录状态。'}</small>
         </div>
         <DxmLoginInlineForm
           draft={dxmLoginDraft}
@@ -352,6 +363,10 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       next: '完成验证码后点击“验证码完成后检测登录状态”。',
     }
   }
+  if (status === 'manual_login_required') {
+    return { tone: 'warn', label: '等待手动登录', detail: '真实登录窗口已打开，登录和 Reader 尚未确认。',
+      next: '请在真实浏览器内输入账号密码并完成验证码，再点击“验证码完成后检测登录状态”。' }
+  }
   if (status === 'logged_out') {
     return {
       tone: 'warn',
@@ -392,6 +407,7 @@ function humanDxmLoginPhase(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
   if (!status) return '未登录'
   if (DXM_LOGGED_IN_STATUSES.has(status) || status === 'workflow_navigation') return '已登录'
   if (status === 'waiting_captcha') return '等待验证码'
+  if (status === 'manual_login_required') return '等待手动登录'
   if (status === 'login_failed' || status.includes('failed')) return '登录失败'
   return '未登录'
 }

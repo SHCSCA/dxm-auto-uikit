@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getJson, getJsonOrDefault, postJson, withDxmSessionBusyRetry } from './api'
+import { getJson, getJsonOrDefault, postJson } from './api'
 import { frontendConfig } from './config/frontendConfig'
 import { recordFrontendError } from './diagnostics/frontendErrors'
 import { AppShell } from './components/AppShell'
@@ -26,6 +26,9 @@ import { DxmShopProvider } from './dxmShopContext'
 import type { ConfirmedDraftTaskInput } from './draftSelection'
 import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, DxmDraftShop, DxmDraftShopsResponse, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { isTaskControlActive } from './taskControl'
+import { useDxmManualLogin } from './useDxmManualLogin'
+import { manualLoginRuntimeView } from './dxmManualLogin'
+import { createDxmShopReader } from './dxmShopReader'
 import { composeWorkspace } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = frontendConfig.browser.homeUrl
@@ -215,6 +218,8 @@ export default function App() {
   })
   const [lastRuntimeControlResult, setLastRuntimeControlResult] = useState<RuntimeControlResponse | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const runtimeStatusGenerationRef = useRef(0)
+  const manualLoginPendingRef = useRef(false)
   const [runtimeStatusError, setRuntimeStatusError] = useState<string | null>(null)
   const [desktopRuntime, setDesktopRuntime] = useState<DesktopRuntimeInfo | null>(null)
   const [configPreview, setConfigPreview] = useState<ConfigPreview | null>(null)
@@ -247,45 +252,21 @@ export default function App() {
   // and overwrite its 35 refs with its earlier empty snapshot.  Only the
   // newest refresh is allowed to commit UI state.
   const workspaceRefreshGenerationRef = useRef(0)
-  const dxmShopRefreshPromiseRef = useRef<Promise<DxmDraftShopsResponse | null> | null>(null)
-
-  const refreshDxmShops = useCallback(async (force = false): Promise<DxmDraftShopsResponse | null> => {
-    if (!force && dxmShopsSnapshot) return dxmShopsSnapshot
-    if (dxmShopRefreshPromiseRef.current) return dxmShopRefreshPromiseRef.current
-
-    const refreshPromise = (async (): Promise<DxmDraftShopsResponse | null> => {
-      setDxmShopsLoading(true)
-      setDxmShopsError(null)
-      try {
-        const response = await withDxmSessionBusyRetry(
-          () => getJson<DxmDraftShopsResponse>('/api/dxm/draft-reader/shops'),
-        )
+  const dxmShopReaderRef = useRef<ReturnType<typeof createDxmShopReader>>()
+  if (!dxmShopReaderRef.current) {
+    dxmShopReaderRef.current = createDxmShopReader({
+      loading: setDxmShopsLoading, error: setDxmShopsError,
+      commit: (response) => {
         setDxmShopsSnapshot(response)
-        setDxmShops(response.shops)
+        setDxmShops(response?.shops ?? [])
         setSelectedDxmShopId((current) => (
-          current && response.shops.some((shop) => shop.id === current)
-            ? current
-            : response.shops[0]?.id ?? ''
+          current && response?.shops.some((shop) => shop.id === current)
+            ? current : response?.shops[0]?.id ?? ''
         ))
-        return response
-      } catch (error) {
-        // Keep the last verified shop list during a transient login/session
-        // busy window; an empty response must never silently switch shops.
-        setDxmShopsError(error instanceof Error ? error.message : '店铺列表读取失败，请稍后重试。')
-        return null
-      } finally {
-        setDxmShopsLoading(false)
-      }
-    })()
-    dxmShopRefreshPromiseRef.current = refreshPromise
-    try {
-      return await refreshPromise
-    } finally {
-      if (dxmShopRefreshPromiseRef.current === refreshPromise) {
-        dxmShopRefreshPromiseRef.current = null
-      }
-    }
-  }, [dxmShopsSnapshot])
+      },
+    })
+  }
+  const refreshDxmShops = useCallback((force = false) => dxmShopReaderRef.current!.refresh(force), [])
 
   const selectedTask = useMemo(() => {
     const isCurrentOperatorTask = (task: Task) => task.mode === 'single_save' || task.mode === 'batch_draft_save'
@@ -562,11 +543,14 @@ export default function App() {
   }, [refreshRuntimeLogs])
 
   const refreshRuntimeStatus = useCallback(async () => {
+    const generation = runtimeStatusGenerationRef.current
     try {
       const status = await getJson<RuntimeStatus>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`)
-      setRuntimeStatus(status)
+      if (generation !== runtimeStatusGenerationRef.current) return
+      setRuntimeStatus(manualLoginPendingRef.current ? manualLoginRuntimeView(status, false) : status)
       setRuntimeStatusError(null)
     } catch (error) {
+      if (generation !== runtimeStatusGenerationRef.current) return
       setRuntimeStatus(null)
       setRuntimeStatusError(humanRuntimeStatusError(error instanceof Error ? error.message : '运行状态接口不可用'))
     }
@@ -896,6 +880,28 @@ export default function App() {
     }
   }
 
+  const manualDxmLogin = useDxmManualLogin({ runtimeStatus, runtimeStatusError, busy,
+    requestPending: dxmLoginRequestPending, hasActiveTask: workspaceHasRunningTask,
+    hasActiveBatch: workspaceHasRunningBatch, batchStateAvailable: editBatchStateAvailable,
+    agentConsoleActive: Boolean(agentConsole?.active) }, {
+    pending: (value) => { manualLoginPendingRef.current = value; setBusy(value); setDxmLoginRequestPending(value) },
+    error: setOperationError, notice: setOperationNotice,
+    invalidate: () => {
+      runtimeStatusGenerationRef.current += 1
+      dxmShopReaderRef.current!.invalidate()
+      setRuntimeStatus((current) => manualLoginRuntimeView(current, false))
+      setActiveSection('dxm_access')
+    },
+    handoff: () => {
+      runtimeStatusGenerationRef.current += 1
+      setRuntimeStatus((current) => manualLoginRuntimeView(current, true))
+    },
+    refresh: async () => {
+      runtimeStatusGenerationRef.current += 1
+      await Promise.all([refreshRuntimeStatus(), refreshRuntimeLogs(), refreshWorkspace()])
+    },
+  })
+
   async function openDxmLogin() {
     const username = dxmLoginDraft.username.trim()
     if (!username) {
@@ -912,13 +918,8 @@ export default function App() {
     setDxmLoginRequestPending(true)
     setOperationError(null)
     try {
-      // Never reuse a previous account's shop snapshot while a new visible
-      // login is being opened.  The successful continuation below is the
-      // only place that repopulates this account-scoped source of truth.
-      setDxmShops([])
-      setDxmShopsSnapshot(null)
-      setSelectedDxmShopId('')
-      setDxmShopsError(null)
+      // 新登录同时废弃旧请求及其返回值，避免跨账号回填店铺。
+      dxmShopReaderRef.current!.invalidate()
       if (dxmLoginDraft.rememberCredential) {
         const saver = window.dxmDesktop?.saveDxmCredential
         if (saver) {
@@ -1023,13 +1024,8 @@ export default function App() {
         password: '',
         rememberCredential: clearAccount ? false : current.rememberCredential,
       }))
-      // A logout invalidates every shop-scoped reader/template/plan view. Do
-      // not leave the previous account's shop selected while the next login
-      // is being established.
-      setDxmShops([])
-      setDxmShopsSnapshot(null)
-      setSelectedDxmShopId('')
-      setDxmShopsError(null)
+      // 退出后不保留旧账号的店铺缓存或在途读取。
+      dxmShopReaderRef.current!.invalidate()
       setOperationNotice(String(result.message ?? (clearAccount ? '已退出并清除当前账号，可以切换新账号。' : '已退出店小秘登录态。')))
       setActiveSection('dxm_access')
       await refreshRuntimeStatus()
@@ -1415,6 +1411,8 @@ export default function App() {
             onDxmLoginDraftChange={setDxmLoginDraft}
             onClearSavedDxmCredential={() => { void clearSavedDxmCredential() }}
             onOpenDxmLogin={openDxmLogin}
+            onManualDxmLogin={() => { void manualDxmLogin.open() }}
+            manualLoginDisabledReason={manualDxmLogin.disabledReason}
             onContinueDxmLogin={continueDxmLogin}
             onLogoutDxm={() => { void logoutDxm(false) }}
             onSwitchDxmAccount={() => { void logoutDxm(true) }}

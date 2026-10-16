@@ -261,6 +261,8 @@ class BrowserAgentRuntime:
             status = dict(self._status)
             status["runtimeId"] = self._runtime_id
             status["reservedCommandCount"] = len(self._command_reservations)
+            status["executionLeaseActive"] = self._active_lease is not None
+            status["sessionOperationActive"] = self._session_operation_active
             status["mutationLedgerEnabled"] = self._mutation_ledger is not None
             status["events"] = list(self.events[-20:])
             return status
@@ -375,6 +377,8 @@ class BrowserAgentRuntime:
         if ledger_rejection is not None:
             return ledger_rejection
         with self._lock:
+            if self._session_operation_active:
+                return {"ok": False, "reasonCode": "BROWSER_AGENT_SESSION_BUSY", "runtimeId": self._runtime_id}
             self._validate_command_locked(command, timeout_seconds=None)
             fingerprint = _command_fingerprint(command)
             existing = self._command_reservations.get(command.command_id)
@@ -2401,6 +2405,9 @@ class BrowserAgentRuntime:
         return response
 
     def _control_rejection_reason_locked(self, action: str) -> str | None:
+        # 会话 owner 执行期间，生命周期控制不得并发改写其上下文。
+        if self._session_operation_active:
+            return "BROWSER_AGENT_SESSION_BUSY"
         runtime_status = str(self._status.get("status") or "")
         rejection = _CONTROL_STATE_REJECTIONS.get(action, {}).get(runtime_status)
         if rejection:

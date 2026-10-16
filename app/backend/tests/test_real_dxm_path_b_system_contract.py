@@ -20,6 +20,7 @@ import pytest
 from tests.support.content_authority_case import (
     _scope_facts, _prepared_scope, _approval_facts, _prepared_approval, _shared_required_editor_actions_plan,
 )
+from tests.support.native_video_input_source_case import isolated_first_fill, video_source_case
 
 from src import db
 from src.batch_edit.full_product_edit_orchestrator import (
@@ -3459,7 +3460,7 @@ assert.equal(read('publish').execution_allowed,false);
     assert source.count('button.click(') == 1
     assert "'executionAllowed': False, 'capabilityCertified': False" in source
     assert "'contentSurface': content_surface" in source
-def test_content_commands_share_scope_authority_and_keep_save_leases_separate(contract_db, monkeypatch):
+def test_content_commands_share_scope_authority_and_keep_save_leases_separate(isolated_first_fill):
     from src.execution.batch_command_contract import BatchCommandContractError, validate_path_b_save1_discovery_dispatch
     from dataclasses import replace
     from src import repository as repository_module
@@ -3472,9 +3473,11 @@ def test_content_commands_share_scope_authority_and_keep_save_leases_separate(co
     from src.execution.v1_runner import V1TaskRunner
     from src.state_machine.batch_draft_authorization import build_batch_draft_save_task_facts, build_authorization_context
 
-    from tests.support.content_authority_case import content_dispatch_case
+    from tests.support.native_video_input_source_case import freeze
 
-    case = content_dispatch_case(monkeypatch)
+    # 仅隔离尚缺生产证据的首写；视频输入由实际 Worker 文件与冻结事务供给。
+    case = isolated_first_fill
+    freeze(case)
     repo, store, products = case['repository'], case['store'], case['products']
     task, live, current_live = case['task'], case['live'], case['current_live']
     ledger, dispatch, runner = case['ledger'], case['dispatch'], case['runner']

@@ -2,6 +2,7 @@ const LOGIN_HANDOFF_STATUSES = new Set([
   'waiting_captcha',
   'login_failed',
   'login_required',
+  'manual_login_required',
 ])
 
 /**

@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from src.core.config import DATA_DIR, RUNTIME_CONFIG
 from src.core.config_bus import env_string
 from src.services.http_errors import register_exception_handlers
+from src.services.managed_manual_login_api import make_managed_manual_login_router
 from src.services.structured_logging import append_structured_log, configure_logging, structured_log_level
 from src.services.operation_audit import (
     OperationAuditError,
@@ -527,11 +528,21 @@ def _verify_batch_draft_save_command_authorization(
             'AUTH_WORKTREE_IDENTITY_REQUIRED'
         )
 
-    return _verify_runner_authorization(
+    decision = _verify_runner_authorization(
         command.task_id,
         'batch_draft_save',
         command.state,
     )
+    if decision.get('ok') is True and command.state == 'BATCH_VIDEO_SUBMIT':
+        try:
+            from src.batch_edit.native_video_generation_input_binding import require_generation_input_freeze
+            require_generation_input_freeze(repo, command)
+        except Exception as exc:
+            from src.services.structured_logging import get_logger, log_exception
+            log_exception(get_logger('native_video.input_binding'), 'native_video_generation_input_jit_rejected', exc,
+                task_id=command.task_id, job_id=command.job_id)
+            return _reject_batch_command_authorization('AUTH_VIDEO_INPUT_FREEZE_UNPROVEN')
+    return decision
 
 
 def _authorize_browser_mutation(command: Any, context: Any) -> dict[str, Any]:
@@ -1112,6 +1123,15 @@ def _assert_batch_browser_available() -> None:
                 ),
             },
         )
+
+
+app.include_router(make_managed_manual_login_router(
+    ensure_idle=lambda: _assert_batch_browser_available(),
+    run_session=lambda operation: _run_login_flow(operation, fail_if_busy=True),
+    adapter_provider=lambda: _workflow_adapter(),
+    runtime_status=lambda: browser_agent_runtime.status(),
+    normalize=lambda result: normalize_artifact_paths(result),
+))
 
 
 @app.post('/api/dxm/draft-box/scope-snapshots', status_code=201)

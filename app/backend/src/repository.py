@@ -2700,9 +2700,11 @@ class Repository:
         return self._content_observation_transaction('require_observation', task_id, job_id, source_sha256=source_sha256)
 
     def _native_video_input_transaction(self, operation, task_id, job_id, **values):
-        from src.batch_edit import native_video_input_source, native_video_input_freeze
+        from src.batch_edit import native_video_input_source, native_video_input_freeze, native_video_generation_input_binding
         from src.services.structured_logging import get_logger, log_exception
         module = native_video_input_freeze if operation in {'append_input_freeze', 'require_input_freeze'} else native_video_input_source
+        if operation == 'bind_generation_input_freeze':
+            module = native_video_generation_input_binding
         try:
             with connection() as conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -2730,6 +2732,10 @@ class Repository:
     def require_native_video_input_freeze(self, task_id, job_id, *, freeze_sha256, generation_command=None):
         return self._native_video_input_transaction('require_input_freeze', task_id, job_id,
             freeze_sha256=freeze_sha256, generation_command=generation_command)
+
+    def bind_native_video_input_freeze_for_generation(self, task_id, job_id, generation_command):
+        return self._native_video_input_transaction('bind_generation_input_freeze', task_id, job_id,
+            generation_command=generation_command)
 
     def persist_content_finalize_stage(self, task_id: int, job_id: int, *, observation=None, observation_source_sha256=None, receipts):
         """复用证据表事务追加最终输出，未审阅的生产来源继续拒绝。"""

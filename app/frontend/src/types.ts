@@ -666,6 +666,10 @@ export type RuntimeStatus = {
     lastError?: string | null
     lastEventAt?: string | null
     manualTakeover?: boolean
+    needsRestart?: boolean
+    executionLeaseActive?: boolean
+    sessionOperationActive?: boolean
+    reservedCommandCount?: number
     message?: string | null
     nextAction?: string | null
     hud?: Record<string, unknown> | null

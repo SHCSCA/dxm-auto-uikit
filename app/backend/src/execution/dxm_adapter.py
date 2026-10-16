@@ -473,6 +473,13 @@ class DxmWorkflowAdapter:
             events = recent()
         return events if isinstance(events, list) else []
 
+    def open_managed_manual_login(self) -> dict[str, Any]:
+        try:
+            return self.login_flow.open_managed_manual_login()
+        finally:
+            if getattr(self.login_flow, '_managed_manual_login', None) is not None:
+                self._execution_evidence_context = {}
+
     def check_login_state(self) -> dict[str, Any]:
         if self._requires_visible_execution_browser_login_check():
             visible_checker = getattr(self.login_flow, 'check_visible_login_state', None)

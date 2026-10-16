@@ -235,6 +235,7 @@ class DxmLoginFlow:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._managed_manual_login = None
         self._browser_session_thread_id: int | None = None
         self._latest_live_hud: dict[str, Any] | None = None
         self._live_hud_reapply_pending = False
@@ -1888,6 +1889,10 @@ class DxmLoginFlow:
             'loading': False,
             'blocking_modal': None,
         }
+
+    def open_managed_manual_login(self) -> dict[str, Any]:
+        from src.execution.manual_login_context import open_managed_manual_login
+        return open_managed_manual_login(self)
 
     def start_login(self, username: str, password: str) -> dict[str, Any]:
         opening_state = {
@@ -6381,6 +6386,9 @@ class DxmLoginFlow:
         }
 
     def _persist_visible_browser_cookies(self) -> None:
+        if self._managed_manual_login is not None:
+            self._managed_manual_login.require_context(self)
+            return
         if self._context is None:
             return
         cookies = self._context.cookies()
@@ -20338,6 +20346,8 @@ class DxmLoginFlow:
         }
 
     def _ensure_page(self) -> Page:
+        if self._managed_manual_login is not None:
+            self._managed_manual_login.require_context(self)
         self._detach_cross_thread_browser_session()
         self._trace_workflow_event(
             'ensure_page:start',
@@ -20453,6 +20463,9 @@ class DxmLoginFlow:
         only a sterile/login placeholder is eligible for promotion.
         """
 
+        pinned = getattr(self, '_managed_manual_login', None)
+        if pinned is not None:
+            pinned.require_context(self)
         current = self._page
         if current is not None and not self._is_playwright_object_closed(current):
             current_url = str(getattr(current, 'url', '') or '').strip()
@@ -20474,7 +20487,7 @@ class DxmLoginFlow:
         if browser is None or not self._is_browser_connected(browser):
             return current
         try:
-            contexts = list(getattr(browser, 'contexts', []) or [])
+            contexts = [pinned.context] if pinned is not None else list(getattr(browser, 'contexts', []) or [])
         except Exception:
             return current
         for context in contexts:
@@ -20860,6 +20873,9 @@ class DxmLoginFlow:
 
     def _ensure_page_with_cookies(self) -> Page:
         page = self._ensure_page()
+        if self._managed_manual_login is not None:
+            self._managed_manual_login.require_context(self)
+            return page
         if self._context is not None and self.live_client.has_cookie_session():
             cookies = self.live_client.load_cookies()
             if cookies:
