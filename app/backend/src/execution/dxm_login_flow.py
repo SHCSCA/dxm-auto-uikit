@@ -577,6 +577,10 @@ class DxmLoginFlow:
         from src.execution.native_video_observation_flow import observe_native_video_inputs
         return observe_native_video_inputs(self, **kwargs)
 
+    def observe_editor_control_inventory(self, **kwargs):
+        from src.execution.editor_inventory_flow import observe_editor_control_inventory
+        return observe_editor_control_inventory(self, **kwargs)
+
     def translate_editor_content(self, *, defaults, product_query, store_name, shop_id, target_identity):
         from src.batch_edit.translator import (
             NativeTranslationNetwork, native_translation_fields, native_translation_texts,

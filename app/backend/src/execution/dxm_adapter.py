@@ -42,6 +42,7 @@ _CONTRACT_SOURCE_KEYS = (
     'translation_observation',
     'content_finalize_observation',
     'native_video_input_observation',
+    'editor_inventory_observation',
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
     {
@@ -52,6 +53,7 @@ _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
         'translate_editor_content',
         'observe_content_finalize',
         'observe_native_video_inputs',
+        'observe_editor_control_inventory',
         'fill_editor_required_defaults',
         'fill_editor_variants',
         'fill_media_assets',
@@ -798,6 +800,11 @@ class DxmWorkflowAdapter:
         return observe_with_adapter(self, defaults=defaults, product_query=product_query,
             store_name=store_name, target_identity=target_identity, shop_id=shop_id)
 
+    def observe_editor_control_inventory(self, defaults=None, category_schema=None, product_query=None, store_name=None, target_identity=None, shop_id=None):
+        from src.execution.editor_inventory_adapter import observe_with_adapter
+        return observe_with_adapter(self, defaults=defaults, category_schema=category_schema, product_query=product_query,
+            store_name=store_name, target_identity=target_identity, shop_id=shop_id)
+
     def translate_editor_content(self, defaults=None, product_query=None, store_name=None, target_identity=None, shop_id=None):
         from src.batch_edit.translator import validate_editor_translation_observation, build_editor_translation_receipt
         from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
@@ -1347,6 +1354,9 @@ class DxmWorkflowAdapter:
         if action == 'observe_native_video_inputs':
             from src.execution.native_video_observation_adapter import validate_adapter_observation
             postconditions = validate_adapter_observation(sources, before_values, self._execution_evidence_context)
+        if action == 'observe_editor_control_inventory':
+            from src.execution.editor_inventory_adapter import validate_adapter_observation
+            postconditions = validate_adapter_observation(sources, before_values, self._execution_evidence_context)
         if action == 'fill_semi_managed_defaults' and self._contains_deferred_validation(sources):
             postconditions = {name: False for name in required_names}
 
@@ -1454,6 +1464,9 @@ class DxmWorkflowAdapter:
             return {'content_observation': deepcopy(sources.get('content_finalize_observation', {}).get('observation', {}))}
         if action == 'observe_native_video_inputs':
             return {'native_video_inputs': deepcopy(sources.get('native_video_input_observation', {}).get('observation', {}).get('inputs', {}))}
+        if action == 'observe_editor_control_inventory':
+            from src.execution.editor_inventory_adapter import inventory_after_values
+            return inventory_after_values(sources)
         if action == 'prepare_rollback':
             return {'preimage_readback': dict(sources.get('rollback_preparation') or {})}
         if action == 'validate_editor_wholesale':

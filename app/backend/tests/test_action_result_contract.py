@@ -21,6 +21,7 @@ from tests.support.action_results import (
 )
 from tests.test_content_observation_flow import observation_case
 from tests.support.native_video_input_source_case import video_source_case
+from tests.support.editor_inventory_source_case import inventory_source_case
 
 
 def test_batch_path_a_save_and_unpublished_proof_are_native_editor_contracts():
@@ -165,6 +166,7 @@ def test_registry_covers_precheck_and_all_supported_browser_actions():
         "translate_editor_content": {"BATCH_TRANSLATE_EXECUTE": "editor"},
         "observe_content_finalize": {"BATCH_TRANSLATE_EXECUTE": "editor"},
         "observe_native_video_inputs": {"BATCH_VIDEO_SELECT": "editor"},
+        "observe_editor_control_inventory": {"PREPARE_ROLLBACK": "editor"},
         "first_save_intent": {"FIRST_SAVE_INTENT": "semi_managed"},
         "save_only": {"SAVE_ONLY": "semi_managed", "SAVE2_ONLY": "semi_managed"},
         "verify_not_published": {
@@ -202,16 +204,17 @@ def test_registry_covers_precheck_and_all_supported_browser_actions():
 def test_every_registered_state_action_pair_enforces_its_declared_contract(
     action, state, request
 ):
-    if action in {'observe_content_finalize', 'observe_native_video_inputs'}:
+    if action in {'observe_content_finalize', 'observe_native_video_inputs', 'observe_editor_control_inventory'}:
         native_video = action == 'observe_native_video_inputs'
-        case = request.getfixturevalue('video_source_case' if native_video else 'observation_case')
+        inventory = action == 'observe_editor_control_inventory'
+        case = request.getfixturevalue('inventory_source_case' if inventory else 'video_source_case' if native_video else 'observation_case')
         value = case['runtime'].run(case['command'], timeout_seconds=10)
         expected = {'expected_action': action, 'expected_state': state, 'expected_page': 'editor',
             'execution_mode': 'batch_draft_save', 'expected_execution_payload': case['payload'],
             'expected_runtime_id': case['runtime'].runtime_id, 'expected_browser_session_id': case['flow'].session}
         assert validate_action_result_envelope(value, **expected) == value
         # 完整正例来自独立双读 producer，经 Adapter 和真实 Worker 合同，不用通用布尔摘要补齐。
-        root = ('evidence', 'observations', 'native_video_input_observation' if native_video else 'content_finalize_observation')
+        root = ('evidence', 'observations', 'editor_inventory_observation' if inventory else 'native_video_input_observation' if native_video else 'content_finalize_observation')
         def at(document, path):
             for key in path:
                 document = document[key]
@@ -233,7 +236,7 @@ def test_every_registered_state_action_pair_enforces_its_declared_contract(
                 changed['postconditions'][key] = invalid
                 with pytest.raises(ActionResultContractError):
                     validate_action_result_envelope(changed, **expected)
-        observed_path = root + ('observation', 'inputs' if native_video else 'values')
+        observed_path = root + (('observation',) if inventory else ('observation', 'inputs' if native_video else 'values'))
         for key in at(value, observed_path):
             changed = deepcopy(value)
             at(changed, observed_path)[key] = 'caller-replacement'

@@ -3,6 +3,7 @@ import pytest
 from tests.support.action_results import _valid_save_result, _canonical_sha256
 from tests.test_content_observation_flow import observation_case
 from tests.support.native_video_input_source_case import video_source_case
+from tests.support.editor_inventory_source_case import inventory_source_case
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
 from src.execution.browser_agent_protocol import build_frozen_product_target_identity
@@ -442,9 +443,10 @@ def test_failed_stage_sets_ok_false():
 
 @pytest.mark.parametrize('action', tuple(ACTION_RESULT_CONTRACTS))
 def test_every_business_action_exposes_exact_contract_fact_keys_and_registry_postconditions(action, request, monkeypatch):
-    if action in {'observe_content_finalize', 'observe_native_video_inputs'}:
+    if action in {'observe_content_finalize', 'observe_native_video_inputs', 'observe_editor_control_inventory'}:
         native_video = action == 'observe_native_video_inputs'
-        case = request.getfixturevalue('video_source_case' if native_video else 'observation_case')
+        inventory = action == 'observe_editor_control_inventory'
+        case = request.getfixturevalue('inventory_source_case' if inventory else 'video_source_case' if native_video else 'observation_case')
         adapter = case['runtime'].adapter
         produced = []
         original = adapter._result
@@ -462,6 +464,10 @@ def test_every_business_action_exposes_exact_contract_fact_keys_and_registry_pos
             assert result['contract_facts']['after_values']['native_video_inputs'] == {
                 'images': ['https://fixture.invalid/selected-a.png', 'https://fixture.invalid/selected-b.png'],
                 'transition': 1, 'music': {'mode': 'none'}}
+        elif inventory:
+            summary = result['contract_facts']['after_values']['editor_control_inventory']
+            assert summary['collected'] is True and summary['section_count'] == 11
+            assert summary['required_fields_complete'] is False and summary['executionAllowed'] is False
         else:
             assert result['contract_facts']['after_values']['content_observation']['values'] == case['flow']._page.values
     else:

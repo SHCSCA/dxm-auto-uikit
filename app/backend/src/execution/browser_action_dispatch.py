@@ -14,6 +14,7 @@ _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
         "validate_editor_wholesale",
         "observe_content_finalize",
         "observe_native_video_inputs",
+        "observe_editor_control_inventory",
         "fill_editor_required_defaults",
         "fill_editor_variants",
         "fill_media_assets",
@@ -93,6 +94,10 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
             shop_id=params.get('shop_id'), **target_identity_kwargs)
     if action == 'observe_native_video_inputs':
         return adapter.observe_native_video_inputs(defaults=params.get('defaults'),
+            product_query=_optional_str(params.get('product_query')), store_name=_optional_str(params.get('store_name')),
+            shop_id=params.get('shop_id'), **target_identity_kwargs)
+    if action == 'observe_editor_control_inventory':
+        return adapter.observe_editor_control_inventory(defaults=params.get('defaults'), category_schema=params.get('category_schema'),
             product_query=_optional_str(params.get('product_query')), store_name=_optional_str(params.get('store_name')),
             shop_id=params.get('shop_id'), **target_identity_kwargs)
     if action in {

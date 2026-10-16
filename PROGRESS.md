@@ -2,6 +2,16 @@
 
 # 当前进度
 
+## 2026-10-16 11 分区观察挂载与独立只读来源
+
+- 在唯一 `V1TaskRunner` 的 Path B 批次 `PREPARE_ROLLBACK` 内、原回滚准备之前，串行执行独立 `observe_editor_control_inventory`。helper 只收任务/job 标识，从数据库重读原完整 `category_schema`；观察结果不进入原 `workflow_results`，原回滚准备和其拒绝门保留，历史 canary 不获得新能力。
+- 新 Flow/Guard/Adapter/Result 只使用已准备且已绑定的同 owner 页面，以零请求窗口包住独立双采集和截图。逐 RPC 核对会话、命令、商品、文档与 deadline；不导航、重绑、点击、填写或恢复。真实离线 Chromium 对照发现截图默认隐藏光标会临时改输入框样式，改为 `caret='initial'` 后观察表单的 DOM 修改由 12 次降为 0 次；该检查不证明真实站点或可见登录。
+- 新来源沿既有 `job_evidences` 独立预约、复读 Worker 原 request/result 与截图并追加记录。同事务验证完整数据库 Schema、原快照行、已消费批准、scope、队列和时序；不依赖后置 FILL 来源，不创建 rollback receipt、冻结、lease 或 ledger。公共 `after_values` 只有摘要，原值仅留在私有观察产物；`required_fields_complete`、执行与能力标志恒为 false。
+- 定向反例覆盖精确命令、原 Schema 全量、Worker 实际身份、证据篡改、会话/队列/批准漂移、重复和事务回滚。额外独立复核发现取消接单窗口、基础控件事实与缺项码矛盾及 JSON 数值类型相等问题，分别以真实 Worker 竞态或重签清单反例核验并收紧边界。各集合存在重叠，不相加为完整回归数字。
+- 最终冻结前联合检查为 `400 passed / 60.55s`，包含本阶段新模块、原 collector、Adapter 与 ActionResult registry；原红测和 fixture/异常类型纠正的失败输出均单独保留。新增 10 个生产模块均小于 250 行，既有大文件只作薄接线。文档自检仍因本机缺少指定只读上游原型而阻断，未修改或跳过该门禁；`git diff --check` 通过。
+- 本阶段最终完整后端回归、源码身份、构建与包内来源比对以 `outputs/editor-inventory-stage3-20261016/` 的日志、JUnit 和交付记录为准；`40aa350` 的 `2840 passed` 及其包仍属于上阶段，不能代表本次源码。
+- 此接线只提供可信的诊断来源。真实目标类目/Schema 等价、模板实际应用、复杂控件恢复、完整 FILL、视频生成/投放、最终封存、原生门与两次保存仍未闭合，生产 active steps/capability 与 SAVE1 门保持关闭。没有执行真实业务写入或三商品完整 Path B 验收，当前仍为 `E3_OPEN / BLOCKED`。
+
 ## 2026-10-16 生成输入消费与受控手动登录接线（继续推进）
 
 - 生成命令 builder 现从仓储完整证据集合中选择同 job 唯一输入冻结，在同一事务重读 Worker 来源、截图、当前任务/快照/队列和有效期，再把摘要加入完整 SUBMIT 命令。派发授权复核仍先检查原 Runner 权威，再重新消费该冻结；不接受调用方输入或伪造 observation，不改原 snapshot、lease 或 ledger。活页面双 JIT 与实际生成派发尚未闭合，active steps/capability 保持关闭。
@@ -11,7 +21,9 @@
 - 新增 11 分区只读控件 inventory，使用原冻结 Schema 的 `ui_section`、原生精确身份、完整 option 值与双读检查，公共结果只出摘要。该 producer 尚未挂到 Flow；模板实际应用、复杂组件恢复、税率独立分区及完整 FILL 仍缺证，所有执行、能力和完整性标志保持 false。
 - 本阶段已完成独立联合回归 `509 passed / 149.39s`、inventory `44 passed`；后续手动登录含实际离线 Chromium、Worker owner、重开与 opening 竞态为 `43 passed`，API/排他竞态及原 Worker 回归为 `87 passed`。最终前端 Node `56 passed`、挂载 Chromium `30 passed / 48.33s`、typecheck 与 Vite 成功，含退出/切账号两个实际页面回归；完整输出为 `outputs/project-understanding-20261016/frontend-logout-build.log` 与同名 JUnit。Desktop Node `104 passed`。各集合有重叠，不能相加；本阶段最终完整 backend、源码身份和包验证以 `outputs/managed-login-stage2-20261016/` 为准，原 `2718 passed` 只绑定下节 `3f56163`。
 - 冻结提交 `2cfb57a` 首次完整 backend 为 `2836 passed / 2 failed / 0 skipped`、`500 warnings / 702.61s`。两失败均已独立复现：旧路由检查假设所有 `app.routes` 对象都有 `.path`；旧退出测试要求清理店铺代码仍内联。前者改用公开 OpenAPI 与实际 GET/POST 404，后者以实际挂载 App 的退出/切账号旧响应隔离行为覆盖；不修改生产放行条件。失败日志、源码身份及该提交构建产物单独保留，不计为最终通过。
-- 上轮真实应用已退出；后续继续按用户已授权的真实应用手动登录推进，当前在线状态须以同 HEAD 健康检查及本阶段运行记录为准，不能沿用旧进程或旧 CDP 资格。尚无已认证 Reader、商品或完整 Path B 证据。本阶段未操作真实生成、投放、翻译、保存或发布，工程继续 `E3_OPEN / BLOCKED`。
+- 最终干净提交 `40aa3503caf0c2b3c9e9d0c61bb4fd245bdde079` 完整 backend 为 `2840 passed / 0 failed / 0 error / 0 skipped`、`500 warnings / 696.48s`。同源码 portable 构建通过 Node `56 passed`、Chromium `30 passed`、typecheck 与 Vite；实际目录包、portable 启动、假凭据隔离存储及可见窗口检查均通过。`delivery-report.json` 位于 `outputs/managed-login-stage2-20261016/`；源码比对覆盖 desktop 11、backend Python 146、frontend dist 3 份文件。五份打包元数据另行核对，其旧依赖声明不作为依赖证明，依赖以实际包启动/import 检查为准。上述结果只绑定该提交，不代表后续源码。
+- 对应 portable SHA256 为 `BB339D3AD12F50455C6EC0CA736BC9E199D268489FF53455F81F3DD429522C7C`。首轮 PS7 时间解析不兼容及第二轮 C: 临时空间不足的验证失败分别保留；最终使用 Windows PowerShell 5、子进程独立 G: 临时目录完成原门禁，未降低空间检查或删除未知目录。
+- 上轮真实应用已退出。用户已授权重新启动并手动登录；以 `40aa350` 启动真实可见源码应用的工具调用在执行前被自动审批拒绝，原文为 `blocked by policy`，未给出更详细原因，未创建应用进程。退出原因询问不再作为推进前置；可由用户本机运行 `npm --prefix G:\AI\dxm-auto-uikit\app\desktop run dev`。后续在线状态须以当次健康身份复核，不能沿用旧进程或 CDP 资格。尚无已认证 Reader、商品或完整 Path B 证据；隔离可见窗口不等于真实登录。本阶段未操作真实生成、投放、翻译、保存或发布，工程继续 `E3_OPEN / BLOCKED`。
 
 ## 2026-10-16 原生视频默认输入来源与追加冻结接线
 

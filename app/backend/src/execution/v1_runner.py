@@ -72,6 +72,7 @@ from src.execution.batch_command_contract import (
 )
 from src.execution.dxm_live import DxmLiveClient
 from src.execution.native_video_input_runner import run_native_video_input_observation
+from src.execution.editor_inventory_runner import run_editor_control_inventory_observation
 from src.execution.batch_dispatch_authority import content_action_lease, content_action_execution_payload
 from src.execution.e3_authority_contract import (
     authorization_lease_authority_fingerprint,
@@ -1207,6 +1208,9 @@ class V1TaskRunner:
                 }:
                     self._require_task_writer_fence(task)
                     self._assert_real_mutation_authorized(task_id, mode, state_name)
+                if (mode == 'batch_draft_save' and snapshot_path == 'B' and state_name == StateName.PREPARE_ROLLBACK
+                        and not is_closed_loop_replay_adapter(self.workflow_adapter)):
+                    await run_editor_control_inventory_observation(self, task_id=task_id, job_id=job_id)
                 workflow_result = await self._run_workflow_action_async(
                     task,
                     job,

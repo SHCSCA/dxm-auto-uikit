@@ -32,8 +32,12 @@ def is_native_video_observation(command) -> bool:
     return command.state == 'BATCH_VIDEO_SELECT' and command.action == 'observe_native_video_inputs'
 
 
+def is_editor_inventory_observation(command) -> bool:
+    return command.state == 'PREPARE_ROLLBACK' and command.action == 'observe_editor_control_inventory'
+
+
 def is_readonly_content_observation(command) -> bool:
-    return is_content_observation(command) or is_native_video_observation(command)
+    return is_content_observation(command) or is_native_video_observation(command) or is_editor_inventory_observation(command)
 
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
     **{(state, action): {mutation: 1} for state, (action, mutation) in CONTENT_MUTATION_COMMANDS.items()},
@@ -615,6 +619,8 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         raise MutationCommandContractError('CONTENT_OBSERVATION_COMMAND_INVALID', '最终读回不得迁移到其它步骤')
     if command.action == 'observe_native_video_inputs' and not is_native_video_observation(command):
         raise MutationCommandContractError('VIDEO_INPUT_OBSERVATION_COMMAND_INVALID', '视频输入观察不得迁移到其它步骤')
+    if command.action == 'observe_editor_control_inventory' and not is_editor_inventory_observation(command):
+        raise MutationCommandContractError('EDITOR_INVENTORY_OBSERVATION_COMMAND_INVALID', '分区清单只读观察不得迁移到其它步骤')
     plan = MUTATION_COMMAND_PLANS.get(pair)
     verification_pair = (
         pair[0] in _BATCH_SAVE_VERIFICATION_STATES
@@ -636,7 +642,13 @@ def validate_browser_agent_command(command: BrowserAgentCommand) -> dict[str, in
         command.execution_payload_hash,
     )
     if plan is None:
-        if is_readonly_content_observation(command):
+        if is_editor_inventory_observation(command):
+            from src.execution.editor_inventory_command import validate_editor_inventory_command
+            try:
+                validate_editor_inventory_command(command)
+            except ValueError as exc:
+                raise MutationCommandContractError('EDITOR_INVENTORY_OBSERVATION_COMMAND_INVALID', '分区清单只允许精确冻结的只读命令') from exc
+        elif is_readonly_content_observation(command):
             from src.batch_edit.frozen_execution_contract import validate_frozen_execution_defaults
             source_key = 'translation_source_sha256' if is_content_observation(command) else 'first_fill_source_sha256'
             allowed = {'defaults', 'product_query', 'store_name', 'shop_id', 'target_identity', source_key}

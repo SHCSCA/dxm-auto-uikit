@@ -225,6 +225,9 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
         'observe_native_video_inputs': MappingProxyType({
             'BATCH_VIDEO_SELECT': _contract('editor', 'native_video_inputs_observed', 'native_video_defaults_stable', 'native_video_zero_write_proven')
         }),
+        'observe_editor_control_inventory': MappingProxyType({
+            'PREPARE_ROLLBACK': _contract('editor', 'editor_inventory_observed', 'editor_inventory_stable', 'editor_inventory_zero_write_proven')
+        }),
         "fill_media_assets": MappingProxyType(
             {
                 "FILL_MEDIA": _contract(
@@ -1532,7 +1535,13 @@ def _validate_success_evidence_semantics(
     execution_mode: str | None = None,
     expected_execution_payload: Mapping[str, Any] | None = None,
 ) -> None:
-    if envelope['action'] == 'observe_native_video_inputs':
+    if envelope['action'] == 'observe_editor_control_inventory':
+        from src.execution.editor_inventory_result import validate_editor_inventory_result
+        try:
+            validate_editor_inventory_result(envelope, execution_mode=execution_mode, expected_payload=expected_execution_payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            _reject(f'editor inventory observation is unproven: {exc}')
+    elif envelope['action'] == 'observe_native_video_inputs':
         from src.execution.native_video_observation_result import validate_native_video_observation_result
         try:
             validate_native_video_observation_result(envelope, execution_mode=execution_mode, expected_payload=expected_execution_payload)

@@ -2675,6 +2675,30 @@ class Repository:
     def get_task_private(self, task_id: int):
         return self.get_task(task_id, include_private=True)
 
+    def _editor_inventory_transaction(self, operation, task_id, job_id, **values):
+        from src.batch_edit import editor_inventory_source
+        from src.services.structured_logging import get_logger, log_exception
+        try:
+            with connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                task = self._private_task_from_connection(conn, task_id)
+                job = next((row for row in (task or {}).get('jobs', []) if row['id'] == job_id), None)
+                return getattr(editor_inventory_source, operation)(conn, task=task, job=job,
+                    screenshot_root=SCREENSHOT_DIR, now=now_iso(), **values)
+        except Exception as exc:
+            log_exception(get_logger('editor.inventory_source'), 'editor_inventory_transaction_rejected', exc,
+                task_id=task_id, job_id=job_id, operation=operation)
+            raise
+
+    def reserve_editor_control_inventory(self, task_id, job_id, command):
+        return self._editor_inventory_transaction('reserve_inventory', task_id, job_id, command=command)
+
+    def persist_editor_control_inventory(self, task_id, job_id, command, action_result):
+        return self._editor_inventory_transaction('persist_inventory', task_id, job_id, command=command, action_result=action_result)
+
+    def require_editor_control_inventory(self, task_id, job_id, *, source_sha256):
+        return self._editor_inventory_transaction('require_inventory', task_id, job_id, source_sha256=source_sha256)
+
     def _content_observation_transaction(self, operation, task_id, job_id, **values):
         from src.batch_edit import content_observation_source
         from src.services.structured_logging import get_logger, log_exception
