@@ -1764,20 +1764,27 @@ def test_editor_dialog_observation_is_enum_scoped_and_readonly() -> None:
     assert EDITOR_DIALOG_REVEAL_BINDINGS["video"] == (
         ".product-add-wrapper .video-operate", "图片生成视频",
     )
-    source = (BACKEND_ROOT / "src/execution/dxm_login_flow.py").read_text(encoding="utf-8")
+    source = (BACKEND_ROOT / "src/execution/editor_inspection_dialog.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "inspect_editor_readonly")
+    method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "reveal_inspection_dialog")
     calls = [_call_name(node) for node in ast.walk(method) if isinstance(node, ast.Call)]
-    assert calls.count("click") == 1
+    attributes = [node.attr for node in ast.walk(method) if isinstance(node, ast.Attribute)]
+    assert attributes.count("click") == 1
     assert not set(calls) & {"fill", "select_option", "check", "set_input_files", "perform_editor_action", "_save_only_on_page"}
     method_source = ast.get_source_segment(source, method)
-    assert method_source.index("guard.install(page)") < method_source.index("button.click(")
-    assert "title_loaded and form_loaded" in method_source
-    assert "existing_dialogs.count() != 0" in method_source
-    assert "main_form_after == main_form_before" in method_source
-    assert method_source.index("page.close()") < method_source.index("after = self.read_e2_product_details")
-    assert "if after != before:" in method_source
-    assert "'capabilityCertified': False" in method_source
+    flow_source = (BACKEND_ROOT / "src/execution/editor_inspection_flow.py").read_text(encoding="utf-8")
+    scope_source = (BACKEND_ROOT / "src/execution/editor_inspection_scope.py").read_text(encoding="utf-8")
+    from src.execution.dxm_login_flow import DxmLoginFlow
+    facade = inspect.getsource(DxmLoginFlow.inspect_editor_readonly)
+    assert 'from src.execution.editor_inspection_flow import inspect_editor_readonly' in facade
+    assert method_source.index("scope.open_video_window()") < method_source.index("rpc(button.click,")
+    assert "ready=title_loaded and form_loaded" in flow_source and "rpc(existing_dialogs.count) != 0" in method_source
+    assert "canonical_sha256(main_form_after) == canonical_sha256(main_form_before)" in method_source
+    assert flow_source.index("_cleanup(owner, owner.page if owner is not None else page, failed=failed)") < flow_source.index("after = flow.read_e2_product_details")
+    assert "canonical_sha256(after) != canonical_sha256(before)" in flow_source
+    assert "'capabilityCertified': False" in flow_source and "'inputFreezeAllowed': False" in flow_source
+    assert 'self.transport.activate(' in scope_source and 'guard.install(' not in flow_source + scope_source
+    assert 'route_web_socket(' not in flow_source + scope_source and '.route(' not in flow_source
     check = r"""
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
@@ -2281,8 +2288,9 @@ def test_editor_form_stability_wait_resets_on_change_and_times_out_readonly(monk
     result = inspection.wait_editor_form_stable(page, form)
     assert result['ok'] is False and result['snapshot'] is None and clock[0] == 15
     from src.execution.dxm_login_flow import DxmLoginFlow
-    source = inspect.getsource(DxmLoginFlow.inspect_editor_readonly)
-    assert source.index('wait_editor_form_stable(page, main_form)') < source.index('button.click(')
+    from src.execution.editor_inspection_dialog import reveal_inspection_dialog
+    source = inspect.getsource(reveal_inspection_dialog)
+    assert source.index('wait_editor_form_stable(checked_page, checked_form)') < source.index('rpc(button.click,')
     assert 'entryProbe' in source and 'overlayDom' in source
 
 
@@ -2421,9 +2429,11 @@ assert.equal(result[0].nodes[0].role,'tooltip');
 """
     result = subprocess.run(["node", "-e", check, json.dumps(EDITOR_READONLY_OVERLAYS_SCRIPT)], capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert result.returncode == 0, result.stderr
-    source = inspect.getsource(DxmLoginFlow.inspect_editor_readonly)
-    assert "page.locator(EDITOR_TRANSLATION_SURFACE_BINDING) if observe_dialog == 'translation'" in source
-    assert source.count('button.click(') == 1 and "'capabilityCertified': False" in source
+    from src.execution.editor_inspection_dialog import reveal_inspection_dialog
+    from src.execution import editor_inspection_flow
+    source = inspect.getsource(reveal_inspection_dialog)
+    assert "page.locator(EDITOR_TRANSLATION_SURFACE_BINDING) if action == 'translation'" in source
+    assert source.count('rpc(button.click,') == 1 and "'capabilityCertified': False" in inspect.getsource(editor_inspection_flow)
 
 
 def test_frozen_fill_consumes_identity_enriched_production_result() -> None:
@@ -3455,11 +3465,13 @@ assert.equal(read('publish').execution_allowed,false);
     result = subprocess.run(['node', '-e', check], input=json.dumps(EDITOR_CONTENT_ACTION_SURFACE_SCRIPT),
                             capture_output=True, text=True, encoding='utf-8', timeout=15)
     assert result.returncode == 0, result.stderr
-    source = inspect.getsource(DxmLoginFlow.inspect_editor_readonly)
-    assert 'page.evaluate(EDITOR_CONTENT_ACTION_SURFACE_SCRIPT, observe_dialog)' in source
-    assert source.count('button.click(') == 1
-    assert "'executionAllowed': False, 'capabilityCertified': False" in source
-    assert "'contentSurface': content_surface" in source
+    from src.execution.editor_inspection_dialog import reveal_inspection_dialog
+    from src.execution import editor_inspection_flow
+    source = inspect.getsource(reveal_inspection_dialog)
+    assert 'rpc(page.evaluate, EDITOR_CONTENT_ACTION_SURFACE_SCRIPT, action)' in source
+    assert source.count('rpc(button.click,') == 1
+    assert "'executionAllowed': False, 'capabilityCertified': False" in inspect.getsource(editor_inspection_flow)
+    assert 'contentSurface=rpc(' in source
 def test_content_commands_share_scope_authority_and_keep_save_leases_separate(isolated_first_fill):
     from src.execution.batch_command_contract import BatchCommandContractError, validate_path_b_save1_discovery_dispatch
     from dataclasses import replace

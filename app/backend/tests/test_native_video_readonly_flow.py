@@ -34,7 +34,8 @@ def test_actual_readonly_entry_starts_capture_before_goto_and_keeps_raw_inputs_p
     assert case.events.count('reveal_click') == 1
     assert case.events.index('reveal_click') < case.events.index('video_diagnostic')
     assert case.events.index('video_diagnostic') < case.events.index('capture_close')
-    assert case.events.index('page_close') < case.events.index('reader_after') < case.events.index('capture_snapshot')
+    assert case.events.index('capture_snapshot') < case.events.index('synthetic_scope_closed') < case.events.index('page_close')
+    assert case.events.index('page_close') < case.events.index('reader_after')
     assert_cleaned(case)
     report = private_report(summary)
     assert report['videoInputDiagnostic']['before']['actual'] == 'private-video-before'
@@ -71,8 +72,10 @@ def test_non_video_inspection_never_starts_video_capture_or_collects_video_input
 ])
 def test_goto_diagnostic_and_capture_cleanup_exceptions_always_close_owned_page(monkeypatch, tmp_path, fault, message):
     case = readonly_flow_case(monkeypatch, tmp_path, fault=fault)
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(DxmDraftReaderError) as failure:
         inspect(case)
+    assert failure.value.reason_code == 'EDITOR_INSPECTION_UNVERIFIED'
+    assert message in str(failure.value.__cause__)
     assert_cleaned(case)
     assert 'reader_after' not in case.events
     assert list(tmp_path.rglob('*.json')) == []
@@ -85,8 +88,7 @@ def test_reveal_failure_or_ambiguity_cannot_be_promoted_by_video_diagnostic(monk
     assert summary['dialogObservation']['reasonCode'] == 'EDITOR_DIALOG_REVEAL_FAILED'
     assert summary['ok'] is False
     assert case.events.count('reveal_click') == click_count
-    assert summary['videoInputSummary']['stable_across_screenshot'] is True
-    assert summary['videoInputSummary']['inputFreezeAllowed'] is False
+    assert 'videoInputSummary' not in summary and 'video_diagnostic' not in case.events
     assert case.events.index('page_close') < case.events.index('reader_after')
     assert_cleaned(case)
 

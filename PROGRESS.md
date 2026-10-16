@@ -2,6 +2,16 @@
 
 # 当前进度
 
+## 2026-10-16 受管只读编辑检查接线修复
+
+- 离线实际 Chromium 已复现旧 `editor-inspection` 的接线冲突：临时页各安装一条 HTTP/WS 路由后，原受管 context 校验拒绝 `VIDEO_OBSERVATION_PAGE_ROUTE_PRECEDENCE_UNPROVEN`；旧 guard 对三条原生视频读取也全部阻断。复现没有导航或外网请求，记录位于 `outputs/managed-inspection-stage4-20261016/reproduce-legacy-guard.json`。
+- 公开检查现使用局部 `EditorInspectionOwner` 与唯一 context transport 的短期 scope；原 Flow 仅薄委托，导航、入口观察、视频诊断分模块。只允许精确一次目标导航；视频原生读取另受首次入口窗口和既有精确请求体合同限制，不扩大全局 L2 白名单，不添加 page 路由，也不替换生产视频 owner。
+- 视频默认输入沿新文档生命周期、原生内部绑定、截图前后独立双读及实际资源 profile 观察。缺内部绑定或资源证据时保留缺证，不把两份相同失败标为稳定默认；原始值只进私有产物，执行、能力与输入冻结标志保持 false，不签发 Worker 来源、rollback、FILL、lease 或 ledger。
+- 已补异常出口无条件清理、原主页关闭/导航及清理中的失效复核，并把主页监听前移到临时页创建之前。晚到重复资源使最终 profile 退化时，默认值摘要撤销为未核实；稳定的失败字典不能代替默认值，跨模块文档身份和 JSON 数值类型也须一致。公开 API 将未核实的只读检查统一为脱敏 `409`，保留原 Reader 原因码及内部异常链。
+- 最终联合检查 `127 passed / 57.77s`，含实际离线 Chromium 25 项、原只读编排、跨文档/类型反例、实际 API/Runtime owner 与完整系统合同文件。实际浏览器使用显式合成 gateway 和资源规格，不证明源站响应或真实绑定；各定向集合有重叠，不能相加。首轮失败与独立复核的红/绿证据边界见本阶段 `first-attempts.json` 及审阅记录。五个新增生产模块均小于 250 行。
+- 本阶段最终完整后端回归及干净源码身份以 `outputs/managed-inspection-stage4-20261016/` 为准；文档自检仍因缺指定上游原型阻断。不能沿用 `6dd4c7f` 的 `3045 passed` 或其 portable 代表本次变更，本阶段未构建新 portable。
+- 真实应用启动此前被自动审批以 `blocked by policy` 拒绝，未给出详细理由且未创建进程；用户授权仍有效，不换入口绕过。当前尚无已认证 Reader 或真实默认值证据。完整 FILL、生成/投放成功来源、终封、原生门及两次保存继续未闭合，完整六步目标仍为 `E3_OPEN / BLOCKED`。
+
 ## 2026-10-16 11 分区观察挂载与独立只读来源
 
 - 在唯一 `V1TaskRunner` 的 Path B 批次 `PREPARE_ROLLBACK` 内、原回滚准备之前，串行执行独立 `observe_editor_control_inventory`。helper 只收任务/job 标识，从数据库重读原完整 `category_schema`；观察结果不进入原 `workflow_results`，原回滚准备和其拒绝门保留，历史 canary 不获得新能力。

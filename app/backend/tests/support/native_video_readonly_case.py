@@ -9,6 +9,7 @@ from src.execution import editor_readonly_inspection as inspection
 from src.execution import native_video_diagnostic as diagnostic_module
 from src.execution import native_video_script_capture as capture_module
 from src.services.dxm_plan_reader import DxmPlanReader
+from tests.support.editor_inspection_flow_spy import install_inspection_spies
 
 
 def readonly_flow_case(monkeypatch, tmp_path, fault=None, blocked_requests=0):
@@ -136,7 +137,7 @@ def readonly_flow_case(monkeypatch, tmp_path, fault=None, blocked_requests=0):
 
         def snapshot(self):
             events.append('capture_snapshot')
-            assert self.closed and page.closed and 'reader_after' in events
+            assert self.closed and not page.closed and 'reader_after' not in events
             return {'window_closed': True, 'reviewed_resources_match': True,
                     'executionAllowed': False, 'capabilityCertified': False, 'inputFreezeAllowed': False}
 
@@ -170,7 +171,8 @@ def readonly_flow_case(monkeypatch, tmp_path, fault=None, blocked_requests=0):
     context = SimpleNamespace(new_page=lambda: page, new_cdp_session=lambda _: SimpleNamespace(send=cdp_send))
     flow = SimpleNamespace(_positive_reader_id=lambda value, **_: value,
         read_e2_product_details=read_details, _draft_reader_session=lambda: (None, context, 'browser-1'),
-        _evidence_descriptor=describe, _evidence_observed_at=lambda: '2026-10-16T00:00:00Z')
+        _evidence_descriptor=describe, _evidence_observed_at=lambda: '2026-10-16T00:00:00Z',
+        _context=context, _page=None, browser_session_id=lambda: 'browser-1')
     guard = SimpleNamespace(install=lambda _: events.append('guard_install'),
         bind_page=lambda _: events.append('guard_bind'),
         summary=lambda: {'blocked_request_count': blocked_requests}, websockets=[])
@@ -182,4 +184,5 @@ def readonly_flow_case(monkeypatch, tmp_path, fault=None, blocked_requests=0):
     monkeypatch.setattr(inspection, 'wait_editor_form_stable', lambda *_: {'ok': True, 'snapshot': deepcopy(form)})
     monkeypatch.setattr(capture_module, 'PassiveNativeVideoScriptCapture', Capture)
     monkeypatch.setattr(diagnostic_module, 'observe_video_input_diagnostic', observe)
+    install_inspection_spies(monkeypatch, flow, page, guard, events, tmp_path, observe)
     return SimpleNamespace(flow=flow, guard=guard, page=page, events=events, captures=captures, root=tmp_path)
