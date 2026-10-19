@@ -5,6 +5,7 @@ import threading
 from src.core.config_bus import get_config_bus
 from src.execution.browser_page_focus import bring_controlled_page_to_front
 from src.execution.managed_browser_context import create_managed_browser_context
+from src.execution.manual_login_navigation import ManualLoginNavigation
 from src.execution.native_video_lifetime import close_native_video_lifetime
 from src.services.structured_logging import get_logger, log_exception
 from src.utils import now_iso
@@ -71,6 +72,7 @@ def open_managed_manual_login(flow):
 
     previous_pin = flow._managed_manual_login
     owner = ManualLoginContext(flow._browser, threading.get_ident())
+    navigation = ManualLoginNavigation(owner)
     bootstrap_complete = flow._browser is not None
     try:
         flow.clear_mutation_authorizer()
@@ -95,13 +97,16 @@ def open_managed_manual_login(flow):
                 if not bootstrap_complete:
                     flow._managed_manual_login = previous_pin
         owner.browser = flow._browser
+        navigation.bind_browser(owner.browser)
         flow._managed_manual_login = owner
         flow._clear_browser_context_generation()
         flow._context = flow._page = None
         owner.context = create_managed_browser_context(owner.browser)
+        navigation.bind_context(owner.context)
         owner.context.on('close', owner._closed)
         flow._context = owner.context
         flow._page = owner.context.new_page()
+        navigation.bind_page(flow._page)
         owner.session_id = flow._bind_browser_context_generation(owner.context)
         owner.require_context(flow)
         timeout = get_config_bus().integer('DXM_MANUAL_LOGIN_NAVIGATION_TIMEOUT_MS', 45000,
@@ -116,6 +121,7 @@ def open_managed_manual_login(flow):
         _LOGGER.info('managed_manual_login_window_opened')
         return state
     except Exception as exc:
+        navigation.snapshot_failure()
         owner.stopped = True
         flow._managed_manual_login = previous_pin if not bootstrap_complete and previous_pin is not None else owner
         log_exception(_LOGGER, 'managed_manual_login_open_failed', exc)
@@ -131,3 +137,5 @@ def open_managed_manual_login(flow):
         except Exception as state_exc:
             log_exception(_LOGGER, 'managed_manual_login_failure_state_failed', state_exc)
         raise RuntimeError('MANAGED_MANUAL_LOGIN_OPEN_FAILED') from exc
+    finally:
+        navigation.close()
