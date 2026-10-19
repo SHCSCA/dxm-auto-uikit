@@ -1,8 +1,10 @@
 """同一会话 owner 的活体状态投影；受管失效只撤销资格，不重开窗口。"""
 
 import json
+from datetime import datetime, timezone
 
 from src.execution.manual_login_session import ManualLoginSessionInvalidError
+from src.execution.reader_http_observation import log_reader_diagnostic
 from src.services.dxm_draft_reader import DxmDraftReaderError
 from src.services.structured_logging import get_logger, log_event
 from src.utils import now_iso
@@ -28,6 +30,50 @@ def _unavailable(flow, *, reason_code, message):
     return state
 
 
+def _reader_checked_at(reader_status):
+    supplied = reader_status.get('checked_at')
+    if supplied is None:
+        return now_iso()
+    try:
+        if not isinstance(supplied, str):
+            raise ValueError('READER_CHECK_TIME_INVALID')
+        parsed = datetime.fromisoformat(supplied)
+        if parsed.tzinfo is None:
+            raise ValueError('READER_CHECK_TIME_ZONE_REQUIRED')
+        return parsed.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+    except (TypeError, ValueError, OverflowError) as exc:
+        log_reader_diagnostic('reader_check_time_invalid',
+            exception_type=type(exc).__name__)
+        return now_iso()
+
+
+def _reader_unavailable(flow, state, page, reader_status):
+    # 页面登录证据与 Reader 资格分开；失败只更新投影，不改变原受管窗口。
+    negative = {
+        **state, 'ok': False, 'stage': 'login_success',
+        'reason_code': reader_status.get('reason_code') or 'BROWSER_SESSION_UNAVAILABLE',
+        'logged_in': True, 'reader_ready': False,
+        'browser_session_id': None, 'account_ref': None,
+        'reader_checked_at': _reader_checked_at(reader_status),
+        'page_url': str(getattr(page, 'url', '') or ''),
+        'label': '已登录，但只读会话未就绪',
+        'message': '页面已显示登录成功，但本次只读接口校验未通过。',
+        'next_action': '保留当前真实浏览器窗口并重新检测；不要另开脚本或第二套浏览器。',
+        'requires_user_action': True, 'updated_at': now_iso(),
+        'executionAllowed': False, 'capabilityCertified': False, 'inputFreezeAllowed': False,
+    }
+    _require_pin(flow)
+    try:
+        flow._write_state(negative)
+    except Exception as exc:
+        log_reader_diagnostic('reader_negative_state_write_failed',
+            exception_type=type(exc).__name__)
+        raise
+    log_reader_diagnostic('login_reader_unavailable',
+        reason_code=negative['reason_code'], logged_in=True, reader_ready=False)
+    return negative
+
+
 def _get_live_state(flow):
     state = json.loads(flow.state_file.read_text(encoding='utf-8')) if flow.state_file.exists() else flow._default_state()
     if state.get('logged_in') is not True or state.get('reader_ready') is not True:
@@ -42,6 +88,7 @@ def _get_live_state(flow):
                     'logged_in': True, 'reader_ready': True,
                     'browser_session_id': reader_status.get('browser_session_id'),
                     'account_ref': reader_status.get('account_ref'),
+                    'label': '已登录', 'reader_checked_at': _reader_checked_at(reader_status),
                     'page_url': str(getattr(page, 'url', '') or ''),
                     'message': '登录成功，当前真实可见浏览器已可直接读取店铺与草稿。',
                     'next_action': '返回工作台进入采集箱选品；本阶段不会保存或发布。',
@@ -50,6 +97,7 @@ def _get_live_state(flow):
                 _require_pin(flow)
                 flow._write_state(verified)
                 return verified
+            return _reader_unavailable(flow, state, page, reader_status)
         _require_pin(flow)
         return state
     try:

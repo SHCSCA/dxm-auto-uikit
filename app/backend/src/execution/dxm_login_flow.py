@@ -43,6 +43,7 @@ from src.execution.canonical_receipt import (
 )
 from src.execution.account_identity import account_context_hash
 from src.execution.product_identity import is_stable_product_id
+from src.execution.reader_http_observation import log_reader_diagnostic, observe_reader_http_failure
 from src.execution.save_target_contract import EXACT_SAVE_CLICK_METHOD
 from src.execution.browser_runtime import chrome_launch_options
 from src.execution.browser_page_focus import bring_controlled_page_to_front
@@ -65,8 +66,9 @@ WORKFLOW_BROWSER_PROFILE_DIR = DATA_DIR / 'browser_profiles' / 'dxm_workflow'
 VISIBLE_CDP_CONNECT_TIMEOUT_MS = 8000
 FROZEN_DRAFT_TARGET_SCHEMA = 'dxm_draft_box_target.v1'
 _MUTATION_FAILURE_CODE_PATTERN = re.compile(r'^([A-Z][A-Z0-9_]{2,63})(?::|$)')
+DXM_ACCOUNT_READ_URL = 'https://www.dianxiaomi.com/api/userIn.json'
 DXM_DRAFT_READ_ALLOWLIST = frozenset({
-    ('GET', 'https://www.dianxiaomi.com/api/userInfo.json'),
+    ('GET', DXM_ACCOUNT_READ_URL),
     ('POST', 'https://www.dianxiaomi.com/api/smtProduct/pageList.json'),
 })
 DXM_DRAFT_PAGE_FORM_KEYS = frozenset({
@@ -1089,7 +1091,7 @@ class DxmLoginFlow:
         return value or None
 
     def refresh_account_context_hash(self) -> str:
-        """Re-prove the active account through the allowlisted userInfo GET."""
+        """通过已审阅的精确账号 GET 重新证明当前身份。"""
 
         _page, context, browser_session_id = self._draft_reader_session()
         _payload, account_ref = self._read_authenticated_user_info(
@@ -1967,7 +1969,7 @@ class DxmLoginFlow:
         return state
 
     def read_draft_shops(self) -> dict[str, Any]:
-        """Read userInfo.shopMap from the current visible authenticated session."""
+        """从当前可见认证会话读取账号及店铺结构。"""
 
         _page, context, browser_session_id = self._draft_reader_session()
         payload, account_ref = self._read_authenticated_user_info(
@@ -4895,7 +4897,7 @@ class DxmLoginFlow:
         browser_session_id: str,
     ) -> tuple[dict[str, Any], str]:
         method = 'GET'
-        url = 'https://www.dianxiaomi.com/api/userInfo.json'
+        url = DXM_ACCOUNT_READ_URL
         self._assert_draft_reader_allowlisted(method, url, form=None)
         try:
             response = context.request.get(
@@ -4903,6 +4905,8 @@ class DxmLoginFlow:
                 timeout=15_000,
             )
         except Exception as exc:
+            log_reader_diagnostic('authenticated_account_read_failed',
+                reason_code='DXM_SHOP_READ_FAILED', exception_type='Exception')
             raise DxmDraftReaderError(
                 'DXM_SHOP_READ_FAILED',
                 '当前真实店小秘会话的店铺与账号身份读取失败。',
@@ -4911,6 +4915,7 @@ class DxmLoginFlow:
             response,
             label='店铺与账号身份',
             expected_browser_session_id=browser_session_id,
+            operation='authenticated_user_info',
         )
         return payload, self._authenticated_account_ref(payload)
 
@@ -4955,7 +4960,7 @@ class DxmLoginFlow:
         if not identity:
             raise DxmDraftReaderError(
                 'AUTH_ACCOUNT_UNPROVEN',
-                '当前 userInfo 回包缺少稳定账号身份，已按失败关闭。',
+                '当前账号身份回包缺少稳定账号身份，已按失败关闭。',
             )
         return identity
 
@@ -5102,6 +5107,7 @@ class DxmLoginFlow:
         *,
         label: str,
         expected_browser_session_id: str,
+        operation: str = 'draft_reader',
     ) -> dict[str, Any]:
         if self.browser_session_id() != expected_browser_session_id:
             raise DxmDraftReaderError(
@@ -5115,6 +5121,7 @@ class DxmLoginFlow:
             or not isinstance(status, int)
             or not 200 <= status < 300
         ):
+            observe_reader_http_failure(response, operation=operation)
             raise DxmDraftReaderError(
                 'DXM_READ_HTTP_FAILED',
                 f'店小秘{label}只读接口未成功返回，已停止读取。',
@@ -6245,14 +6252,19 @@ class DxmLoginFlow:
                 browser_session_id,
             )
         except DxmDraftReaderError as exc:
-            return {'reader_ready': False, 'reason_code': exc.reason_code}
+            log_reader_diagnostic('authenticated_reader_unavailable',
+                reason_code=exc.reason_code)
+            return {'reader_ready': False, 'reason_code': exc.reason_code, 'checked_at': now_iso()}
         except Exception:
-            return {'reader_ready': False, 'reason_code': 'BROWSER_SESSION_UNAVAILABLE'}
+            log_reader_diagnostic('authenticated_reader_check_failed',
+                reason_code='BROWSER_SESSION_UNAVAILABLE', exception_type='Exception')
+            return {'reader_ready': False, 'reason_code': 'BROWSER_SESSION_UNAVAILABLE', 'checked_at': now_iso()}
         return {
             'reader_ready': True,
             'reason_code': 'LOGIN_READER_READY',
             'browser_session_id': browser_session_id,
             'account_ref': account_ref,
+            'checked_at': now_iso(),
         }
 
     def _navigate_in_session(self, target: str) -> dict[str, Any]:

@@ -25,6 +25,7 @@
 | `PASSIVE_ONLY` | 被动观察到接口、字段或请求，但没有主动重放授权 | 索引、诊断、只读白名单候选 |
 | `PRODUCT_DECISION` | 用户为本产品明确裁定的强合同 | 方案、快照、Runner、证据和验收 |
 | `IMPLEMENTATION_BLOCKED` | 产品必须具备，但当前生产链尚未闭合 | `BLOCKED.md`、开发顺序、负向测试 |
+| `STALE_REVIEW_REQUIRED` | 历史来源与当前观察不一致，原事实不得继续证明当前可用 | 脱敏差分审阅；不得自动覆盖历史或升级资格 |
 
 硬边界：
 
@@ -91,8 +92,9 @@ manifest 自身保存源文件 SHA256、大小、处置、catalog hash、观测�
 
 ### DXM-READER-001 · 店铺与草稿列表
 
-- 状态：端点和基础字段为 `SAMPLE_ONLY`；本仓规范化行为为 `PRODUCT_DECISION`。
-- `GET /api/userInfo.json` 提供账号与 `data.shopMap`；`POST /api/smtProduct/pageList.json` 使用 `dxmState=draft` 读取分页草稿；`getOfflineCounts` 只作数量交叉核对。
+- 状态：旧账号端点当前为 `STALE_REVIEW_REQUIRED`；其历史基础字段和其它端点仍为 `SAMPLE_ONLY`，本仓规范化行为为 `PRODUCT_DECISION`。
+- 历史上游样本记录 `GET /api/userInfo.json` 提供账号与 `data.shopMap`；2026-10-19 两种匿名连接均返回 404，不再据此声明当前可用。`POST /api/smtProduct/pageList.json` 使用 `dxmState=draft` 读取分页草稿；`getOfflineCounts` 只作数量交叉核对。
+- 脱敏差分：`config/l2_readonly_allowlist.json` 已于 2026-09-07 精确审阅 `GET /api/userIn.json`，公开资源当时由 `getBaseUserInfo` 读取身份、权限及 `shopMap`；本次匿名精确请求为 200 JSON，但无严格成功码及身份/店铺结构。原 Reader 接线迁移到这个唯一已审阅端点，不保留旧地址 fallback；既有 code、稳定身份、`data.shopMap` 与会话门不变。当前页面资源版本和同 owner 认证结构仍待实证；该差分不重写历史上游 manifest、不提供保存或 READY 权威。证据见 `outputs/reader-network-stage8-20261019/`。
 - 商品身份至少绑定 `id/idStr`、`shopId`、`categoryId`、draft 状态、账号 generation、会话、页码闭合和读取时间。
 - 业务码不是严格整数 `0`、分页不闭合、重复身份冲突、账号/会话变化或商品不再是 draft 时，旧输入立即失效。
 

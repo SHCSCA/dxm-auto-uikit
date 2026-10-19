@@ -623,7 +623,7 @@ def test_visible_session_shop_reader_uses_only_allowlisted_userinfo_get(
     }
     assert len(result["account_ref"]) == 32
     assert api_request.calls == [
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000)
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000)
     ]
 
 
@@ -638,7 +638,7 @@ def test_visible_session_reader_fails_closed_without_stable_account_identity(
 
     assert caught.value.reason_code == "AUTH_ACCOUNT_UNPROVEN"
     assert api_request.calls == [
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000)
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000)
     ]
 
 
@@ -664,7 +664,7 @@ def test_owner_thread_account_refresh_reproves_userinfo_and_updates_context_hash
     assert first_hash == account_context_hash(first_ref)
     assert flow.current_account_context_hash() == first_hash
     assert api_request.calls == [
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000)
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000)
     ]
 
     api_request.shop_payload["data"]["userId"] = "84"
@@ -720,7 +720,7 @@ def test_visible_account_reference_accepts_current_userinfo_identity_schema(
 
 def test_reader_allowlist_has_only_two_read_contracts() -> None:
     assert DXM_DRAFT_READ_ALLOWLIST == {
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json"),
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json"),
         ("POST", "https://www.dianxiaomi.com/api/smtProduct/pageList.json"),
     }
     assert DXM_DRAFT_PAGE_FORM_KEYS == {
@@ -784,7 +784,7 @@ def test_visible_session_e2_product_details_read_current_editor_values(
         timeout: int,
         params: dict[str, str] | None = None,
     ) -> FakeApiResponse:
-        if url.endswith("/api/userInfo.json"):
+        if url.endswith("/api/userIn.json"):
             api_request.calls.append(("GET", url, timeout))
             return FakeApiResponse(_shop_response())
         product_id = str((params or {}).get("id") or "")
@@ -822,7 +822,7 @@ def test_visible_session_e2_product_details_read_current_editor_values(
         for item in result["payload"]["products"]
     ] == ["70001", "70002", "70003"]
     assert api_request.calls == [
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000),
         (
             "GET",
             "https://www.dianxiaomi.com/api/smtProduct/edit.json",
@@ -841,7 +841,7 @@ def test_visible_session_e2_product_details_read_current_editor_values(
             {"id": "70003"},
             15_000,
         ),
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000),
     ]
 
 
@@ -859,7 +859,7 @@ def test_visible_session_e2_product_details_accepts_one_confirmed_draft(
         timeout: int,
         params: dict[str, str] | None = None,
     ) -> FakeApiResponse:
-        if url.endswith("/api/userInfo.json"):
+        if url.endswith("/api/userIn.json"):
             api_request.calls.append(("GET", url, timeout))
             return FakeApiResponse(_shop_response())
         product_id = str((params or {}).get("id") or "")
@@ -888,14 +888,14 @@ def test_visible_session_e2_product_details_accepts_one_confirmed_draft(
 
     assert [item["idStr"] for item in result["payload"]["products"]] == ["70001"]
     assert api_request.calls == [
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000),
         (
             "GET",
             "https://www.dianxiaomi.com/api/smtProduct/edit.json",
             {"id": "70001"},
             15_000,
         ),
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000),
     ]
 
 
@@ -1016,7 +1016,7 @@ def test_visible_session_page_reader_forces_allowlisted_draft_form(
     assert len(result["account_ref"]) == 32
     assert result["payload"] == _page_response()
     assert api_request.calls == [
-        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000),
+        ("GET", "https://www.dianxiaomi.com/api/userIn.json", 15_000),
         (
             "POST",
             "https://www.dianxiaomi.com/api/smtProduct/pageList.json",
@@ -1047,7 +1047,7 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
         timeout: int,
         params: dict[str, str] | None = None,
     ) -> FakeApiResponse:
-        if url.endswith("/api/userInfo.json"):
+        if url.endswith("/api/userIn.json"):
             api_request.calls.append(("GET", url, timeout))
             return FakeApiResponse(_shop_response())
         api_request.calls.append(("GET", url, dict(params or {}), timeout))
@@ -1500,7 +1500,7 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
     }
     assert api_request.calls[0] == (
         "GET",
-        "https://www.dianxiaomi.com/api/userInfo.json",
+        "https://www.dianxiaomi.com/api/userIn.json",
         15_000,
     )
     assert all(
@@ -1509,7 +1509,7 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
     )
     assert api_request.calls[-1] == (
         "GET",
-        "https://www.dianxiaomi.com/api/userInfo.json",
+        "https://www.dianxiaomi.com/api/userIn.json",
         15_000,
     )
     assert (

@@ -10,7 +10,7 @@ _ACCOUNT_CONTEXT_HASH_PATTERN = re.compile(r"[0-9A-F]{64}")
 
 
 def account_context_hash(account_ref: Any) -> str:
-    """Derive the E2/E3 account binding from a trusted userInfo identity."""
+    """从可信账号身份计算 E2/E3 的稳定绑定。"""
 
     if not isinstance(account_ref, str) or _ACCOUNT_REF_PATTERN.fullmatch(account_ref) is None:
         raise ValueError("account_ref must be the canonical authenticated identity digest")
