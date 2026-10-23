@@ -3,6 +3,12 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# 本机环境配置不入库；示例文件可供审阅。
+.env
+.env.*
+!.env.example
+!.env.sample
+
 app/frontend/dist/
 app/frontend/node_modules/
 app/desktop/node_modules/

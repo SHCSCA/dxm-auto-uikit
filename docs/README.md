@@ -26,7 +26,7 @@
 ## 当前工程
 
 - [当前运行时架构](architecture/当前运行时架构.md)：source-of-code 文档；明确 0.3.0 哪些已接主链、哪些产品必需能力仍是生产阻断。
-- [工作台与分区自动化统一开发方案](architecture/DXM-工作台与分区自动化统一开发方案.md)：当前 source-of-target v1.1.2；把真实 11 分区运营流程落成单 Runner 的 Module/Interface、工作台、合同迁移、R0–R6 和验收门禁。`architecture/_archive` 中的 v1.0.0/v1.1.1 只供历史核对，不得作为当前实现指令。
+- [工作台与分区自动化统一开发方案](architecture/DXM-工作台与分区自动化统一开发方案.md)：当前 source-of-target v1.1.2；把真实 11 分区运营流程落成单 Runner 的 Module/Interface、工作台、合同迁移、R0–R6 和验收门禁。`architecture/_archive` 中的 v1.0.0/v1.1.1 保留历史原文及迁移前相对路径，只供版本核对，不得作为当前操作或实现入口。
 - [DXM-TX 上游事实合同](integration/DXM-TX-上游事实合同.md)：source-of-upstream 文档；DXM-TX 保持只读。
 - [DXM-TX 类目节点与目录合同](integration/DXM-TX-类目节点与目录合同.md)：唯一获授权的数据迁移是纯类目结构；其它 `data/**` 和真实样例不迁入。
 - [CHANGELOG](../CHANGELOG.md)：已发布历史与 0.3.0 Unreleased；未接生产的必需能力不得写成已交付。
@@ -68,7 +68,7 @@
 ## 当前发布口径
 
 - 当前 backend/frontend/desktop 与根 package manifest 均为 0.3.0。
-- 本轮 0.3.0 portable 的构建身份与实际验证结果见 PROGRESS 和本地交付记录；历史文档记录过 0.2.3。
+- 已核实的 2026-10-19 工程基线为 `be94ad3`：3177 项后端测试、同源包来源核对及隔离桌面 QA 通过。身份和脱敏摘要见 [PROGRESS](../PROGRESS.md)；本机 `outputs/reader-network-stage8-20261019/` 与包文件不随 Git 推送。文档更新不重标该工程证据，也不证明后续日期的活体状态。
 - 视频、翻译、批发、半托管和回滚是完整产品必需能力；当前未接生产，所以是发布阻断而非可选扩展。
-- `2344 passed / 0 skipped` 是 2026-08-28 的历史记录；本轮测试、构建和隔离检查以 PROGRESS 最新记录为准，仍缺真实三商品完整验收。
+- 认证 Reader、浏览器重启异常根因及真实三商品完整验收仍缺证；文档完整自检仍缺指定只读上游原型。历史测试数字、匿名 200 和可见窗口均不能代替这些事实。
 - 所以当前只能是 `E3_OPEN / BLOCKED`；禁止宣称 `MVP_READY` 或 `PROD_READY`。

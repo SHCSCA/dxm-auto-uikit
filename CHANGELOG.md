@@ -8,6 +8,8 @@
 
 ### 安全修复
 
+- 认证 Reader 固定使用已审阅的精确 `GET /api/userIn.json`，不保留旧 `userInfo` 或别名 fallback；原严格业务码、稳定账号、店铺结构和会话漂移门保持不变。
+- 新增 HTTP 失败脱敏诊断与安全日志出口；日志失败保留原读取结果/异常。活体失败状态持久本次原因和 UTC 检查时间、撤销旧 Reader 资格并保留原窗口；恢复成功时清除旧失败标签并更新本次时间。
 - `ConcurrentEditorGuard.acquire_writer_fence` 修复 shop 级别阻断缺口：原 SQL 查询仅检查 `(shop_id, task_id)`，改为先查任意活跃 fence on shop，再判断是否为同 task+generation 可刷新。防止不同任务在同店铺并发编辑导致数据损坏。
 - 视频/翻译/批发执行器 `disabled` 状态修复：`success=True, execution_state="success"` 改为 `success=False, completion_state="disabled"`。防止 disabled 步骤被误判为成功，从而绕过安全门禁放行未真实执行的 Path A。上游 `bundle_composer` 据此正确阻断。
 
@@ -53,10 +55,8 @@
 
 ### 当前阻断
 
-- 根 `package.json` 已更正为 0.3.0（2026-08-28）。
-- CHANGELOG.md 已从 untracked 移入并写入本日安全修复与 Path B 回锁记录。
-- 新增核心代码/测试仍位于脏工作树，干净检出可复现性待建立。
-- 当前工作树完整 backend L0 已通过：`2344 passed / 0 skipped`；标准 package smoke 与 0.3.0 portable 尚未形成同源放行证据。
+- 2026-10-19 clean `be94ad343cb57a7e7e9dc2dc927a01b49a617157` 完整 backend 为 `3177 passed / 0 failed / 0 skipped`，同源 portable 的来源、导入及完整隔离 QA 均通过，见 `outputs/reader-network-stage8-20261019/delivery-report.json`；这是历史工程证据，不证明后续窗口或完整产品就绪。
+- 同一基线手动登录入口实际返回 HTTP 200 并打开可见等待窗口，认证 Reader 尚未证明。重启 Service Worker/transport 失效根因未证，专用 profile 可逆换新恢复不是永久修复。
 - 动态类目目录尚未完成“版本化 catalog + 当前页面 categoryId/Schema/capability 权威”的完整执行门禁。
 - 视频、翻译、批发、rollback preparation 与 Path B 两次保存尚未贯通同一正式 snapshot、Runner、BrowserAgent、读回和持久证据。
 - 真实三商品完整 Path B 的两段保存事实、独立未发布证明和 E4 四键同源验收未闭合。

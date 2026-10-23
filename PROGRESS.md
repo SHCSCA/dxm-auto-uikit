@@ -2,14 +2,32 @@
 
 # 当前进度
 
-## 2026-10-19 认证后 Reader 端点差分（当前）
+## 当前交接状态（2026-10-23 文档同步）
 
-- clean `2cab039` 同源 portable 的原资料目录首次导航失败前，实际观察到 Service Worker 已存在且 transport 已失效；这只证明当时边界，不能推断其来源。应用空闲退出后，仅将专用浏览器资料目录原位改名备份；同一包在新资料目录成功打开可见手动登录窗口，未修改系统代理、读取或导出 Cookie。该结果更新下方尚待诊断的历史状态。
-- 用户在新窗口确认登录；同 owner 活体已识别 `login_success / logged_in=true`，但新鲜店铺读取仍为 `DXM_READ_HTTP_FAILED`，认证 Reader 未成立。当前窗口保留，尚未读取真实商品、执行生成、翻译、保存或发布。
-- 脱敏匿名对照中，默认与显式继承现有代理的公开页和同 context 请求均为 200，旧 `GET /api/userInfo.json` 均为 404。既有 2026-09-07 精确审阅的 `GET /api/userIn.json` 匿名请求为 200 JSON，但没有严格成功码及账号/店铺结构；匿名结果不能证明认证可用，也不能给代理故障定因。
-- 本次将原 Reader 的唯一账号端点接到已审阅的 `userIn`，不保留旧地址 fallback，继续执行原严格业务码、稳定账号、店铺结构和会话漂移门禁。旧上游事实标记 `STALE_REVIEW_REQUIRED`；当前真实页面资源版本和新端点认证结构仍待同 owner 实测。
-- HTTP 失败只记录数值状态、布尔结果、关联标识和时间；不记录响应体、头、凭据或原始异常消息。活体负状态改为本次原因和 UTC 检查时间，清除旧 Reader 资格但保留原窗口；执行、能力与输入冻结标志仍为 false。定向、冻结全量、构建和验包以 `outputs/reader-network-stage8-20261019/` 实际完成记录为准，未完成的检查不引用旧结果补齐。
-- 完整六步、真实默认视频输入、FILL、生成/投放来源、终封与 SAVE1/SAVE2 仍未闭合，维持 `E3_OPEN / BLOCKED`。文档自检仍受指定只读上游原型缺失影响。
+本节核对的是 **2026-10-19** 已完成的源码与本机验收记录。本次只同步文档与提交边界、推送既有代码，没有修改运行源码、重新启动应用、登录、运行完整回归或构建；不把历史窗口状态声明为 2026-10-23 的活体事实。下方阶段记录不能覆盖本节。
+
+### 已核实的工程基线
+
+| 项目 | 2026-10-19 实际证据 |
+|---|---|
+| 冻结源码 | clean `be94ad343cb57a7e7e9dc2dc927a01b49a617157` |
+| 后端完整回归 | `3177 passed / 0 failed / 0 errors / 0 skipped`；500 条依赖弃用警告 |
+| 包内源码 | 165 个后端 Python 文件，桌面/前端及 tools/config/catalog 完整集合核对通过；包内 Python 显式导入通过 |
+| 桌面验收 | 目录版与 portable 启动、隔离可见窗口和截图复核通过 |
+| portable | `outputs/desktop-build/DXM-Agent-Console-Portable-0.3.0.exe` |
+| SHA256 | `AD8EA46397DC91328AD8C92F79FDE36FA632A02727CF0E78055083572E9330E8` |
+| buildId | `desktop-79541168-a285-4f3c-a712-642352c5795e` |
+
+原日志、JUnit、来源清单、导入及桌面验收记录保存在本机 `outputs/reader-network-stage8-20261019/`，由 `delivery-report.json` 汇总；该目录与二进制均被 Git 忽略，不随源码推送。上表是可随仓查看的脱敏摘要，`3177` 只绑定上述源码；文档提交不会生成或追认新软件包。
+
+### 已落代码与现场边界
+
+- Reader 单一账号端点已迁移到既有精确审阅的 `GET /api/userIn.json`，旧 `userInfo` 不作 fallback。HTTP、业务码、稳定身份、店铺结构及会话漂移校验保持；旧上游端点为 `STALE_REVIEW_REQUIRED`。匿名新地址 200 JSON 未含认证成功结构，不能证明真实可读。
+- `reader_http_observation` 只读取缓存数值状态与布尔值并记录脱敏关联日志。`live_session_state` 保存本次失败原因和 UTC 时间、撤销旧 Reader 资格，恢复时刷新标签与时间；全部日志出口失败也不能遮蔽原读取或落盘错误。
+- 同源真实包在资料目录复用后再次出现导航失败；清理前 `serviceworker_present_count=1 / transport_invalid=true`，本地防护随后会中止请求。空闲退出后原位改名保留专用资料，换新后窗口返回 HTTP 200 / `MANAGED_MANUAL_LOGIN_REQUIRED`。最后一份活体记录仍为等待手动登录，**认证 Reader 未证实**；未进行真实商品检查或业务写入。
+- 本机匿名合成资料重启实验确认：default 中活跃的 Service Worker 仍归 default，fresh managed context 的注册被拦截、计数为 0，transport 未失效；没有复现误归属。真实线程来源与重启异常根因仍未知，资料换新仅是可逆恢复，不是永久修复。
+- 视频规则已由用户确定：保留弹窗原本选中的全部图片，转场和音乐采用原生弹窗当次实际默认值。现场默认值、完整 FILL、生成/投放成功来源、最终封存、原生门与 SAVE1/SAVE2 两次三铁证仍未闭合，完整六步继续 `E3_OPEN / BLOCKED`。
+- 文档完整自检仍缺指定只读上游原型 `D:\Desktop\py\DXM-TX\DXM-半托管工作台-可交互原型.html`；不得伪造原型、跳过校验或由工程绿测宣称 READY。下一次业务推进先重新核对当次同源运行时，再验证同 owner Reader、店铺、草稿与只读编辑检查。
 
 ## 2026-10-19 登录导航差分与清理前诊断
 

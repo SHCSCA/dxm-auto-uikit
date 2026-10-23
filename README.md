@@ -8,9 +8,9 @@ DXM 完整商品编辑工作台：从店小秘真实 draft 列表选择商品，
 
 **0.3.0 开发中，`E3_OPEN / BLOCKED`。不是 `MVP_READY`，不是 `PROD_READY`。**
 
-- backend、frontend、desktop 与根 `package.json` 均为 `0.3.0`；源码 manifest 版本已统一；本轮同源构建身份、包文件与隔离检查结果见 `outputs/project-understanding-20261015/delivery-report.json`。
+- backend、frontend、desktop 与根 `package.json` 均为 `0.3.0`；已核实的 2026-10-19 工程基线为 `be94ad3`，完整后端回归 `3177 passed`，同源构建与隔离桌面 QA 通过。验收身份及脱敏摘要见 [PROGRESS](PROGRESS.md)，原始本机记录为 `outputs/reader-network-stage8-20261019/delivery-report.json`，不随 Git 推送。
 - 本轮 portable 目标为 `outputs/desktop-build/DXM-Agent-Console-Portable-0.3.0.exe`；历史文档中的 `0.2.3` 不能代表当前源码。
-- Reader、方案、快照、Path A Runner、BrowserAgent 和四键已有大量代码；文档中的 `2344 passed` 等数字属于历史源码，当前工程验证以 [PROGRESS](PROGRESS.md) 的最新记录为准。同源包与真实三商品证据必须分别验收。
+- Reader 已接唯一受审阅账号端点 `userIn`，保留严格校验；最后现场仅证明受管登录窗口可打开，认证 Reader 与浏览器重启异常根因仍待核实。上述测试/窗口记录不代表后续日期的活体状态，真实三商品完整 Path B 仍未验收。
 - 视频、翻译、批发、半托管和回滚是每件商品无条件执行的必需能力；当前生产接线未闭合，因此它们是产品放行阻断，不能写成可选扩展或已完成功能。
 - 完整产品成功路径是 Path B。点击“编辑半托管信息”后由店小秘执行原生半托管门，本系统不做资格预检；精确中间“继续发布”仅允许作为进入 `editFromSmt` 的受控转换，最终发布仍永久禁止。
 

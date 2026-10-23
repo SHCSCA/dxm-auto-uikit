@@ -6,7 +6,7 @@ E1–E4 的唯一产品主合同。
 
 **合同状态：2026-08-26 产品真相冻结；当前实现仍 `E3_OPEN / BLOCKED`。**
 **未宣称 `MVP_READY`，未宣称 `PROD_READY`。**
-**适用仓库：`D:\Desktop\py\dxm-auto-uikit`。**
+**当前授权 checkout：`G:\AI\dxm-auto-uikit`；`D:\Desktop\py\dxm-auto-uikit` 为历史环境。**
 **上游只读：`D:\Desktop\py\DXM-TX`。**
 
 本合同需要真实可见浏览器作为执行环境，draft ≥3 才能开始，只保存不发布。

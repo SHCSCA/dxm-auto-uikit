@@ -47,6 +47,10 @@ Gold 指令位于 `docs/product/CODEX-GOLD-工作指令-MVP批量只保存.md`�
 
 ## 实现与文档规则
 
+- 禁止新增巨型实现文件；模块必须按职责边界合理拆分，遵循唯一运行时与统一架构规范。
+- 所有新增注释必须使用中文，只保留必要、简洁、解释意图与边界的注释。
+- 所有异常必须在统一边界捕获并记录结构化、脱敏日志，复用 `services/structured_logging.py`，保留原失败语义，不静默吞错。
+- 所有配置必须通过 `core/config_bus.py` 统一配置总线管理，不在消费者另建配置源或直接读取环境变量。
 - 优先深化现有 Reader、CategoryCatalog、`PlanSnapshotCompiler`、`V1TaskRunner`、BrowserAgent、ActionResult 与 ledger；不得新增或保留第二个拥有队列、任务状态迁移、HVD 或写派发权的 Runner/Runtime。
 - 配置控件存在不等于 executor 可用；状态枚举、空实现、未挂载组件和聚焦测试必须标为“必需能力未接生产”，不能标为可选扩展或已完成。
 - 文档只从 `docs/README.md` 建立当前入口。新文档首个非空行标注“由 OpenAI GPT（Codex）AI 生成/维护”。
